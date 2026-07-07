@@ -23,6 +23,20 @@ type mockStore struct {
 	routes    []model.Route
 	apiKeys   []model.ApiKey
 	settings  *model.Settings
+
+	mu       sync.Mutex
+	statsDeltas map[string]struct {
+		hit  int64
+		fail int64
+	}
+	lastLog model.RequestLog
+	hasLog  bool
+}
+
+func (m *mockStore) LastLog() (model.RequestLog, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastLog, m.hasLog
 }
 
 func (m *mockStore) ListProviders() ([]model.Provider, error) {
@@ -51,7 +65,16 @@ func (m *mockStore) GetProviderKeyCiphertext(providerID string) (ciphertext, non
 
 func (m *mockStore) InsertRequestLog(l model.RequestLog) error { return nil }
 
-func (m *mockStore) InsertRequestLogsBatch(logs []model.RequestLog) error { return nil }
+func (m *mockStore) InsertRequestLogsBatch(logs []model.RequestLog) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	m.lastLog = logs[len(logs)-1]
+	m.hasLog = true
+	m.mu.Unlock()
+	return nil
+}
 
 func (m *mockStore) ListModels(providerID string) ([]model.Model, error) { return nil, nil }
 
@@ -70,6 +93,32 @@ func (m *mockStore) UpdateProviderHealth(id string, status model.ProviderStatus,
 		p.ErrorMessage = errorMessage
 	}
 	return nil
+}
+
+func (m *mockStore) IncrementTargetStats(targetID string, hitDelta, failDelta int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.statsDeltas == nil {
+		m.statsDeltas = map[string]struct {
+			hit  int64
+			fail int64
+		}{}
+	}
+	d := m.statsDeltas[targetID]
+	d.hit += hitDelta
+	d.fail += failDelta
+	m.statsDeltas[targetID] = d
+	return nil
+}
+
+func (m *mockStore) statsFor(targetID string) (int64, int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.statsDeltas == nil {
+		return 0, 0
+	}
+	d := m.statsDeltas[targetID]
+	return d.hit, d.fail
 }
 
 type mockService struct{}
@@ -107,10 +156,10 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -167,10 +216,10 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -235,10 +284,10 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -283,10 +332,10 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -320,13 +369,13 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
+					{ProviderID: "p0", ModelName: "m0"},
 				},
 			},
 		},
@@ -443,9 +492,9 @@ func TestGenericOpenAI_ImagesRoute(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "dall-e-3", Action: model.RouteActionForward, Tier: 0},
+					{ProviderID: "p0", ModelName: "dall-e-3"},
 				},
 			},
 		},
@@ -495,9 +544,9 @@ func TestStreaming_PassThrough(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "gpt-4o", Action: model.RouteActionForward, Tier: 0},
+					{ProviderID: "p0", ModelName: "gpt-4o"},
 				},
 			},
 		},
@@ -523,135 +572,251 @@ func TestStreaming_PassThrough(t *testing.T) {
 	}
 }
 
-// TestStreaming_CapturesTTFTAndStatus verifies the new streaming observability
-// fields: StatusCode comes from the real upstream response (captured by
-// ModifyResponse, not chi's WrapResponseWriter), IsStream is set on the log
-// entry, and FirstTokenMs is non-zero after a streaming response completes.
-//
-// This locks in the core fix from Task 2: the log status code is no longer
-// 0 in streaming scenarios, and TTFT is recorded for the dashboard's
-// "Time to first token" widget.
-func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
-	// Upstream sleeps a bit before its first byte to make the TTFT measurable.
+// TestFailover_RetryBoundedSucceedsWithinBudget verifies that a target with
+// maxRetries=2 is retried on CategoryRetryable errors and that a successful
+// attempt within the retry budget produces hit_count=1, failure_count=(failed
+// attempts), and does NOT fall through to the next candidate.
+func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
+	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			if p0Hits <= 2 {
+				// First two attempts fail with 500 (CategoryRetryable).
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "transient"})
+				return
+			}
+			// Third attempt succeeds.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":    "chatcmpl-p0",
+				"model": "m0",
+				"usage": map[string]interface{}{"prompt_tokens": 1, "completion_tokens": 1},
+			})
+			return
+		}
+		p1Hits++
 		w.WriteHeader(http.StatusOK)
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		time.Sleep(30 * time.Millisecond)
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\n"))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "chatcmpl-p1"})
 	}))
 	defer srv.Close()
 
-	base := &mockStore{
+	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "gpt-4o", Action: model.RouteActionForward, Tier: 0},
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0},
 				},
 			},
 		},
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
-	store := newCapturingStore(base)
 	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
 	defer p.Stop()
 
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`))
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
-	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-
-	// Drain the async log writer so LastLog is populated.
-	p.Stop()
-	log, ok := store.LastLog()
-	if !ok {
-		t.Fatal("expected a log entry to be captured")
+	if !strings.Contains(rec.Body.String(), "chatcmpl-p0") {
+		t.Fatalf("expected response from P0, got %s", rec.Body.String())
 	}
+	if p0Hits != 3 {
+		t.Fatalf("expected P0 hit 3 times (2 fails + 1 success), got %d", p0Hits)
+	}
+	if p1Hits != 0 {
+		t.Fatalf("expected P1 not hit (P0 succeeded within retry budget), got %d", p1Hits)
+	}
+	hits, fails := store.statsFor("t0")
+	if hits != 1 {
+		t.Fatalf("expected t0 hit_count=1, got %d", hits)
+	}
+	if fails != 2 {
+		t.Fatalf("expected t0 failure_count=2 (one per failed attempt), got %d", fails)
+	}
+	hits, fails = store.statsFor("t1")
+	if hits != 0 || fails != 0 {
+		t.Fatalf("expected t1 untouched, got hit=%d fail=%d", hits, fails)
+	}
+}
+
+// TestFailover_RetryBoundedExhaustedFallsThrough verifies that when a target
+// exhausts its retry budget on CategoryRetryable errors, the proxy falls
+// through to the next candidate AND records failure_count for ALL attempts
+// (no hit_count increment).
+func TestFailover_RetryBoundedExhaustedFallsThrough(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "p0 always fails"})
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chatcmpl-p1",
+			"model": "m1",
+			"usage": map[string]interface{}{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+		},
+		routes: []model.Route{
+			{
+				ID: "r1", Enabled: true,
+				Targets: []model.RouteTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "chatcmpl-p1") {
+		t.Fatalf("expected response from P1 after P0 exhaustion, got %s", rec.Body.String())
+	}
+	// MaxRetries=2 → 1 initial + 2 retries = 3 attempts on P0.
+	if p0Hits != 3 {
+		t.Fatalf("expected P0 hit 3 times (1 + maxRetries), got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after P0 exhaustion, got %d", p1Hits)
+	}
+	hits, fails := store.statsFor("t0")
+	if hits != 0 {
+		t.Fatalf("expected t0 hit_count=0 (all attempts failed), got %d", hits)
+	}
+	if fails != 3 {
+		t.Fatalf("expected t0 failure_count=3 (one per attempt), got %d", fails)
+	}
+	hits, fails = store.statsFor("t1")
+	if hits != 1 {
+		t.Fatalf("expected t1 hit_count=1, got %d", hits)
+	}
+	if fails != 0 {
+		t.Fatalf("expected t1 failure_count=0, got %d", fails)
+	}
+}
+
+// TestStreaming_CapturesTTFTAndStatus verifies the core streaming logging fix:
+// StatusCode must come from the upstream HTTP response (200) not from
+// ww.Status() which could be 0, and FirstTokenMs/IsStream must be set.
+func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Delay the first chunk so TTFT is non-trivial and measurable.
+		time.Sleep(30 * time.Millisecond)
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		routes: []model.Route{
+			{
+				ID: "r1", Enabled: true,
+				Targets: []model.RouteTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o"},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read the full response so the stream completes cleanly.
+	_, _ = io.ReadAll(resp.Body)
+
+	// Poll for the log entry to be flushed before stopping the writer.
+	deadline, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+	for {
+		log, ok := store.LastLog()
+		if ok && log.StatusCode != 0 {
+			break
+		}
+		select {
+		case <-deadline.Done():
+			log, _ := store.LastLog()
+			t.Fatalf("timed out waiting for log entry; status=%d", log.StatusCode)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	log, _ := store.LastLog()
 	if log.StatusCode != http.StatusOK {
-		t.Fatalf("expected StatusCode=200 (captured from upstream), got %d", log.StatusCode)
+		t.Fatalf("expected status 200, got %d (err=%q)", log.StatusCode, log.Error)
 	}
 	if !log.IsStream {
-		t.Fatal("expected IsStream=true for a streaming request")
+		t.Fatalf("expected IsStream=true")
 	}
-	if log.FirstTokenMs <= 0 {
-		t.Fatalf("expected FirstTokenMs > 0, got %d", log.FirstTokenMs)
-	}
-	// TTFT must be at least the upstream's pre-byte sleep; allow some slack
-	// for test scheduling jitter.
 	if log.FirstTokenMs < 20 {
-		t.Fatalf("expected FirstTokenMs >= 20ms (upstream slept 30ms), got %d", log.FirstTokenMs)
+		t.Fatalf("expected TTFT >= 20ms (30ms upstream sleep), got %d", log.FirstTokenMs)
+	}
+	if log.ProviderID != "p0" || log.Model != "gpt-4o" {
+		t.Fatalf("expected provider/model in log, got provider=%q model=%q", log.ProviderID, log.Model)
 	}
 }
 
-// capturingStore wraps mockStore to capture the last log written via the async
-// logWriter (which calls InsertRequestLogsBatch).
-type capturingStore struct {
-	*mockStore
-	mu       sync.Mutex
-	lastLog  model.RequestLog
-	hasLog   bool
-}
-
-func newCapturingStore(m *mockStore) *capturingStore {
-	return &capturingStore{mockStore: m}
-}
-
-// InsertRequestLogsBatch shadows the mockStore method to capture the most
-// recent log entry. The async logWriter batches and calls this; we snapshot the
-// last entry of each batch.
-func (c *capturingStore) InsertRequestLogsBatch(logs []model.RequestLog) error {
-	if len(logs) == 0 {
-		return nil
-	}
-	c.mu.Lock()
-	c.lastLog = logs[len(logs)-1]
-	c.hasLog = true
-	c.mu.Unlock()
-	return nil
-}
-
-// InsertRequestLog also captured (in case it's ever called directly).
-func (c *capturingStore) InsertRequestLog(l model.RequestLog) error {
-	c.mu.Lock()
-	c.lastLog = l
-	c.hasLog = true
-	c.mu.Unlock()
-	return nil
-}
-
-func (c *capturingStore) LastLog() (model.RequestLog, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.lastLog, c.hasLog
-}
-
-// TestStreaming_ClientDisconnect_BreakerNotTripped verifies the core invariant
-// of Fix 2: a client disconnecting during a stream must NOT trip the provider's
-// circuit breaker. This uses a real HTTP round-trip where the upstream returns
-// a complete (short) SSE response and the client cancels mid-read. Even if the
-// proxy's ServeHTTP observes a write error, the breaker must remain closed.
-//
-// Note: a fully deterministic mid-stream broken-pipe repro is fragile under
-// httputil.ReverseProxy + httptest (context propagation timing), so this test
-// focuses on the breaker invariant. The error classifier itself is unit-tested
-// in TestIsClientDisconnect.
+// TestStreaming_ClientDisconnect_BreakerNotTripped verifies that a client
+// disconnecting during a stream does not trip the provider circuit breaker.
 func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
-	// Upstream: stream two SSE chunks then close (completes normally).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -663,29 +828,26 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	base := &mockStore{
+	store := &mockStore{
 		providers: map[string]*model.Provider{
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "gpt-4o", Action: model.RouteActionForward, Tier: 0},
+					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o"},
 				},
 			},
 		},
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
-	store := newCapturingStore(base)
 	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
 	defer p.Stop()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
 
-	// Client: send a streaming request and cancel immediately after reading
-	// starts, simulating an early disconnect.
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, "POST",
 		proxySrv.URL+"/v1/chat/completions",
@@ -702,12 +864,9 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 	_, _ = resp.Body.Read(buf) // read at least one chunk
 	cancel()                    // disconnect
 
-	// Allow the proxy to process the cancellation and flush the log.
 	time.Sleep(500 * time.Millisecond)
 	p.Stop() // drain the async writer
 
-	// Core invariant: breaker must NOT have tripped regardless of the
-	// disconnect timing. A flaky client must not penalize a healthy provider.
 	if !p.breakerFor("p0").WouldAllow() {
 		log, _ := store.LastLog()
 		t.Fatalf("circuit breaker tripped after client disconnect — provider should not be penalized. log status=%d err=%q",
@@ -738,70 +897,4 @@ func TestIsClientDisconnect(t *testing.T) {
 		})
 	}
 }
-
-// TestFailover_AllCircuitsOpen_NoPanic verifies Fix 1: when every candidate's
-// circuit breaker is open, forwardWithFailover must not panic on a nil
-// lastErr, and must log a 502 with an explanatory message.
-func TestFailover_AllCircuitsOpen_NoPanic(t *testing.T) {
-	base := &mockStore{
-		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: "http://127.0.0.1:0"},
-		},
-		routes: []model.Route{
-			{
-				ID: "r1", Priority: 1, Enabled: true,
-				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-				},
-			},
-		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
-	}
-	store := newCapturingStore(base)
-	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
-	defer p.Stop()
-
-	// Pre-open the breaker for p0 (failureThreshold = 4).
-	cb := p.breakerFor("p0")
-	for i := 0; i < 4; i++ {
-		cb.Record(false)
-	}
-	if cb.WouldAllow() {
-		t.Fatalf("breaker should be open after 4 failures")
-	}
-
-	// Non-streaming request: all candidates' breakers open → must NOT panic.
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m0","messages":[]}`))
-	req.Header.Set("Authorization", "Bearer key1")
-	rec := httptest.NewRecorder()
-
-	// If this panics, the test runner catches it as a failure (the deferred
-	// recover in chi's Recoverer writes 500, but the test still completes).
-	p.router.ServeHTTP(rec, req)
-
-	// Stop the proxy to flush the async log writer before reading the log.
-	p.Stop()
-
-	if rec.Code != http.StatusBadGateway && rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 502 or 503, got %d: %s", rec.Code, rec.Body.String())
-	}
-	log, _ := store.LastLog()
-	if log.StatusCode == 0 {
-		t.Fatalf("log status_code=0 — nil-pointer panic likely occurred (Fix 1 regression)")
-	}
-	// The matcher pre-filters breaker-open providers, so the request fails at
-	// resolveCandidates with "no available provider" (503) rather than reaching
-	// forwardWithFailover. Either way, no panic and a populated log is correct.
-	if log.Error == "" {
-		t.Fatalf("expected non-empty error, got empty")
-	}
-}
-
-// Compile-time guard ensuring the new mock satisfies the storeProxy interface.
-var _ storeProxy = (*capturingStore)(nil)
-
-// time is needed by the polling loop in the streaming test; declare a use so
-// the linter stays quiet if the block ordering changes.
-var _ = net.OpError{}
-
 

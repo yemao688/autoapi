@@ -28,14 +28,6 @@ const (
 	ProviderStatusUnknown   ProviderStatus = "unknown"
 )
 
-// RouteActionType describes what a route target does when matched.
-type RouteActionType string
-
-const (
-	RouteActionForward RouteActionType = "forward" // forward to provider+model
-	RouteActionSkip    RouteActionType = "skip"    // skip a provider
-)
-
 // ConditionOperator is the comparison operator for a route condition.
 // Mirrors the operators shown in the prototype routes.html.
 type ConditionOperator string
@@ -101,14 +93,15 @@ type ApiKey struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-// Route is an ordered routing rule. Lower priority number = higher precedence.
+// Route is an ordered routing rule. The list order from the store is the
+// evaluation order (top = highest priority); see internal/store/routes.go
+// (ListRoutes ORDER BY priority, ReorderRoutes writes from slice index).
 type Route struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Priority    int    `json:"priority"` // 1-based
 	Enabled     bool   `json:"enabled"`
-	CreatedAt   int64 `json:"created_at"`
+	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64 `json:"updated_at"`
 
 	Conditions []RouteCondition `json:"conditions"`
@@ -130,12 +123,13 @@ type RouteCondition struct {
 
 // RouteTarget is what happens when a route matches.
 type RouteTarget struct {
-	ID         string          `json:"id"`
-	RouteID    string          `json:"route_id"`
-	ProviderID string          `json:"provider_id"`
-	ModelName  string          `json:"model_name"` // empty when action=skip
-	Action     RouteActionType `json:"action"`
-	Tier       int             `json:"tier"` // lower = higher priority (P0=0, P1=1, ...)
+	ID           string `json:"id"`
+	RouteID      string `json:"route_id"`
+	ProviderID   string `json:"provider_id"`
+	ModelName    string `json:"model_name"`
+	MaxRetries   int    `json:"max_retries"`   // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
+	HitCount     int64  `json:"hit_count"`     // incremented once on successful dispatch
+	FailureCount int64  `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
 }
 
 // RequestLog is one proxied request through the gateway.
@@ -319,7 +313,6 @@ type ProviderInput struct {
 type RouteInput struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	Priority    int               `json:"priority"`
 	Enabled     bool              `json:"enabled"`
 	Conditions  []RouteCondition  `json:"conditions"`
 	Targets     []RouteTarget     `json:"targets"`

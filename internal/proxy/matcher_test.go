@@ -12,14 +12,15 @@ func makeProvider(id string) *model.Provider {
 	return &model.Provider{ID: id, Name: id, BaseURL: "http://" + id}
 }
 
-func TestSelectCandidates_SortByTier(t *testing.T) {
+func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
+	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
 	rules := []model.Route{
 		{
-			ID: "r1", Priority: 1, Enabled: true,
+			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
-				{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-				{ProviderID: "p2", ModelName: "m2", Action: model.RouteActionForward, Tier: 2},
+				{ProviderID: "p0", ModelName: "m0"},
+				{ProviderID: "p1", ModelName: "m1"},
+				{ProviderID: "p2", ModelName: "m2"},
 			},
 		},
 	}
@@ -41,12 +42,13 @@ func TestSelectCandidates_SortByTier(t *testing.T) {
 }
 
 func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
+	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
 	rules := []model.Route{
 		{
-			ID: "r1", Priority: 1, Enabled: true,
+			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-				{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+				{ProviderID: "p0", ModelName: "m0"},
+				{ProviderID: "p1", ModelName: "m1"},
 			},
 		},
 	}
@@ -84,11 +86,12 @@ func TestSelectCandidates_DefaultFallback(t *testing.T) {
 }
 
 func TestSelectCandidates_DefaultFallbackWhenAllOpen(t *testing.T) {
+	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
 	rules := []model.Route{
 		{
-			ID: "r1", Priority: 1, Enabled: true,
+			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
+				{ProviderID: "p0", ModelName: "m0"},
 			},
 		},
 	}
@@ -136,11 +139,12 @@ func TestSelectCandidates_DefaultFallbackPreservesModel(t *testing.T) {
 }
 
 func TestSelectCandidates_EmptyRouteTargetModelPreservesRequestModel(t *testing.T) {
+	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
 	rules := []model.Route{
 		{
-			ID: "r1", Priority: 1, Enabled: true,
+			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "", Action: model.RouteActionForward, Tier: 0},
+				{ProviderID: "p0", ModelName: ""},
 			},
 		},
 	}
@@ -156,11 +160,12 @@ func TestSelectCandidates_EmptyRouteTargetModelPreservesRequestModel(t *testing.
 }
 
 func TestSelectCandidates_NonEmptyRouteTargetModelOverrides(t *testing.T) {
+	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
 	rules := []model.Route{
 		{
-			ID: "r1", Priority: 1, Enabled: true,
+			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "route-model", Action: model.RouteActionForward, Tier: 0},
+				{ProviderID: "p0", ModelName: "route-model"},
 			},
 		},
 	}
@@ -176,11 +181,12 @@ func TestSelectCandidates_NonEmptyRouteTargetModelOverrides(t *testing.T) {
 }
 
 func TestSelectRoute_AllOperators(t *testing.T) {
+	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
 	baseRoute := func() model.Route {
 		return model.Route{
-			ID: "r", Priority: 1, Enabled: true,
+			ID: "r", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p", ModelName: "m", Action: model.RouteActionForward, Tier: 0},
+				{ProviderID: "p", ModelName: "m"},
 			},
 		}
 	}
@@ -225,28 +231,6 @@ func TestSelectRoute_AllOperators(t *testing.T) {
 	}
 }
 
-func TestSelectRoute_SkipFallThrough(t *testing.T) {
-	rules := []model.Route{
-		{
-			ID: "skip", Priority: 1, Enabled: true,
-			Conditions: []model.RouteCondition{{Field: "model", Operator: model.OpEquals, Value: "x"}},
-			Targets:    []model.RouteTarget{{ProviderID: "p0", Action: model.RouteActionSkip, Tier: 0}},
-		},
-		{
-			ID: "forward", Priority: 2, Enabled: true,
-			Targets: []model.RouteTarget{{ProviderID: "p1", ModelName: "m", Action: model.RouteActionForward, Tier: 0}},
-		},
-	}
-	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, lookup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cands) != 1 || cands[0].provider.ID != "p1" {
-		t.Fatalf("expected skip rule to fall through to forward rule, got %+v", cands)
-	}
-}
-
 func TestCircuitBreaker_WouldAllowDoesNotClaimProbe(t *testing.T) {
 	now := time.Now()
 	cb := NewCircuitBreaker()
@@ -285,5 +269,62 @@ func TestCircuitBreaker_WouldAllowDoesNotClaimProbe(t *testing.T) {
 	}
 	if cb.WouldAllow() {
 		t.Fatal("expected WouldAllow false while probe is in flight")
+	}
+}
+
+// TestSelectCandidates_PopulatesTargetIDAndMaxRetries verifies the candidate
+// struct carries the per-target ID and MaxRetries from the underlying
+// RouteTarget, so the proxy can address per-target hit/failure counters and
+// bound the in-target retry loop.
+func TestSelectCandidates_PopulatesTargetIDAndMaxRetries(t *testing.T) {
+	rules := []model.Route{
+		{
+			ID: "r1", Enabled: true,
+			Targets: []model.RouteTarget{
+				{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0},
+				{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 2},
+				{ID: "t2", ProviderID: "p2", ModelName: "m2", MaxRetries: 5},
+			},
+		},
+	}
+	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(cands))
+	}
+	expected := []struct {
+		id         string
+		maxRetries int
+	}{
+		{"t0", 0},
+		{"t1", 2},
+		{"t2", 5},
+	}
+	for i, c := range cands {
+		if c.targetID != expected[i].id {
+			t.Errorf("candidate %d: expected targetID %q, got %q", i, expected[i].id, c.targetID)
+		}
+		if c.maxRetries != expected[i].maxRetries {
+			t.Errorf("candidate %d: expected maxRetries %d, got %d", i, expected[i].maxRetries, c.maxRetries)
+		}
+	}
+}
+
+// TestSelectCandidates_DefaultFallbackHasEmptyTargetID verifies the synthetic
+// default-fallback candidate (used when no route matches or all targets are
+// open) has no targetID — this is what guards the proxy's IncrementTargetStats
+// call so it isn't issued for a candidate that has no row in route_targets.
+func TestSelectCandidates_DefaultFallbackHasEmptyTargetID(t *testing.T) {
+	// no route matched → default fallback path
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, nil, "default", map[string]*CircuitBreaker{},
+		func(id string) (*model.Provider, error) { return makeProvider(id), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].targetID != "" || cands[0].maxRetries != 0 {
+		t.Fatalf("expected default candidate with empty targetID/maxRetries=0, got %+v", cands)
 	}
 }

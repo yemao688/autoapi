@@ -105,13 +105,13 @@ func seedIfEmpty(db *sql.DB) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Routes (5) with conditions and targets
+	// Routes (4) with conditions and targets
 	// -----------------------------------------------------------------------
 	type condSeed struct {
 		field, operator, value string
 	}
 	type targSeed struct {
-		providerID, modelName, action string
+		providerID, modelName string
 	}
 	type routeSeed struct {
 		id, name, desc string
@@ -129,7 +129,7 @@ func seedIfEmpty(db *sql.DB) {
 				{field: "estimated_tokens", operator: "gt", value: "2000"},
 			},
 			targets: []targSeed{
-				{providerID: "p01", modelName: "gpt-4o", action: "forward"},
+				{providerID: "p01", modelName: "gpt-4o"},
 			},
 		},
 		{
@@ -139,7 +139,7 @@ func seedIfEmpty(db *sql.DB) {
 				{field: "task", operator: "matches", value: "writing,creative,translation"},
 			},
 			targets: []targSeed{
-				{providerID: "p02", modelName: "claude-3.5-sonnet", action: "forward"},
+				{providerID: "p02", modelName: "claude-3.5-sonnet"},
 			},
 		},
 		{
@@ -150,7 +150,7 @@ func seedIfEmpty(db *sql.DB) {
 				{field: "estimated_tokens", operator: "lt", value: "500"},
 			},
 			targets: []targSeed{
-				{providerID: "p03", modelName: "deepseek-chat", action: "forward"},
+				{providerID: "p03", modelName: "deepseek-chat"},
 			},
 		},
 		{
@@ -160,17 +160,7 @@ func seedIfEmpty(db *sql.DB) {
 				{field: "model", operator: "matches", value: "moonshot-*"},
 			},
 			targets: []targSeed{
-				{providerID: "p04", modelName: "moonshot-v1", action: "forward"},
-			},
-		},
-		{
-			id: "r05", name: "Block experimental models", desc: "Skip experimental providers when not explicitly requested",
-			priority: 5, enabled: false,
-			conds: []condSeed{
-				{field: "model", operator: "matches", value: "glm-*"},
-			},
-			targets: []targSeed{
-				{providerID: "p05", modelName: "", action: "skip"},
+				{providerID: "p04", modelName: "moonshot-v1"},
 			},
 		},
 	}
@@ -184,8 +174,8 @@ func seedIfEmpty(db *sql.DB) {
 		}
 		for i, t := range r.targets {
 			tid := fmt.Sprintf("%s-t%d", r.id, i+1)
-			db.Exec(`INSERT INTO route_targets (id, route_id, provider_id, model_name, action) VALUES (?,?,?,?,?)`,
-				tid, r.id, t.providerID, t.modelName, t.action)
+			db.Exec(`INSERT INTO route_targets (id, route_id, provider_id, model_name, tier) VALUES (?,?,?,?,?)`,
+				tid, r.id, t.providerID, t.modelName, i)
 		}
 	}
 
@@ -207,7 +197,6 @@ func seedIfEmpty(db *sql.DB) {
 		"r02": "Creative → Claude",
 		"r03": "Cost-sensitive → DeepSeek",
 		"r04": "Chinese → Moonshot",
-		"r05": "Block experimental",
 	}
 
 	// Daily patterns: more activity on weekdays, less on weekends
