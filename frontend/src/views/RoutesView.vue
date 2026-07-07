@@ -327,30 +327,33 @@ onMounted(() => {
   <!-- Route modal -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
-      <div class="modal-card" style="width: 640px; max-height: 90vh; overflow: auto;">
-        <div style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">{{ editingId ? '编辑规则' : '新建规则' }}</div>
+      <div class="modal-card wide modal-card-scroll">
+        <div class="modal-title">{{ editingId ? '编辑规则' : '新建规则' }}</div>
         <div class="row" style="gap: 12px;">
-          <div class="field" style="flex: 1; margin-bottom: 12px;">
+          <div class="field" style="flex: 1;">>
             <label class="field-label">名称</label>
             <input v-model="form.name" class="input" placeholder="例如 成本优化">
           </div>
-          <div class="field" style="width: 120px; margin-bottom: 12px;">
+          <div class="field" style="width: 120px;">>
             <label class="field-label">优先级</label>
             <input v-model.number="form.priority" type="number" class="input">
           </div>
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">描述</label>
           <input v-model="form.description" class="input" placeholder="规则用途">
         </div>
-        <div class="field" style="margin-bottom: 12px;">
-          <label class="field-label" style="flex-direction: row; align-items: center; gap: 8px; cursor: pointer;">
-            <input v-model="form.enabled" type="checkbox" style="width: 16px; height: 16px;">
-            启用规则
-          </label>
+        <div class="field">
+          <div class="row-between" style="margin-bottom: 0;">
+            <label class="field-label">启用规则</label>
+            <label class="toggle">
+              <input v-model="form.enabled" type="checkbox">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
         </div>
 
-        <div style="font-size: 13px; font-weight: 600; margin: 16px 0 8px;">条件</div>
+        <div class="field-label">条件</div>
         <div class="stack-tight" style="gap: 8px;">
           <div v-for="(cond, idx) in form.conditions" :key="idx" class="row" style="gap: 8px; align-items: flex-start;">
             <select v-model="cond.field" class="select" style="flex: 1;">
@@ -376,7 +379,7 @@ onMounted(() => {
           <button class="btn btn-secondary" style="align-self: flex-start;" @click="addCondition">添加条件</button>
         </div>
 
-        <div style="font-size: 13px; font-weight: 600; margin: 16px 0 8px;">目标</div>
+        <div class="field-label">目标</div>
         <div class="stack-tight" style="gap: 8px;">
           <div v-for="(target, idx) in form.targets" :key="idx" class="row" style="gap: 8px; align-items: flex-start;">
             <select v-model="target.provider_id" class="select" style="flex: 1;">
@@ -408,28 +411,3 @@ onMounted(() => {
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  backdrop-filter: blur(4px);
-}
-.modal-card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  width: 640px;
-  max-width: 90vw;
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--border);
-}
-.dropdown-item:hover {
-  background: rgba(0, 0, 0, 0.04) !important;
-}
-</style>

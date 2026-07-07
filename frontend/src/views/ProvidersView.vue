@@ -336,27 +336,30 @@ onMounted(() => {
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
       <div class="modal-card">
-        <div style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">{{ modalMode === 'edit' ? '编辑 Provider' : (form.is_custom ? '添加自定义 Provider' : '添加 Provider') }}</div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="modal-title">{{ modalMode === 'edit' ? '编辑 Provider' : (form.is_custom ? '添加自定义 Provider' : '添加 Provider') }}</div>
+        <div class="field">
           <label class="field-label">名称</label>
           <input v-model="form.name" class="input" placeholder="例如 OpenAI">
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">Base URL</label>
           <input v-model="form.base_url" class="input mono" placeholder="https://api.example.com">
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">API 密钥</label>
           <select v-model="form.api_key_id" class="select">
             <option value="">不指定</option>
             <option v-for="key in apiKeys || []" :key="key.id" :value="key.id">{{ key.name }}</option>
           </select>
         </div>
-        <div v-if="modalMode === 'add'" class="field" style="margin-bottom: 12px;">
-          <label class="field-label" style="flex-direction: row; align-items: center; gap: 8px; cursor: pointer;">
-            <input v-model="form.is_custom" type="checkbox" style="width: 16px; height: 16px;">
-            自定义 Provider
-          </label>
+        <div v-if="modalMode === 'add'" class="field">
+          <div class="row-between" style="margin-bottom: 0;">
+            <label class="field-label">自定义 Provider</label>
+            <label class="toggle">
+              <input v-model="form.is_custom" type="checkbox">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
         </div>
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">取消</button>
@@ -366,25 +369,3 @@ onMounted(() => {
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  backdrop-filter: blur(4px);
-}
-.modal-card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  width: 480px;
-  max-width: 90vw;
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--border);
-}
-</style>

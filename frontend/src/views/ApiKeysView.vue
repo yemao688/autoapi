@@ -315,23 +315,23 @@ onMounted(() => {
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
       <div class="modal-card">
-        <div style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">添加密钥</div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="modal-title">添加密钥</div>
+        <div class="field">
           <label class="field-label">Provider</label>
           <select v-model="form.provider_id" class="select">
             <option value="">自定义</option>
             <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">名称</label>
           <input v-model="form.name" class="input" placeholder="例如 生产环境">
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">密钥</label>
           <input v-model="form.key" type="password" class="input mono" placeholder="sk-...">
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">权限</label>
           <select v-model="form.permission" class="select">
             <option value="read_write">读 + 写</option>
@@ -340,7 +340,7 @@ onMounted(() => {
             <option value="admin">管理</option>
           </select>
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">环境</label>
           <select v-model="form.environment" class="select">
             <option value="production">生产</option>
@@ -348,7 +348,7 @@ onMounted(() => {
             <option value="disabled">已禁用</option>
           </select>
         </div>
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label class="field-label">过期时间</label>
           <input v-model="form.expires_at" type="number" class="input" placeholder="0 表示不过期">
           <div class="field-help">Unix 时间戳（毫秒），0 表示不过期</div>
@@ -361,28 +361,3 @@ onMounted(() => {
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  backdrop-filter: blur(4px);
-}
-.modal-card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  width: 480px;
-  max-width: 90vw;
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--border);
-}
-.dropdown-item:hover {
-  background: rgba(0, 0, 0, 0.04) !important;
-}
-</style>

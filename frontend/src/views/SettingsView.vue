@@ -773,13 +773,13 @@ watch(fetchedSettings, loadSettings, { once: true })
   </div>
 
   <Teleport to="body">
-    <div v-if="showPasswordModal" class="mp-overlay" @click.self="closePasswordModal">
-      <div class="mp-card">
-        <h3 class="mp-title">修改主密码</h3>
-        <form class="mp-form" @submit.prevent="submitPasswordChange">
-          <input v-model="oldPassword" type="password" class="mp-input" placeholder="当前密码" />
-          <input v-model="newPassword" type="password" class="mp-input" placeholder="新密码" />
-          <div class="mp-actions">
+    <div v-if="showPasswordModal" class="modal-overlay" @click.self="closePasswordModal">
+      <div class="modal-card">
+        <h3 class="modal-title">修改主密码</h3>
+        <form class="stack" @submit.prevent="submitPasswordChange">
+          <input v-model="oldPassword" type="password" class="input" placeholder="当前密码" />
+          <input v-model="newPassword" type="password" class="input" placeholder="新密码" />
+          <div class="row mt-8" style="justify-content: flex-end;">
             <button type="button" class="btn btn-secondary" style="font-size: 12.5px; padding: 5px 12px;" @click="closePasswordModal">取消</button>
             <button type="submit" class="btn btn-primary" style="font-size: 12.5px; padding: 5px 12px;">修改</button>
           </div>
@@ -801,54 +801,5 @@ watch(fetchedSettings, loadSettings, { once: true })
   z-index: 10;
   font-size: 14px;
   color: var(--muted, #6e6e73);
-}
-.mp-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(245, 245, 247, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.mp-card {
-  width: 360px;
-  padding: 28px 24px 22px;
-  background: #fff;
-  border: 1px solid var(--border, #d2d2d7);
-  border-radius: 14px;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.18), 0 8px 20px rgba(0, 0, 0, 0.08);
-}
-.mp-title {
-  margin: 0 0 14px;
-  font: 600 18px/1.3 "SF Pro Display", sans-serif;
-  color: #1d1d1f;
-}
-.mp-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.mp-input {
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid #d2d2d7;
-  border-radius: 8px;
-  background: #fff;
-  font: 14px -apple-system, "SF Pro Text", sans-serif;
-  color: #1d1d1f;
-  outline: none;
-}
-.mp-input:focus {
-  border-color: #0071e3;
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
-}
-.mp-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
 }
 </style>

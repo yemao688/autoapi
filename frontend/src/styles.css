@@ -931,6 +931,7 @@ button { font: inherit; cursor: pointer; }
   background: var(--surface);
   color: var(--fg);
   width: 100%;
+  min-height: 34px;
   font-family: var(--font-body);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
@@ -1523,5 +1524,39 @@ html[data-theme="dark"] .mp-title {
 
 html[data-theme="dark"] .dropdown-item:hover {
   background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  width: 480px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-card.wide { width: 640px; }
+
+.modal-card-scroll { max-height: 90vh; overflow: auto; }
+
+.modal-title {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  color: var(--fg);
+  margin-bottom: 16px;
 }
 
