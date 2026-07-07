@@ -5,11 +5,13 @@ import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderMeta } from '../composables/useProviderMeta'
 import { useFormatters } from '../composables/useFormatters'
+import { useToast } from '../composables/useToast'
 import { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
 const { color: providerColor, letter: providerLetter } = useProviderMeta()
 const { currency: fmtCurrency } = useFormatters()
+const toast = useToast()
 
 const {
   data: routes,
@@ -157,8 +159,9 @@ async function saveRoute() {
     }
     modalOpen.value = false
     await loadRoutes()
+    toast.push('规则已保存', 'success')
   } catch (e: any) {
-    alert('保存失败：' + (e?.message || String(e)))
+    toast.push('保存失败：' + (e?.message || String(e)), 'error')
   } finally {
     saving.value = false
   }
@@ -177,8 +180,9 @@ async function toggleRoute(route: model.Route) {
     })
     await api.updateRoute(route.id, input)
     await loadRoutes()
+    toast.push(full.enabled ? '规则已禁用' : '规则已启用', 'success')
   } catch (e: any) {
-    alert('切换失败：' + (e?.message || String(e)))
+    toast.push('切换失败：' + (e?.message || String(e)), 'error')
   }
 }
 
@@ -187,18 +191,19 @@ async function deleteRoute(id: string) {
   try {
     await api.deleteRoute(id)
     await loadRoutes()
+    toast.push('规则已删除', 'success')
   } catch (e: any) {
-    alert('删除失败：' + (e?.message || String(e)))
+    toast.push('删除失败：' + (e?.message || String(e)), 'error')
   }
   openMenuId.value = ''
 }
 
 function editDefault() {
-  alert('暂未实现')
+  toast.push('暂未实现', 'warning')
 }
 
 function importJSON() {
-  alert('暂未实现')
+  toast.push('暂未实现', 'warning')
 }
 
 function closeModal() {

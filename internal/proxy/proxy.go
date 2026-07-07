@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"autoapi/internal/model"
@@ -60,8 +61,9 @@ type Proxy struct {
 	server   *http.Server
 	router   chi.Router
 
-	bufferPool *bufferPool
-	errorLog   *log.Logger
+	bufferPool    *bufferPool
+	errorLog      *log.Logger
+	activeConns   atomic.Int32
 }
 
 // New creates a Proxy. The settingsProvider is called on Start/Restart to read
@@ -75,8 +77,8 @@ func New(store storeProxy, service *service.Service, settingsProvider func() *mo
 		bufferPool: &bufferPool{pool: &sync.Pool{
 			New: func() interface{} { return make([]byte, 32*1024) },
 		}},
-		// Prints to stderr for dev visibility; Phase 5.5 will replace with slog.
-		errorLog: log.New(log.Writer(), "[proxy] ", log.LstdFlags),
+		// Route httputil.ReverseProxy error logging through slog.
+		errorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 	}
 	p.router = p.setupRouter()
 	return p
@@ -162,6 +164,12 @@ func (p *Proxy) URL() string {
 	return fmt.Sprintf("http://%s", p.listener.Addr().String())
 }
 
+// ActiveConnections returns the number of requests currently being handled
+// by the proxy middleware counter.
+func (p *Proxy) ActiveConnections() int {
+	return int(p.activeConns.Load())
+}
+
 // ---------------------------------------------------------------------------
 // Router / middleware
 // ---------------------------------------------------------------------------
@@ -170,6 +178,7 @@ func (p *Proxy) setupRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
+	r.Use(p.connCounter)
 	r.Use(slogMiddleware)
 
 	r.Post("/v1/chat/completions", p.handleChatCompletions)
@@ -180,6 +189,15 @@ func (p *Proxy) setupRouter() chi.Router {
 	r.NotFound(p.handleNotFound)
 
 	return r
+}
+
+// connCounter increments an atomic request counter while each request is active.
+func (p *Proxy) connCounter(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.activeConns.Add(1)
+		defer p.activeConns.Add(-1)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // slogMiddleware logs every request with structured slog output. It uses chi's

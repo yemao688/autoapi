@@ -1,5 +1,9 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import SidebarNav from './SidebarNav.vue'
+import { useTheme } from '@/composables/useTheme'
+
+const { loadFromSettings } = useTheme()
 
 function handleClose() {
   const win = document.querySelector('.window')
@@ -10,6 +14,10 @@ function handleClose() {
     }, 350)
   }
 }
+
+onMounted(() => {
+  void loadFromSettings()
+})
 </script>
 
 <template>

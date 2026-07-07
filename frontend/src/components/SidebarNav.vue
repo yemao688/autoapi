@@ -1,15 +1,29 @@
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
+import { api } from '@/api/client'
+import { useApi } from '@/composables/useApi'
+import { useMasterGate } from '@/composables/useMasterGate'
 
 const route = useRoute()
+const { state: gateState } = useMasterGate()
 
-const navItems = [
-  { to: '/dashboard', label: '总览', icon: 'dashboard', badge: null },
-  { to: '/providers', label: 'Provider', icon: 'cloud', badge: '5' },
-  { to: '/routes', label: '路由规则', icon: 'routes', badge: '7' },
-  { to: '/api-keys', label: 'API 密钥', icon: 'key', badge: null },
-  { to: '/usage-stats', label: '使用统计', icon: 'chart', badge: null },
-]
+const { data: providers, execute: loadProviders } = useApi(api.providers)
+const { data: routes, execute: loadRoutes } = useApi(api.routes)
+const { data: health, execute: loadHealth } = useApi(api.systemHealth)
+
+const providerCount = computed(() => providers.value?.length ?? 0)
+const routeCount = computed(() => routes.value?.length ?? 0)
+const proxyURL = computed(() => health.value?.proxy_url || '')
+const proxyRunning = computed(() => health.value?.status === 'running')
+
+const navItems = computed(() => [
+  { to: '/dashboard', label: '总览', icon: 'dashboard', badge: null as number | null },
+  { to: '/providers', label: 'Provider', icon: 'cloud', badge: providerCount.value },
+  { to: '/routes', label: '路由规则', icon: 'routes', badge: routeCount.value },
+  { to: '/api-keys', label: 'API 密钥', icon: 'key', badge: null as number | null },
+  { to: '/usage-stats', label: '使用统计', icon: 'chart', badge: null as number | null },
+])
 
 const systemItems = [
   { to: '/settings', label: '设置', icon: 'settings', badge: null },
@@ -18,6 +32,22 @@ const systemItems = [
 function isActive(to: string): boolean {
   return route.path === to
 }
+
+let timer: ReturnType<typeof setInterval> | null = null
+
+async function refresh() {
+  if (gateState.value !== 'ready') return
+  await Promise.all([loadProviders(), loadRoutes(), loadHealth()])
+}
+
+onMounted(() => {
+  void refresh()
+  timer = setInterval(() => void refresh(), 5000)
+})
+
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+})
 </script>
 
 <template>
@@ -66,10 +96,10 @@ function isActive(to: string): boolean {
     </nav>
     <div class="sidebar-footer">
       <div class="status-row">
-        <span class="status-dot"></span>
-        <span>服务运行中</span>
+        <span class="status-dot" :style="{ background: proxyRunning ? 'var(--positive)' : 'var(--negative)', boxShadow: proxyRunning ? '0 0 0 3px rgba(40, 167, 69, 0.18)' : '0 0 0 3px rgba(217, 48, 37, 0.18)' }"></span>
+        <span>{{ proxyRunning ? '服务运行中' : '服务已停止' }}</span>
       </div>
-      <div>localhost:8080 · v0.4.2</div>
+      <div>{{ proxyURL || '未启动' }} · v0.4.2</div>
     </div>
   </aside>
 </template>

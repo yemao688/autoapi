@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,14 +28,33 @@ import (
 // Service implements api.BusinessService.
 type Service struct {
 	store *store.Store
+	proxy ProxyRef
 
-	mu     sync.RWMutex
-	encKey []byte // 32-byte AES key; nil until Unlock succeeds
+	mu        sync.RWMutex
+	encKey    []byte // 32-byte AES key; nil until Unlock succeeds
+	startedAt time.Time
 }
 
-// New creates a BusinessService with the given store.
-func New(s *store.Store) *Service {
-	return &Service{store: s}
+// ProxyRef is the minimal proxy surface needed to compute live system health.
+type ProxyRef interface {
+	IsRunning() bool
+	URL() string
+	ActiveConnections() int
+}
+
+// New creates a BusinessService with the given store and proxy reference.
+func New(s *store.Store, proxy ProxyRef) *Service {
+	return &Service{
+		store:     s,
+		proxy:     proxy,
+		startedAt: time.Now(),
+	}
+}
+
+// SetProxy updates the proxy reference after the proxy has been created. This is
+// used by the composition root to break the service→proxy→service cycle.
+func (s *Service) SetProxy(proxy ProxyRef) {
+	s.proxy = proxy
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +209,38 @@ func (s *Service) IsUnlocked() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.encKey != nil
+}
+
+// ---------------------------------------------------------------------------
+//  System health
+// ---------------------------------------------------------------------------
+
+// GetSystemHealth returns live runtime + proxy metrics for the dashboard.
+func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+
+	status := "paused"
+	proxyURL := ""
+	activeConns := 0
+	if s.proxy != nil {
+		if s.proxy.IsRunning() {
+			status = "running"
+			proxyURL = s.proxy.URL()
+		}
+		activeConns = s.proxy.ActiveConnections()
+	}
+
+	return &model.ServiceHealth{
+		Status:            status,
+		UptimeSeconds:     int64(time.Since(s.startedAt).Seconds()),
+		MemoryMB:          int(ms.Alloc / 1024 / 1024),
+		CPUPercent:        0.0, // TODO: CPU on macOS requires gopsutil; keep 0 for v1
+		ActiveConnections: activeConns,
+		WebSocketCount:    0, // not implemented in v1
+		HTTPCount:         activeConns,
+		ProxyURL:          proxyURL,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------

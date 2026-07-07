@@ -84,6 +84,7 @@ type BusinessService interface {
 	HasMasterPassword() bool
 	Unlock(password string) error
 	IsUnlocked() bool
+	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
 	// api_keys table; Decrypt reverses it. The App layer uses these to compose
@@ -134,14 +135,14 @@ func (a *App) Shutdown(ctx context.Context) {
 
 // GetSystemHealth returns the live dashboard telemetry.
 func (a *App) GetSystemHealth() (model.ServiceHealth, error) {
-	if a.deps.Store == nil {
+	if a.deps.Service == nil {
 		return model.ServiceHealth{}, errNotImpl
 	}
-	d, err := a.deps.Store.Dashboard()
-	if err != nil || d == nil {
+	h, err := a.deps.Service.GetSystemHealth()
+	if err != nil || h == nil {
 		return model.ServiceHealth{}, err
 	}
-	return d.ServiceHealth, nil
+	return *h, nil
 }
 
 // ----- Providers -----
@@ -293,7 +294,16 @@ func (a *App) GetDashboard() (*model.DashboardData, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.Dashboard()
+	d, err := a.deps.Store.Dashboard()
+	if err != nil {
+		return nil, err
+	}
+	if a.deps.Service != nil {
+		if h, hErr := a.deps.Service.GetSystemHealth(); hErr == nil && h != nil {
+			d.ServiceHealth = *h
+		}
+	}
+	return d, nil
 }
 
 func (a *App) GetUsageStats() (*model.UsageStats, error) {

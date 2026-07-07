@@ -2,14 +2,18 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
+import { useExportDownload } from '../composables/useExportDownload'
 import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderMeta } from '../composables/useProviderMeta'
 import { useFormatters } from '../composables/useFormatters'
+import { useToast } from '../composables/useToast'
 import type { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
 const { color: providerColor, letter: providerLetter } = useProviderMeta()
 const { tokens: fmtTokens } = useFormatters()
+const toast = useToast()
+const { download } = useExportDownload()
 
 const {
   data: keys,
@@ -118,9 +122,9 @@ function environmentBadgeClass(env: string): string {
 async function copyKey(key: model.ApiKey) {
   try {
     await navigator.clipboard.writeText(keyMasked(key))
-    alert('已复制到剪贴板')
+    toast.push('已复制到剪贴板', 'success')
   } catch (e: any) {
-    alert('复制失败：' + (e?.message || String(e)))
+    toast.push('复制失败：' + (e?.message || String(e)), 'error')
   }
   openMenuId.value = ''
 }
@@ -130,28 +134,15 @@ async function deleteKey(id: string) {
   try {
     await api.deleteApiKey(id)
     await loadKeys()
+    toast.push('密钥已删除', 'success')
   } catch (e: any) {
-    alert('删除失败：' + (e?.message || String(e)))
+    toast.push('删除失败：' + (e?.message || String(e)), 'error')
   }
   openMenuId.value = ''
 }
 
 async function exportEnv() {
-  try {
-    const res = await api.exportData('settings_json')
-    const bytes = new Uint8Array(res.data)
-    const blob = new Blob([bytes], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = res.filename || 'export.json'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  } catch (e: any) {
-    alert('导出失败：' + (e?.message || String(e)))
-  }
+  await download('settings_json')
 }
 
 function openModal() {
@@ -177,8 +168,9 @@ async function saveKey() {
     form.value.key = ''
     modalOpen.value = false
     await loadKeys()
+    toast.push('密钥已保存', 'success')
   } catch (e: any) {
-    alert('保存失败：' + (e?.message || String(e)))
+    toast.push('保存失败：' + (e?.message || String(e)), 'error')
   } finally {
     saving.value = false
   }

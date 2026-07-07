@@ -22,12 +22,20 @@ func NewApp() *api.App {
 	if err != nil {
 		log.Fatalf("FATAL: store initialization failed: %v", err)
 	}
-	sv := service.New(st)
 
-	prx := proxy.New(st, sv, func() *model.Settings {
+	prx := proxy.New(st, nil, func() *model.Settings {
 		s, _ := st.GetSettings()
 		return s
 	})
+
+	sv := service.New(st, prx)
+
+	// proxy.New needs the service for resolving provider keys; re-create with service now available.
+	prx = proxy.New(st, sv, func() *model.Settings {
+		s, _ := st.GetSettings()
+		return s
+	})
+	sv.SetProxy(prx)
 
 	return api.NewApp(api.Deps{
 		Store:   st,

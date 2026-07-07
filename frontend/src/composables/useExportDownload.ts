@@ -1,10 +1,13 @@
 import { api } from '@/api/client'
+import { useToast } from '@/composables/useToast'
 import type { api as apiModels } from '../../wailsjs/go/models'
 
 /**
  * Small helper to export data from the backend and download it as a Blob.
  */
 export function useExportDownload() {
+  const toast = useToast()
+
   async function download(format: string) {
     try {
       const result: apiModels.ExportResult = await api.exportData(format)
@@ -21,7 +24,7 @@ export function useExportDownload() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (e: any) {
-      alert(e?.message || String(e))
+      toast.push(e?.message || String(e), 'error')
     }
   }
 

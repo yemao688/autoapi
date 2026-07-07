@@ -5,10 +5,14 @@ import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useMasterGate } from '@/composables/useMasterGate'
+import { useToast } from '@/composables/useToast'
+import { useTheme, type ThemeValue } from '@/composables/useTheme'
 
 const { state: gateState } = useMasterGate()
 const { download } = useExportDownload()
 const { data: fetchedSettings, loading, execute: fetchSettings } = useApi(api.getSettings)
+const toast = useToast()
+const { activeTheme } = useTheme()
 
 const isDirty = ref(false)
 const showPasswordModal = ref(false)
@@ -64,6 +68,7 @@ const storagePath = computed(() => settings.value.data.storage_path || defaultSt
 function loadSettings() {
   if (fetchedSettings.value) {
     settings.value = JSON.parse(JSON.stringify(fetchedSettings.value)) as model.Settings
+    activeTheme.value = settings.value.appearance.theme as any
   }
   isDirty.value = false
 }
@@ -76,9 +81,9 @@ async function saveChanges() {
   try {
     await api.saveSettings(settings.value)
     isDirty.value = false
-    alert('设置已保存。服务端口与绑定地址的更改将在代理启动后生效。')
+    toast.push('设置已保存。服务端口与绑定地址的更改将在代理启动后生效。', 'success')
   } catch (e: any) {
-    alert(e?.message || String(e))
+    toast.push(e?.message || String(e), 'error')
   }
 }
 
@@ -94,18 +99,21 @@ async function restoreDefaults() {
     await api.saveSettings(defaults)
     settings.value = defaults
     isDirty.value = false
-    alert('已恢复默认设置')
+    activeTheme.value = defaults.appearance.theme as any
+    toast.push('已恢复默认设置', 'success')
   } catch (e: any) {
-    alert(e?.message || String(e))
+    toast.push(e?.message || String(e), 'error')
   }
 }
 
 async function selectTheme(theme: 'light' | 'dark' | 'auto') {
   settings.value.appearance.theme = theme
+  activeTheme.value = theme
   try {
     await api.saveSettings(settings.value)
+    toast.push('主题已保存', 'success')
   } catch (e: any) {
-    alert(e?.message || String(e))
+    toast.push(e?.message || String(e), 'error')
   }
 }
 
@@ -113,8 +121,9 @@ async function selectAccent(color: string) {
   settings.value.appearance.accent_color = color
   try {
     await api.saveSettings(settings.value)
+    toast.push('强调色已保存', 'success')
   } catch (e: any) {
-    alert(e?.message || String(e))
+    toast.push(e?.message || String(e), 'error')
   }
 }
 
@@ -153,16 +162,16 @@ function copyStoragePath() {
 }
 
 function openInFinder() {
-  alert('暂未实现')
+  toast.push('暂未实现', 'warning')
 }
 
 function notImplemented() {
-  alert('暂未实现')
+  toast.push('暂未实现', 'warning')
 }
 
 async function submitPasswordChange() {
   if (!oldPassword.value || !newPassword.value) {
-    alert('请输入当前密码和新密码')
+    toast.push('请输入当前密码和新密码', 'warning')
     return
   }
   if (!confirm('确定修改主密码？')) return
@@ -171,9 +180,9 @@ async function submitPasswordChange() {
     showPasswordModal.value = false
     oldPassword.value = ''
     newPassword.value = ''
-    alert('主密码已修改')
+    toast.push('主密码已修改', 'success')
   } catch (e: any) {
-    alert(e?.message || String(e))
+    toast.push(e?.message || String(e), 'error')
   }
 }
 

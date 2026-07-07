@@ -5,11 +5,13 @@ import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderMeta } from '../composables/useProviderMeta'
 import { useFormatters } from '../composables/useFormatters'
+import { useToast } from '../composables/useToast'
 import type { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
 const { color: providerColor, letter: providerLetter } = useProviderMeta()
 const { tokens: fmtTokens, latency: fmtLatency } = useFormatters()
+const toast = useToast()
 
 const {
   data: providers,
@@ -108,13 +110,14 @@ async function testOne(id: string) {
   testingIds.value.add(id)
   try {
     const res = await api.testProvider(id)
-    alert(
+    toast.push(
       res.ok
         ? `测试成功：延迟 ${res.latency_ms}ms，模型 ${res.models.length} 个`
-        : `测试失败：${res.error || '未知错误'}`
+        : `测试失败：${res.error || '未知错误'}`,
+      res.ok ? 'success' : 'error'
     )
   } catch (e: any) {
-    alert('测试失败：' + (e?.message || String(e)))
+    toast.push('测试失败：' + (e?.message || String(e)), 'error')
   } finally {
     testingIds.value.delete(id)
   }
@@ -124,9 +127,9 @@ async function testOne(id: string) {
 async function testAll() {
   try {
     await api.testAllProviders()
-    alert('全部测试完成')
+    toast.push('全部测试完成', 'success')
   } catch (e: any) {
-    alert('全部测试失败：' + (e?.message || String(e)))
+    toast.push('全部测试失败：' + (e?.message || String(e)), 'error')
   }
   await refresh()
 }
@@ -160,8 +163,9 @@ async function saveProvider() {
     }
     modalOpen.value = false
     await refresh()
+    toast.push('Provider 已保存', 'success')
   } catch (e: any) {
-    alert('保存失败：' + (e?.message || String(e)))
+    toast.push('保存失败：' + (e?.message || String(e)), 'error')
   } finally {
     saving.value = false
   }

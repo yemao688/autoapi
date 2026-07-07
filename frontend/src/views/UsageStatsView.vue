@@ -6,10 +6,12 @@ import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useMasterGate } from '@/composables/useMasterGate'
 import { useRelativeTime } from '@/composables/useRelativeTime'
+import { useToast } from '@/composables/useToast'
 
 useRelativeTime()
 const { download } = useExportDownload()
 const { state: gateState } = useMasterGate()
+const toast = useToast()
 
 const { data: usageData, loading, execute: fetchUsage } = useApi(api.usageStats)
 
@@ -122,13 +124,13 @@ async function queryLogs() {
     })
     logs.value = result || []
   } catch (e: any) {
-    alert(e?.message || String(e))
+    toast.push(e?.message || String(e), 'error')
   }
 }
 
 async function refreshAll() {
   if (gateState.value !== 'ready') return
-  await fetchUsage().catch((e) => alert(e?.message || String(e)))
+  await fetchUsage().catch((e) => toast.push(e?.message || String(e), 'error'))
   if (usageData.value) {
     logs.value = usageData.value.logs || []
     logTotal.value = usageData.value.log_total || 0
@@ -178,10 +180,10 @@ async function purgeLogs() {
   if (!confirm('确定清理 90 天前的请求日志？此操作不可撤销。')) return
   try {
     const deleted = await api.purgeLogs(90)
-    alert(`已清理 ${deleted} 条日志`)
+    toast.push(`已清理 ${deleted} 条日志`, 'success')
     await refreshAll()
   } catch (e: any) {
-    alert(e?.message || String(e))
+    toast.push(e?.message || String(e), 'error')
   }
 }
 
