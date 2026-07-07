@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/adrg/xdg v0.5.3
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0

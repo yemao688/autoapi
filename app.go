@@ -8,12 +8,13 @@ import (
 	"log"
 
 	"autoapi/internal/api"
+	"autoapi/internal/model"
+	"autoapi/internal/proxy"
 	"autoapi/internal/service"
 	"autoapi/internal/store"
 )
 
-// NewApp constructs the bound App with real store and service dependencies.
-// The proxy is left nil for Phase 4 (api.App handles nil gracefully).
+// NewApp constructs the bound App with real store, service, and proxy dependencies.
 func NewApp() *api.App {
 	ctx := context.Background()
 
@@ -23,9 +24,14 @@ func NewApp() *api.App {
 	}
 	sv := service.New(st)
 
+	prx := proxy.New(st, sv, func() *model.Settings {
+		s, _ := st.GetSettings()
+		return s
+	})
+
 	return api.NewApp(api.Deps{
 		Store:   st,
 		Service: sv,
-		Proxy:   nil, // Phase 4
+		Proxy:   prx,
 	})
 }

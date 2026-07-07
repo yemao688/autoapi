@@ -242,7 +242,7 @@ P0 ──┬── P1a (签名+DTO+generate module, 顺序) ──┬── P1b/
   - SettingsView: get/save settings + exports + master password change modal
   - Validation: `go build ./...` ✅ / `go test ./internal/...` ✅ / `go vet ./...` ✅ / `npm run build` ✅ / `wails dev` ✅
 - [ ] Oracle 评审 Phase 3
-- [ ] Phase 4 代理网关
+- [x] Phase 4 代理网关（已实现，待评审）
 - [ ] Phase 5 系统集成
 - [ ] Phase 5.5 错误处理 + slog
 - [ ] Phase 6 验证 + 打包
