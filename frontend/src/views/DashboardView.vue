@@ -1,41 +1,98 @@
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { model } from '../../wailsjs/go/models'
+import { api } from '@/api/client'
+import { useApi } from '@/composables/useApi'
+import { useExportDownload } from '@/composables/useExportDownload'
+import { useMasterGate } from '@/composables/useMasterGate'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 
 useRelativeTime()
+const { download } = useExportDownload()
+const { state: gateState } = useMasterGate()
 
-// Tab groups keyboard navigation
-function handleTabKeydown(e: KeyboardEvent, container: HTMLElement) {
-  const tabs = container.querySelectorAll<HTMLButtonElement>('.tab')
-  if (!tabs.length) return
-  const currentIdx = Array.from(tabs).findIndex((t) => t === document.activeElement)
-  let nextIdx = currentIdx
+const { data: dashboardData, loading, execute: fetchDashboard } = useApi(api.dashboard)
+const { data: proxyStatus, execute: fetchProxyStatus } = useApi(api.proxyStatus)
 
-  switch (e.key) {
-    case 'ArrowRight':
-    case 'ArrowDown':
-      e.preventDefault()
-      nextIdx = (currentIdx + 1) % tabs.length
-      break
-    case 'ArrowLeft':
-    case 'ArrowUp':
-      e.preventDefault()
-      nextIdx = (currentIdx - 1 + tabs.length) % tabs.length
-      break
-    case 'Home':
-      e.preventDefault()
-      nextIdx = 0
-      break
-    case 'End':
-      e.preventDefault()
-      nextIdx = tabs.length - 1
-      break
-    default:
-      return
-  }
+const initialLoading = ref(true)
+let pollTimer: ReturnType<typeof setInterval> | null = null
 
-  tabs[nextIdx]?.focus()
-  tabs[nextIdx]?.click()
+const stats = computed(() => dashboardData.value?.stats.slice(0, 4) || [])
+const recentActivity = computed(() => dashboardData.value?.recent_activity.slice(0, 10) || [])
+const providers = computed(() => dashboardData.value?.providers || [])
+const health = computed(() => dashboardData.value?.service_health)
+const proxyRunning = computed(() => proxyStatus.value?.running === true)
+
+const providerColors: Record<string, string> = {
+  openai: '#10a37f',
+  anthropic: '#d97757',
+  deepseek: '#272729',
+  moonshot: '#0071e3',
+  '智谱 glm': '#2563eb',
+  glm: '#2563eb',
 }
+
+function providerColor(p: model.Provider): string {
+  const key = p.name.toLowerCase()
+  return providerColors[key] || (p.status === 'ok' ? '#0071e3' : '#6e6e73')
+}
+
+function providerInitial(p: model.Provider): string {
+  const name = p.name
+  const code = name.match(/[\u4e00-\u9fa5]/)
+    ? name[name.length - 1]
+    : name.trim().charAt(0).toUpperCase()
+  return code || name.charAt(0).toUpperCase()
+}
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return String(n)
+}
+
+function formatUptime(seconds: number): string {
+  if (!seconds) return '0 秒'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return `Uptime ${days}d ${hours}h · ${mins}m`
+  if (hours > 0) return `Uptime ${hours}h ${mins}m`
+  return `Uptime ${mins}m`
+}
+
+const { format: relativeFormat } = useRelativeTime()
+
+function formatTime(ts: number): string {
+  return relativeFormat(ts)
+}
+
+async function fetchAll() {
+  if (gateState.value !== 'ready') return
+  initialLoading.value = false
+  await Promise.all([fetchDashboard(), fetchProxyStatus()]).catch((e) => {
+    alert(e?.message || String(e))
+  })
+}
+
+async function exportReport() {
+  await download('all_json')
+}
+
+onMounted(() => {
+  void fetchAll()
+  pollTimer = setInterval(() => {
+    void fetchAll()
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
+
+watch(gateState, (s) => {
+  if (s === 'ready') void fetchAll()
+})
 </script>
 
 <template>
@@ -45,8 +102,8 @@ function handleTabKeydown(e: KeyboardEvent, container: HTMLElement) {
       <span class="main-subtitle">关键指标与最近活动</span>
     </div>
     <div class="main-actions">
-      <span class="badge success"><span class="dot green"></span>实时同步</span>
-      <button class="btn btn-secondary">
+      <span class="badge success"><span :class="proxyRunning ? 'dot green' : 'dot red'"></span>{{ proxyRunning ? '服务运行中' : '服务已停止' }}</span>
+      <button class="btn btn-secondary" @click="exportReport">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
         导出报告
       </button>
@@ -54,39 +111,27 @@ function handleTabKeydown(e: KeyboardEvent, container: HTMLElement) {
   </header>
 
   <div class="main-content">
+    <div v-if="loading && !dashboardData" class="loading-overlay">加载中…</div>
     <div class="main-content-inner stack-loose">
       <!-- Stat row -->
       <section class="stat-grid">
-        <div class="stat-card">
-          <div class="stat-label">今日 Token</div>
-          <div class="stat-value">245,832</div>
+        <div
+          v-for="(stat, idx) in stats"
+          :key="stat.label + idx"
+          class="stat-card"
+          :class="{ dark: stat.label.includes('服务状态') }"
+        >
+          <div class="stat-label">{{ stat.label }}</div>
+          <div class="stat-value">{{ stat.value }}</div>
           <div class="stat-meta">
-            <span class="delta positive">+12.4%</span>
-            <span>vs 昨日</span>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">本周 Token</div>
-          <div class="stat-value">1.84M</div>
-          <div class="stat-meta">
-            <span class="delta positive">+8.1%</span>
-            <span>vs 上周</span>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">本月成本</div>
-          <div class="stat-value">¥458.76</div>
-          <div class="stat-meta">
-            <span class="delta negative">-3.2%</span>
-            <span>智能路由节省</span>
-          </div>
-        </div>
-        <div class="stat-card dark">
-          <div class="stat-label">服务状态</div>
-          <div class="stat-value">正常</div>
-          <div class="stat-meta">
-            <span class="dot green"></span>
-            <span>Uptime 12d 4h · 0 错误</span>
+            <template v-if="idx === 3">
+              <span :class="proxyRunning ? 'dot green' : 'dot red'"></span>
+              <span>{{ health ? formatUptime(health.uptime_seconds) : '—' }}</span>
+            </template>
+            <template v-else>
+              <span class="delta" :class="stat.trend">{{ stat.delta }}</span>
+              <span>{{ stat.note }}</span>
+            </template>
           </div>
         </div>
       </section>
@@ -175,45 +220,24 @@ function handleTabKeydown(e: KeyboardEvent, container: HTMLElement) {
             <RouterLink class="card-title-link" to="/providers">管理</RouterLink>
           </div>
           <div class="stack-tight">
-            <div class="list-row" style="padding: 10px 0;">
-              <div class="list-icon" style="background: #10a37f;">O</div>
+            <div
+              v-for="p in providers"
+              :key="p.id"
+              class="list-row"
+              style="padding: 10px 0;"
+            >
+              <div
+                class="list-icon"
+                :style="{ background: providerColor(p), color: providerColor(p) === '#272729' ? 'rgba(255,255,255,0.86)' : '#fff' }"
+              >{{ providerInitial(p) }}</div>
               <div class="list-main">
-                <div class="list-title">OpenAI</div>
-                <div class="list-sub">gpt-4o · 4 模型</div>
+                <div class="list-title">{{ p.name }}</div>
+                <div class="list-sub">
+                  <span v-if="p.status !== 'ok'" class="dot red" style="margin-right: 4px;"></span>
+                  {{ p.status === 'ok' ? `${p.models_count} 模型` : (p.error_message || '未连接') }}
+                </div>
               </div>
-              <div class="list-meta">118K</div>
-            </div>
-            <div class="list-row" style="padding: 10px 0;">
-              <div class="list-icon" style="background: #d97757;">A</div>
-              <div class="list-main">
-                <div class="list-title">Anthropic</div>
-                <div class="list-sub">claude-sonnet-4-5 · 3 模型</div>
-              </div>
-              <div class="list-meta">76K</div>
-            </div>
-            <div class="list-row" style="padding: 10px 0;">
-              <div class="list-icon dark">D</div>
-              <div class="list-main">
-                <div class="list-title">DeepSeek</div>
-                <div class="list-sub">deepseek-chat · 2 模型</div>
-              </div>
-              <div class="list-meta">32K</div>
-            </div>
-            <div class="list-row" style="padding: 10px 0;">
-              <div class="list-icon blue">M</div>
-              <div class="list-main">
-                <div class="list-title">Moonshot</div>
-                <div class="list-sub">moonshot-v1-128k · 3 模型</div>
-              </div>
-              <div class="list-meta">14K</div>
-            </div>
-            <div class="list-row" style="padding: 10px 0;">
-              <div class="list-icon" style="background: #2563eb;">G</div>
-              <div class="list-main">
-                <div class="list-title">智谱 GLM</div>
-                <div class="list-sub"><span class="dot red" style="margin-right: 4px;"></span>未连接</div>
-              </div>
-              <div class="list-meta text-muted">—</div>
+              <div class="list-meta">{{ p.monthly_tokens ? formatNumber(p.monthly_tokens) : '—' }}</div>
             </div>
           </div>
         </div>
@@ -224,53 +248,18 @@ function handleTabKeydown(e: KeyboardEvent, container: HTMLElement) {
             <RouterLink class="card-title-link" to="/usage-stats">查看全部</RouterLink>
           </div>
           <div class="stack-tight">
-            <div class="list-row" style="padding: 8px 0;">
-              <span class="text-mono text-muted" style="width: 60px;">10:42</span>
-              <span class="badge mono">gpt-4o</span>
+            <div
+              v-for="log in recentActivity"
+              :key="log.id"
+              class="list-row"
+              style="padding: 8px 0;"
+            >
+              <span class="text-mono text-muted" style="width: 60px;">{{ formatTime(log.timestamp) }}</span>
+              <span class="badge mono">{{ log.model }}</span>
               <div class="list-main">
-                <div class="list-title">OpenAI · 输入 245 / 输出 47</div>
+                <div class="list-title">{{ log.provider_name }} · 输入 {{ log.input_tokens }} / 输出 {{ log.output_tokens }}</div>
               </div>
-              <span class="text-mono text-muted">1.2s</span>
-            </div>
-            <div class="list-row" style="padding: 8px 0;">
-              <span class="text-mono text-muted" style="width: 60px;">10:38</span>
-              <span class="badge mono">sonnet-4-5</span>
-              <div class="list-main">
-                <div class="list-title">Anthropic · 输入 128 / 输出 24</div>
-              </div>
-              <span class="text-mono text-muted">0.8s</span>
-            </div>
-            <div class="list-row" style="padding: 8px 0;">
-              <span class="text-mono text-muted" style="width: 60px;">10:35</span>
-              <span class="badge mono">deepseek-chat</span>
-              <div class="list-main">
-                <div class="list-title">DeepSeek · 输入 312 / 输出 58</div>
-              </div>
-              <span class="text-mono text-muted">2.1s</span>
-            </div>
-            <div class="list-row" style="padding: 8px 0;">
-              <span class="text-mono text-muted" style="width: 60px;">10:30</span>
-              <span class="badge mono">gpt-4o-mini</span>
-              <div class="list-main">
-                <div class="list-title">OpenAI · 输入 89 / 输出 16</div>
-              </div>
-              <span class="text-mono text-muted">0.6s</span>
-            </div>
-            <div class="list-row" style="padding: 8px 0;">
-              <span class="text-mono text-muted" style="width: 60px;">10:24</span>
-              <span class="badge mono">claude-opus-4-1</span>
-              <div class="list-main">
-                <div class="list-title">Anthropic · 输入 1,240 / 输出 380</div>
-              </div>
-              <span class="text-mono text-muted">5.4s</span>
-            </div>
-            <div class="list-row" style="padding: 8px 0;">
-              <span class="text-mono text-muted" style="width: 60px;">10:18</span>
-              <span class="badge mono">kimi-latest</span>
-              <div class="list-main">
-                <div class="list-title">Moonshot · 输入 580 / 输出 124</div>
-              </div>
-              <span class="text-mono text-muted">3.2s</span>
+              <span class="text-mono text-muted">{{ (log.latency_ms / 1000).toFixed(1) }}s</span>
             </div>
           </div>
         </div>
@@ -280,20 +269,35 @@ function handleTabKeydown(e: KeyboardEvent, container: HTMLElement) {
       <section class="col-3">
         <div class="card">
           <div class="card-title">CPU 占用</div>
-          <div class="stat-value" style="font-size: 24px;">12.4%</div>
+          <div class="stat-value" style="font-size: 24px;">{{ health ? health.cpu_percent.toFixed(1) : '—' }}%</div>
           <div class="stat-meta"><span class="delta positive">−1.8%</span><span>近 1 小时均值</span></div>
         </div>
         <div class="card">
           <div class="card-title">内存</div>
-          <div class="stat-value" style="font-size: 24px;">182 MB</div>
+          <div class="stat-value" style="font-size: 24px;">{{ health ? Math.round(health.memory_mb) : '—' }} MB</div>
           <div class="stat-meta"><span>本机 · 4.2%</span></div>
         </div>
         <div class="card">
           <div class="card-title">活动连接</div>
-          <div class="stat-value" style="font-size: 24px;">42</div>
-          <div class="stat-meta"><span>WebSocket 38 · HTTP 4</span></div>
+          <div class="stat-value" style="font-size: 24px;">{{ health ? health.active_connections : '—' }}</div>
+          <div class="stat-meta"><span>WebSocket {{ health ? health.websocket_count : '—' }} · HTTP {{ health ? health.http_count : '—' }}</span></div>
         </div>
       </section>
     </div>
   </div>
 </template>
+
+<style scoped>
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 245, 247, 0.78);
+  backdrop-filter: blur(2px);
+  z-index: 10;
+  font-size: 14px;
+  color: var(--muted, #6e6e73);
+}
+</style>

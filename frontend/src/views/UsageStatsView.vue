@@ -1,14 +1,207 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { model } from '../../wailsjs/go/models'
+import { api } from '@/api/client'
+import { useApi } from '@/composables/useApi'
+import { useExportDownload } from '@/composables/useExportDownload'
+import { useMasterGate } from '@/composables/useMasterGate'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 
 useRelativeTime()
+const { download } = useExportDownload()
+const { state: gateState } = useMasterGate()
+
+const { data: usageData, loading, execute: fetchUsage } = useApi(api.usageStats)
 
 const activePane = ref('tokens')
+const liveSync = ref(false)
+let liveTimer: ReturnType<typeof setInterval> | null = null
+
+const providerFilter = ref('全部')
+const statusFilter = ref('全部')
+const statusMap: Record<string, string> = {
+  '全部': '',
+  '成功': 'success',
+  '失败': 'error',
+  '限流': 'rate_limited',
+}
+
+const logs = ref<model.RequestLog[]>([])
+const logPage = ref(1)
+const logPageSize = ref(50)
+const logTotal = ref(0)
+
+const providerOptions = computed(() => {
+  const names = (usageData.value?.providers || []).map((p) => p.provider_name)
+  return ['全部', ...Array.from(new Set(names))]
+})
+
+const tokenStats = computed(() => (usageData.value?.token_stats || []).slice(0, 4))
+const logStats = computed(() => (usageData.value?.log_stats || []).slice(0, 4))
+const providerShares = computed(() => usageData.value?.providers || [])
+const modelRanking = computed(() => (usageData.value?.model_ranking || []).slice(0, 5))
+const totalTokens = computed(() =>
+  providerShares.value.reduce((sum, p) => sum + p.tokens, 0)
+)
+const totalTokenValue = computed(() => {
+  const stat = tokenStats.value.find((s) => s.label.includes('本月'))
+  return stat?.value || usageData.value?.token_stats?.[2]?.value || '—'
+})
+const logTotalValue = computed(() => usageData.value?.log_total || 0)
+
+const providerColors: Record<string, string> = {
+  openai: '#10a37f',
+  anthropic: '#d97757',
+  deepseek: '#272729',
+  moonshot: '#0071e3',
+  '智谱 glm': '#2563eb',
+  glm: '#2563eb',
+}
+
+function providerColor(name: string): string {
+  return providerColors[name.toLowerCase()] || '#6e6e73'
+}
+
+function providerInitial(name: string): string {
+  const code = name.match(/[\u4e00-\u9fa5]/)
+    ? name[name.length - 1]
+    : name.trim().charAt(0).toUpperCase()
+  return code || name.charAt(0).toUpperCase()
+}
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return String(n)
+}
+
+const { format: relativeFormat } = useRelativeTime()
+function formatTime(ts: number): string {
+  return relativeFormat(ts)
+}
+
+function statusBadgeClass(statusCode: number): string {
+  if (statusCode >= 200 && statusCode < 300) return 'success'
+  if (statusCode === 429) return 'warn'
+  if (statusCode >= 400 || statusCode === 0) return 'error'
+  return 'info'
+}
+
+function statusText(statusCode: number): string {
+  return String(statusCode)
+}
+
+function dateRange(): { start_date: number; end_date: number } {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime()
+  return { start_date: start, end_date: Date.now() }
+}
+
+async function queryLogs() {
+  if (gateState.value !== 'ready') return
+  const { start_date, end_date } = dateRange()
+  const provider = providerFilter.value === '全部' ? '' : providerFilter.value
+  const status = statusMap[statusFilter.value] || ''
+  try {
+    const result = await api.queryLogs({
+      start_date,
+      end_date,
+      provider,
+      status,
+      page: logPage.value,
+      page_size: logPageSize.value,
+    })
+    logs.value = result || []
+  } catch (e: any) {
+    alert(e?.message || String(e))
+  }
+}
+
+async function refreshAll() {
+  if (gateState.value !== 'ready') return
+  await fetchUsage().catch((e) => alert(e?.message || String(e)))
+  if (usageData.value) {
+    logs.value = usageData.value.logs || []
+    logTotal.value = usageData.value.log_total || 0
+  }
+  await queryLogs()
+}
+
+function startLive() {
+  if (liveTimer) return
+  liveTimer = setInterval(() => {
+    void refreshAll()
+  }, 2000)
+}
+
+function stopLive() {
+  if (liveTimer) {
+    clearInterval(liveTimer)
+    liveTimer = null
+  }
+}
+
+function toggleLive() {
+  liveSync.value = !liveSync.value
+  if (liveSync.value) startLive()
+  else stopLive()
+}
 
 function switchPane(paneId: string) {
   activePane.value = paneId
+  liveSync.value = false
+  stopLive()
 }
+
+async function applyFilters() {
+  logPage.value = 1
+  await refreshAll()
+}
+
+async function clearFilters() {
+  providerFilter.value = '全部'
+  statusFilter.value = '全部'
+  logPage.value = 1
+  await refreshAll()
+}
+
+async function purgeLogs() {
+  if (!confirm('确定清理 90 天前的请求日志？此操作不可撤销。')) return
+  try {
+    const deleted = await api.purgeLogs(90)
+    alert(`已清理 ${deleted} 条日志`)
+    await refreshAll()
+  } catch (e: any) {
+    alert(e?.message || String(e))
+  }
+}
+
+async function exportLogs() {
+  await download('logs_csv')
+}
+
+async function exportTokens() {
+  await download('tokens_csv')
+}
+
+function goPrevPage() {
+  if (logPage.value > 1) {
+    logPage.value--
+    void queryLogs()
+  }
+}
+
+function goNextPage() {
+  if (hasNextPage.value) {
+    logPage.value++
+    void queryLogs()
+  }
+}
+
+const paginationStart = computed(() => (logPage.value - 1) * logPageSize.value + 1)
+const paginationEnd = computed(() => paginationStart.value + logs.value.length - 1)
+const hasPrevPage = computed(() => logPage.value > 1)
+const hasNextPage = computed(() => logs.value.length === logPageSize.value)
 
 // Pane keyboard navigation
 function handlePaneKeydown(e: KeyboardEvent) {
@@ -43,17 +236,21 @@ function handlePaneKeydown(e: KeyboardEvent) {
   tabs[nextIdx]?.focus()
 }
 
-// Live toggle
-const liveSync = ref(true)
-function toggleLive() {
-  liveSync.value = !liveSync.value
-}
+onMounted(() => {
+  void refreshAll()
+})
 
-// Clear filters (toggle empty state)
-const showEmpty = ref(false)
-function clearFilters() {
-  showEmpty.value = !showEmpty.value
-}
+onUnmounted(() => {
+  stopLive()
+})
+
+watch(gateState, (s) => {
+  if (s === 'ready') void refreshAll()
+})
+
+watch([providerFilter, statusFilter], () => {
+  void applyFilters()
+})
 </script>
 
 <template>
@@ -63,7 +260,7 @@ function clearFilters() {
       <span class="main-subtitle">Token 用量与请求日志 · 单页切换</span>
     </div>
     <div class="main-actions">
-      <button class="btn btn-secondary">
+      <button class="btn btn-secondary" @click="exportLogs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
         导出
       </button>
@@ -91,7 +288,7 @@ function clearFilters() {
       data-pane-id="tokens"
       @click="switchPane('tokens')"
     >
-      Token 用量<span class="tab-meta" aria-hidden="true">8.45M</span>
+      Token 用量<span class="tab-meta" aria-hidden="true">{{ totalTokenValue }}</span>
     </button>
     <button
       class="tab"
@@ -103,25 +300,20 @@ function clearFilters() {
       data-pane-id="logs"
       @click="switchPane('logs')"
     >
-      请求日志<span class="tab-meta" aria-hidden="true">12,485</span>
+      请求日志<span class="tab-meta" aria-hidden="true">{{ logTotalValue.toLocaleString() }}</span>
     </button>
   </div>
 
   <div class="filter-bar">
     <button class="btn btn-secondary" style="font-size: 12.5px; padding: 5px 12px;" aria-label="选择日期范围">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-      本月 · 2026-05
+      本月
     </button>
-    <select class="select" style="width: auto; padding: 5px 10px; font-size: 12.5px;" aria-label="按 Provider 筛选">
-      <option>Provider · 全部</option>
-      <option>OpenAI</option>
-      <option>Anthropic</option>
-      <option>DeepSeek</option>
-      <option>Moonshot</option>
-      <option>智谱 GLM</option>
+    <select v-model="providerFilter" class="select" style="width: auto; padding: 5px 10px; font-size: 12.5px;" aria-label="按 Provider 筛选">
+      <option v-for="opt in providerOptions" :key="opt" :value="opt">Provider · {{ opt }}</option>
     </select>
-    <select v-if="activePane === 'logs'" class="select" style="width: auto; padding: 5px 10px; font-size: 12.5px;" aria-label="按状态筛选">
-      <option>状态 · 全部</option>
+    <select v-if="activePane === 'logs'" v-model="statusFilter" class="select" style="width: auto; padding: 5px 10px; font-size: 12.5px;" aria-label="按状态筛选">
+      <option>全部</option>
       <option>成功</option>
       <option>失败</option>
       <option>限流</option>
@@ -131,42 +323,19 @@ function clearFilters() {
   </div>
 
   <div class="main-content">
+    <div v-if="loading && !usageData" class="loading-overlay">加载中…</div>
     <div class="main-content-inner stack-loose">
 
       <!-- ================== TOKENS VIEW ================== -->
       <div v-show="activePane === 'tokens'" class="view-pane" role="tabpanel" id="usage-pane-tokens" aria-labelledby="usage-tab-tokens" data-pane-group="usage-view" data-pane-id="tokens" tabindex="0">
 
         <section class="stat-grid-4" style="gap: 16px; margin-bottom: 24px;">
-          <div class="metric-card">
-            <div class="metric-label">今日 Token<span class="text-mono" style="color: var(--muted);">tokens</span></div>
-            <div class="metric-value">245,832</div>
+          <div v-for="(stat, idx) in tokenStats" :key="stat.label + idx" class="metric-card">
+            <div class="metric-label">{{ stat.label }}</div>
+            <div class="metric-value">{{ stat.value }}</div>
             <div class="metric-meta">
-              <span class="metric-trend up">↑ 12.4%</span>
-              <span>vs 昨日</span>
-            </div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">本周 Token<span class="text-mono" style="color: var(--muted);">7d</span></div>
-            <div class="metric-value">1.84M</div>
-            <div class="metric-meta">
-              <span class="metric-trend up">↑ 8.1%</span>
-              <span>vs 上周</span>
-            </div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">本月 Token<span class="text-mono" style="color: var(--muted);">5月</span></div>
-            <div class="metric-value">8.45M</div>
-            <div class="metric-meta">
-              <span class="metric-trend up">↑ 12.4%</span>
-              <span>vs 上月</span>
-            </div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">本月成本<span class="text-mono" style="color: var(--muted);">CNY</span></div>
-            <div class="metric-value">¥458.76</div>
-            <div class="metric-meta">
-              <span class="metric-trend down">↓ 3.2%</span>
-              <span>智能路由节省 ¥86.42</span>
+              <span class="metric-trend" :class="stat.trend">{{ stat.delta }}</span>
+              <span>{{ stat.note }}</span>
             </div>
           </div>
         </section>
@@ -260,14 +429,16 @@ function clearFilters() {
                 <circle cx="70" cy="70" r="50" fill="none" stroke="#0071e3" stroke-width="20" stroke-dasharray="37.70 314.16" stroke-dashoffset="-248.18" transform="rotate(-90 70 70)"></circle>
                 <circle cx="70" cy="70" r="50" fill="none" stroke="#6e6e73" stroke-width="20" stroke-dasharray="28.27 314.16" stroke-dashoffset="-285.88" transform="rotate(-90 70 70)"></circle>
                 <text x="70" y="68" text-anchor="middle" font-family="SF Pro Display" font-size="11" font-weight="500" fill="#6e6e73">TOTAL</text>
-                <text x="70" y="84" text-anchor="middle" font-family="SF Pro Display" font-size="18" font-weight="600" fill="#1d1d1f" letter-spacing="-0.02em">8.45M</text>
+                <text x="70" y="84" text-anchor="middle" font-family="SF Pro Display" font-size="18" font-weight="600" fill="#1d1d1f" letter-spacing="-0.02em">{{ formatNumber(totalTokens) }}</text>
               </svg>
               <div class="stack-tight" style="flex: 1;">
-                <div class="row-between"><div class="row" style="gap: 6px;"><span class="chart-legend-swatch" style="background: #10a37f;"></span><span style="font-size: 13px;">OpenAI</span></div><span class="text-mono" style="font-size: 13px; font-weight: 500;">40%</span></div>
-                <div class="row-between"><div class="row" style="gap: 6px;"><span class="chart-legend-swatch" style="background: #d97757;"></span><span style="font-size: 13px;">Anthropic</span></div><span class="text-mono" style="font-size: 13px; font-weight: 500;">26%</span></div>
-                <div class="row-between"><div class="row" style="gap: 6px;"><span class="chart-legend-swatch" style="background: #272729;"></span><span style="font-size: 13px;">DeepSeek</span></div><span class="text-mono" style="font-size: 13px; font-weight: 500;">13%</span></div>
-                <div class="row-between"><div class="row" style="gap: 6px;"><span class="chart-legend-swatch" style="background: #0071e3;"></span><span style="font-size: 13px;">Moonshot</span></div><span class="text-mono" style="font-size: 13px; font-weight: 500;">12%</span></div>
-                <div class="row-between"><div class="row" style="gap: 6px;"><span class="chart-legend-swatch" style="background: #6e6e73;"></span><span style="font-size: 13px;">其他</span></div><span class="text-mono" style="font-size: 13px; font-weight: 500;">9%</span></div>
+                <div v-for="p in providerShares" :key="p.provider_id" class="row-between">
+                  <div class="row" style="gap: 6px;">
+                    <span class="chart-legend-swatch" :style="{ background: providerColor(p.provider_name) }"></span>
+                    <span style="font-size: 13px;">{{ p.provider_name }}</span>
+                  </div>
+                  <span class="text-mono" style="font-size: 13px; font-weight: 500;">{{ p.percent }}%</span>
+                </div>
               </div>
             </div>
           </div>
@@ -275,59 +446,15 @@ function clearFilters() {
           <div class="card">
             <div class="card-title"><span>模型用量排行</span><RouterLink class="card-title-link" to="/usage-stats" style="text-transform:none;">详情</RouterLink></div>
             <div class="stack-tight" style="padding-top: 4px;">
-              <div class="list-row" style="padding: 8px 0;">
-                <div class="text-mono text-muted" style="width: 18px; font-size: 12px;">01</div>
+              <div v-for="(m, idx) in modelRanking" :key="m.model" class="list-row" style="padding: 8px 0;">
+                <div class="text-mono text-muted" style="width: 18px; font-size: 12px;">{{ String(idx + 1).padStart(2, '0') }}</div>
                 <div class="list-main">
-                  <div class="text-mono" style="font-size: 13px;">gpt-4o</div>
-                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">OpenAI · 4,128 请求</div>
+                  <div class="text-mono" style="font-size: 13px;">{{ m.model }}</div>
+                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">{{ m.provider_name }} · {{ m.requests.toLocaleString() }} 请求</div>
                 </div>
                 <div class="list-meta" style="min-width: 80px; text-align: right;">
-                  <div>2.42M</div>
-                  <div class="text-mono list-meta-sub">¥218.20</div>
-                </div>
-              </div>
-              <div class="list-row" style="padding: 8px 0;">
-                <div class="text-mono text-muted" style="width: 18px; font-size: 12px;">02</div>
-                <div class="list-main">
-                  <div class="text-mono" style="font-size: 13px;">claude-sonnet-4-5</div>
-                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">Anthropic · 1,842 请求</div>
-                </div>
-                <div class="list-meta" style="min-width: 80px; text-align: right;">
-                  <div>1.86M</div>
-                  <div class="text-mono list-meta-sub">¥148.80</div>
-                </div>
-              </div>
-              <div class="list-row" style="padding: 8px 0;">
-                <div class="text-mono text-muted" style="width: 18px; font-size: 12px;">03</div>
-                <div class="list-main">
-                  <div class="text-mono" style="font-size: 13px;">gpt-4o-mini</div>
-                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">OpenAI · 6,128 请求</div>
-                </div>
-                <div class="list-meta" style="min-width: 80px; text-align: right;">
-                  <div>998K</div>
-                  <div class="text-mono list-meta-sub">¥19.96</div>
-                </div>
-              </div>
-              <div class="list-row" style="padding: 8px 0;">
-                <div class="text-mono text-muted" style="width: 18px; font-size: 12px;">04</div>
-                <div class="list-main">
-                  <div class="text-mono" style="font-size: 13px;">deepseek-reasoner</div>
-                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">DeepSeek · 1,408 请求</div>
-                </div>
-                <div class="list-meta" style="min-width: 80px; text-align: right;">
-                  <div>812K</div>
-                  <div class="text-mono list-meta-sub">¥8.12</div>
-                </div>
-              </div>
-              <div class="list-row" style="padding: 8px 0;">
-                <div class="text-mono text-muted" style="width: 18px; font-size: 12px;">05</div>
-                <div class="list-main">
-                  <div class="text-mono" style="font-size: 13px;">moonshot-v1-128k</div>
-                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">Moonshot · 214 请求</div>
-                </div>
-                <div class="list-meta" style="min-width: 80px; text-align: right;">
-                  <div>428K</div>
-                  <div class="text-mono list-meta-sub">¥4.28</div>
+                  <div>{{ formatNumber(m.tokens) }}</div>
+                  <div class="text-mono list-meta-sub">¥{{ m.cost.toFixed(2) }}</div>
                 </div>
               </div>
             </div>
@@ -339,36 +466,12 @@ function clearFilters() {
       <div v-show="activePane === 'logs'" class="view-pane" role="tabpanel" id="usage-pane-logs" aria-labelledby="usage-tab-logs" data-pane-group="usage-view" data-pane-id="logs" tabindex="0">
 
         <section class="stat-grid-4" style="gap: 16px; margin-bottom: 24px;">
-          <div class="metric-card">
-            <div class="metric-label">总请求<span class="text-mono" style="color: var(--muted);">本月</span></div>
-            <div class="metric-value">12,485</div>
+          <div v-for="(stat, idx) in logStats" :key="stat.label + idx" class="metric-card">
+            <div class="metric-label">{{ stat.label }}</div>
+            <div class="metric-value">{{ stat.value }}</div>
             <div class="metric-meta">
-              <span class="metric-trend up">↑ 8.4%</span>
-              <span>vs 上月</span>
-            </div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">成功率<span class="text-mono" style="color: var(--muted);">%</span></div>
-            <div class="metric-value">99.6<span class="unit">%</span></div>
-            <div class="metric-meta">
-              <span class="metric-trend up">↑ 0.2%</span>
-              <span>vs 上月</span>
-            </div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">P95 延迟<span class="text-mono" style="color: var(--muted);">秒</span></div>
-            <div class="metric-value">2.4<span class="unit">s</span></div>
-            <div class="metric-meta">
-              <span class="metric-trend down">↑ 0.3s</span>
-              <span>略升高</span>
-            </div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">错误数<span class="text-mono" style="color: var(--muted);">5xx+429</span></div>
-            <div class="metric-value">52</div>
-            <div class="metric-meta">
-              <span class="metric-trend neutral">主要 401</span>
-              <span>2 小时前</span>
+              <span class="metric-trend" :class="stat.trend">{{ stat.delta }}</span>
+              <span>{{ stat.note }}</span>
             </div>
           </div>
         </section>
@@ -453,124 +556,23 @@ function clearFilters() {
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:42:15</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #d97757; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">A</div><span style="font-size: 12.5px;">Anthropic</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">claude-sonnet-4-5</span></td>
-                <td class="num">245</td>
-                <td class="num">47</td>
-                <td class="num">1.24s</td>
-                <td><span class="badge info" style="font-size: 10px;">R1</span></td>
+              <tr v-for="log in logs" :key="log.id">
+                <td><span class="text-mono" style="font-size: 12.5px;">{{ formatTime(log.timestamp) }}</span></td>
+                <td><span class="badge" :class="statusBadgeClass(log.status_code)"><span :class="statusBadgeClass(log.status_code) === 'success' ? 'dot green' : (statusBadgeClass(log.status_code) === 'warn' ? 'dot amber' : 'dot red')"></span>{{ statusText(log.status_code) }}</span></td>
+                <td><div class="row" style="gap: 6px;"><div class="list-icon" :style="{ background: providerColor(log.provider_name), color: providerColor(log.provider_name) === '#272729' ? 'rgba(255,255,255,0.86)' : '#fff', width: '22px', height: '22px', fontSize: '10px', borderRadius: '5px' }">{{ providerInitial(log.provider_name) }}</div><span style="font-size: 12.5px;">{{ log.provider_name }}</span></div></td>
+                <td><span class="text-mono" style="font-size: 12.5px;">{{ log.model }}</span></td>
+                <td class="num">{{ log.input_tokens > 0 ? log.input_tokens : '—' }}</td>
+                <td class="num">{{ log.output_tokens > 0 ? log.output_tokens : '—' }}</td>
+                <td class="num">{{ (log.latency_ms / 1000).toFixed(2) }}s</td>
+                <td><span class="badge info" style="font-size: 10px;">{{ log.route_label || '默认' }}</span></td>
               </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:42:08</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #10a37f; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">O</div><span style="font-size: 12.5px;">OpenAI</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">gpt-4o</span></td>
-                <td class="num">89</td>
-                <td class="num">156</td>
-                <td class="num">0.82s</td>
-                <td><span class="badge info" style="font-size: 10px;">R2</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:41:42</span></td>
-                <td><span class="badge error"><span class="dot red"></span>401</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #2563eb; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">G</div><span style="font-size: 12.5px;">智谱 GLM</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">glm-4-plus</span></td>
-                <td class="num">412</td>
-                <td class="num text-muted">—</td>
-                <td class="num">0.34s</td>
-                <td><span class="badge" style="font-size: 10px;">默认</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:41:18</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #10a37f; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">O</div><span style="font-size: 12.5px;">OpenAI</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">gpt-4o-mini</span></td>
-                <td class="num">128</td>
-                <td class="num">24</td>
-                <td class="num">0.61s</td>
-                <td><span class="badge info" style="font-size: 10px;">R2</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:40:55</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon dark" style="width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">D</div><span style="font-size: 12.5px;">DeepSeek</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">deepseek-reasoner</span></td>
-                <td class="num">312</td>
-                <td class="num">580</td>
-                <td class="num">4.18s</td>
-                <td><span class="badge info" style="font-size: 10px;">R4</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:40:32</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #d97757; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">A</div><span style="font-size: 12.5px;">Anthropic</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">claude-opus-4-1</span></td>
-                <td class="num">1,240</td>
-                <td class="num">380</td>
-                <td class="num">5.42s</td>
-                <td><span class="badge" style="font-size: 10px;">默认</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:40:11</span></td>
-                <td><span class="badge warn"><span class="dot amber"></span>429</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #10a37f; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">O</div><span style="font-size: 12.5px;">OpenAI</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">gpt-4o</span></td>
-                <td class="num text-muted">—</td>
-                <td class="num text-muted">—</td>
-                <td class="num">0.12s</td>
-                <td><span class="badge info" style="font-size: 10px;">R1</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:39:48</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon blue" style="width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">M</div><span style="font-size: 12.5px;">Moonshot</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">kimi-latest</span></td>
-                <td class="num">58,420</td>
-                <td class="num">2,140</td>
-                <td class="num">12.3s</td>
-                <td><span class="badge info" style="font-size: 10px;">R3</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:39:20</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #d97757; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">A</div><span style="font-size: 12.5px;">Anthropic</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">claude-sonnet-4-5</span></td>
-                <td class="num">680</td>
-                <td class="num">142</td>
-                <td class="num">1.78s</td>
-                <td><span class="badge" style="font-size: 10px;">默认</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:38:55</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon dark" style="width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">D</div><span style="font-size: 12.5px;">DeepSeek</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">deepseek-chat</span></td>
-                <td class="num">94</td>
-                <td class="num">28</td>
-                <td class="num">1.42s</td>
-                <td><span class="badge info" style="font-size: 10px;">R4</span></td>
-              </tr>
-              <tr>
-                <td><span class="text-mono" style="font-size: 12.5px;">10:38:30</span></td>
-                <td><span class="badge success"><span class="dot green"></span>200</span></td>
-                <td><div class="row" style="gap: 6px;"><div class="list-icon" style="background: #10a37f; color: white; width: 22px; height: 22px; font-size: 10px; border-radius: 5px;">O</div><span style="font-size: 12.5px;">OpenAI</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">gpt-4o</span></td>
-                <td class="num">2,840</td>
-                <td class="num">640</td>
-                <td class="num">3.18s</td>
-                <td><span class="badge info" style="font-size: 10px;">R1</span></td>
-              </tr>
-              <!-- Empty state row -->
-              <tr v-if="showEmpty" class="logs-empty-row">
+              <tr v-if="logs.length === 0" class="logs-empty-row">
                 <td colspan="8" style="padding: 56px 20px;">
                   <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;">
                     <div style="width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; color: var(--muted);">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
                     </div>
-                    <div style="font-size: 14px; font-weight: 500; color: var(--fg);">未找到匹配的请求</div>
+                    <div style="font-size: 14px; font-weight: 500; color: var(--fg);">暂无匹配日志</div>
                     <div style="font-size: 12.5px; color: var(--muted);">尝试调整时间范围或清除筛选条件</div>
                     <button class="btn btn-secondary" style="font-size: 12.5px; padding: 5px 12px; margin-top: 4px;" @click="clearFilters">清除筛选</button>
                   </div>
@@ -580,15 +582,11 @@ function clearFilters() {
           </table>
 
           <div class="row-between" style="padding: 12px 16px; border-top: 1px solid rgba(0, 0, 0, 0.05);">
-            <div class="text-muted" style="font-size: 12px;">显示 1–11 / 共 12,485 条</div>
+            <div class="text-muted" style="font-size: 12px;">显示 {{ logs.length ? paginationStart : 0 }}–{{ logs.length ? paginationEnd : 0 }} / 共 {{ logTotal.toLocaleString() }} 条</div>
             <div class="row" style="gap: 6px;" role="group" aria-label="分页">
-              <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" aria-label="上一页">‹ 上一页</button>
-              <button class="btn btn-primary" style="padding: 4px 10px; font-size: 12px; min-width: 28px;" aria-current="page">1</button>
-              <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px; min-width: 28px;" aria-label="第 2 页">2</button>
-              <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px; min-width: 28px;" aria-label="第 3 页">3</button>
-              <span class="text-muted" style="font-size: 12px; padding: 0 4px;" aria-hidden="true">…</span>
-              <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px; min-width: 28px;" aria-label="第 1135 页">1135</button>
-              <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" aria-label="下一页">下一页 ›</button>
+              <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" :disabled="!hasPrevPage" aria-label="上一页" @click="goPrevPage">‹ 上一页</button>
+              <button class="btn btn-primary" style="padding: 4px 10px; font-size: 12px; min-width: 28px;" aria-current="page">{{ logPage }}</button>
+              <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" :disabled="!hasNextPage" aria-label="下一页" @click="goNextPage">下一页 ›</button>
             </div>
           </div>
         </section>
@@ -596,3 +594,18 @@ function clearFilters() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 245, 247, 0.78);
+  backdrop-filter: blur(2px);
+  z-index: 10;
+  font-size: 14px;
+  color: var(--muted, #6e6e73);
+}
+</style>
