@@ -330,11 +330,11 @@ onMounted(() => {
       <div class="modal-card wide modal-card-scroll">
         <div class="modal-title">{{ editingId ? '编辑规则' : '新建规则' }}</div>
         <div class="row" style="gap: 12px;">
-          <div class="field" style="flex: 1;">>
+          <div class="field" style="flex: 1;">
             <label class="field-label">名称</label>
             <input v-model="form.name" class="input" placeholder="例如 成本优化">
           </div>
-          <div class="field" style="width: 120px;">>
+          <div class="field" style="width: 120px;">
             <label class="field-label">优先级</label>
             <input v-model.number="form.priority" type="number" class="input">
           </div>
@@ -353,7 +353,9 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="field-label">条件</div>
+        <div class="field" style="margin-bottom: 8px;">
+          <div class="field-label">条件</div>
+        </div>
         <div class="stack-tight" style="gap: 8px;">
           <div v-for="(cond, idx) in form.conditions" :key="idx" class="row" style="gap: 8px; align-items: flex-start;">
             <select v-model="cond.field" class="select" style="flex: 1;">
@@ -379,7 +381,9 @@ onMounted(() => {
           <button class="btn btn-secondary" style="align-self: flex-start;" @click="addCondition">添加条件</button>
         </div>
 
-        <div class="field-label">目标</div>
+        <div class="field" style="margin-bottom: 8px;">
+          <div class="field-label">目标</div>
+        </div>
         <div class="stack-tight" style="gap: 8px;">
           <div v-for="(target, idx) in form.targets" :key="idx" class="row" style="gap: 8px; align-items: flex-start;">
             <select v-model="target.provider_id" class="select" style="flex: 1;">

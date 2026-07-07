@@ -775,7 +775,7 @@ watch(fetchedSettings, loadSettings, { once: true })
   <Teleport to="body">
     <div v-if="showPasswordModal" class="modal-overlay" @click.self="closePasswordModal">
       <div class="modal-card">
-        <h3 class="modal-title">修改主密码</h3>
+        <div class="modal-title">修改主密码</div>
         <form class="stack" @submit.prevent="submitPasswordChange">
           <input v-model="oldPassword" type="password" class="input" placeholder="当前密码" />
           <input v-model="newPassword" type="password" class="input" placeholder="新密码" />
@@ -789,17 +789,3 @@ watch(fetchedSettings, loadSettings, { once: true })
   </Teleport>
 </template>
 
-<style scoped>
-.loading-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(245, 245, 247, 0.78);
-  backdrop-filter: blur(2px);
-  z-index: 10;
-  font-size: 14px;
-  color: var(--muted, #6e6e73);
-}
-</style>

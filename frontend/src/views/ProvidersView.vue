@@ -36,6 +36,7 @@ const modalMode = ref<'add' | 'edit'>('add')
 const editingId = ref('')
 const saving = ref(false)
 const testingIds = ref<Set<string>>(new Set())
+const openMenuId = ref('')
 
 const form = ref<model.ProviderInput>({
   name: '',
@@ -175,6 +176,18 @@ function closeModal() {
   modalOpen.value = false
 }
 
+async function deleteProvider(id: string) {
+  if (!confirm('确认删除该 Provider？')) return
+  try {
+    await api.deleteProvider(id)
+    await refresh()
+    toast.push('Provider 已删除', 'success')
+  } catch (e: any) {
+    toast.push('删除失败：' + (e?.message || String(e)), 'error')
+  }
+  openMenuId.value = ''
+}
+
 function handleTabKeydown(e: KeyboardEvent) {
   const container = e.currentTarget as HTMLElement
   const tabs = container.querySelectorAll<HTMLButtonElement>('.tab')
@@ -311,9 +324,15 @@ onMounted(() => {
                 <button class="btn btn-icon" title="编辑" @click="openEdit(provider)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
                 </button>
-                <button class="btn btn-icon" title="更多" @click="openEdit(provider)">
-                  <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-                </button>
+                <div style="position: relative; display: inline-block;">
+                  <button class="btn btn-icon" title="更多" @click="openMenuId = openMenuId === provider.id ? '' : provider.id">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                  </button>
+                  <div v-if="openMenuId === provider.id" class="dropdown-menu" style="position: absolute; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: var(--shadow-md); z-index: 10; min-width: 120px;">
+                    <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--fg); cursor: pointer;" @click="openEdit(provider); openMenuId = ''">编辑</button>
+                    <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--negative); cursor: pointer;" @click="deleteProvider(provider.id)">删除</button>
+                  </div>
+                </div>
               </div>
             </div>
           </article>
