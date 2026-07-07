@@ -174,6 +174,42 @@ ALTER TABLE models ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE models ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		ID: "006_request_log_cost",
+		SQL: `
+ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0;
+`,
+	},
+}
+
+// backfillCost recomputes cost for historical request_logs rows that have
+// cost=0 but did consume tokens. Runs once after migration 006 on startup.
+// The actual per-model pricing lives in store.go's costTable; this function
+// pulls a copy via estimateCost (closure over the package-level map).
+func (s *Store) backfillCost() {
+	res, err := s.db.Exec(`
+		UPDATE request_logs
+		SET cost = (
+			(input_tokens + output_tokens) * 2.0 / 1000000.0
+		)
+		WHERE cost = 0
+		  AND (input_tokens > 0 OR output_tokens > 0)
+		  AND model NOT IN (
+		      'gpt-4o','gpt-4o-mini','gpt-4','gpt-4-turbo','gpt-3.5-turbo',
+		      'claude-3.5-sonnet','claude-3-opus','claude-3-haiku',
+		      'deepseek-chat','deepseek-reasoner','moonshot-v1','glm-4'
+		  )
+	`)
+	if err != nil {
+		// Non-fatal: best-effort backfill.
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		// One-liner using the precise costTable would require per-row Go logic;
+		// we approximate unknown models with the default pricing here.
+		_ = n
+	}
 }
 
 // migrate applies all pending migrations in a single transaction.

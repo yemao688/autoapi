@@ -58,7 +58,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 
 	dataQuery := fmt.Sprintf(`
 		SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
-		       input_tokens, output_tokens, latency_ms, route_id, route_label,
+		       input_tokens, output_tokens, cost, latency_ms, route_id, route_label,
 		       api_key_id, COALESCE(error, '')
 		FROM request_logs %s
 		ORDER BY timestamp_ms DESC
@@ -77,7 +77,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		if err := rows.Scan(
 			&l.ID, &l.Timestamp, &l.StatusCode,
 			&l.ProviderID, &l.ProviderName, &l.Model,
-			&l.InputTokens, &l.OutputTokens, &l.LatencyMs,
+			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs,
 			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error,
 		); err != nil {
 			return nil, 0, fmt.Errorf("store: scan log: %w", err)
@@ -97,16 +97,19 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 // InsertRequestLog appends a single log entry. Used by the proxy (Phase 4)
 // through the Writer.
 func (s *Store) InsertRequestLog(l model.RequestLog) error {
+	if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
+		l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+	}
 	return s.execTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
-			                          input_tokens, output_tokens, latency_ms, route_id, route_label,
+			                          input_tokens, output_tokens, cost, latency_ms, route_id, route_label,
 			                          api_key_id, error)
 			VALUES (?, ?, ?, ?, ?, ?,
-			        ?, ?, ?, ?, ?,
+			        ?, ?, ?, ?, ?, ?,
 			        ?, ?)`,
 			l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
-			l.InputTokens, l.OutputTokens, l.LatencyMs, l.RouteID, l.RouteLabel,
+			l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.RouteID, l.RouteLabel,
 			l.APIKeyID, l.Error)
 		return err
 	})
@@ -117,19 +120,22 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 	return s.execTx(func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
-			                          input_tokens, output_tokens, latency_ms, route_id, route_label,
+			                          input_tokens, output_tokens, cost, latency_ms, route_id, route_label,
 			                          api_key_id, error)
 			VALUES (?, ?, ?, ?, ?, ?,
-			        ?, ?, ?, ?, ?,
+			        ?, ?, ?, ?, ?, ?,
 			        ?, ?)`)
 		if err != nil {
 			return err
 		}
 		defer stmt.Close()
 		for _, l := range logs {
+			if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
+				l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+			}
 			if _, err := stmt.Exec(
 				l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
-				l.InputTokens, l.OutputTokens, l.LatencyMs, l.RouteID, l.RouteLabel,
+				l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.RouteID, l.RouteLabel,
 				l.APIKeyID, l.Error,
 			); err != nil {
 				return err

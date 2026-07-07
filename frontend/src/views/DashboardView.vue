@@ -17,7 +17,7 @@ const { data: proxyStatus, execute: fetchProxyStatus } = useApi(api.proxyStatus)
 const initialLoading = ref(true)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-const stats = computed(() => dashboardData.value?.stats.slice(0, 4) || [])
+const stats = computed(() => dashboardData.value?.stats || [])
 const recentActivity = computed(() => dashboardData.value?.recent_activity.slice(0, 10) || [])
 const providers = computed(() => dashboardData.value?.providers || [])
 const health = computed(() => dashboardData.value?.service_health)
@@ -65,6 +65,12 @@ const { format: relativeFormat } = useRelativeTime()
 
 function formatTime(ts: number): string {
   return relativeFormat(ts)
+}
+
+function formatCost(c: number): string {
+  if (c >= 1) return '$' + c.toFixed(2)
+  if (c >= 0.01) return '$' + c.toFixed(3)
+  return '$' + c.toFixed(4)
 }
 
 async function fetchAll() {
@@ -119,7 +125,7 @@ onUnmounted(() => {
           <div class="stat-label">{{ stat.label }}</div>
           <div class="stat-value">{{ stat.value }}</div>
           <div class="stat-meta">
-            <template v-if="idx === 3">
+            <template v-if="stat.label === 'Active Providers'">
               <span :class="proxyRunning ? 'dot green' : 'dot red'"></span>
               <span>{{ health ? formatUptime(health.uptime_seconds) : '—' }}</span>
             </template>
@@ -253,6 +259,7 @@ onUnmounted(() => {
               <span class="badge mono">{{ log.model }}</span>
               <div class="list-main">
                 <div class="list-title">{{ log.provider_name }} · 输入 {{ log.input_tokens }} / 输出 {{ log.output_tokens }}</div>
+                <div class="list-sub">约 {{ formatCost(log.cost) }}</div>
               </div>
               <span class="text-mono text-muted">{{ (log.latency_ms / 1000).toFixed(1) }}s</span>
             </div>

@@ -134,6 +134,7 @@ export namespace model {
 	    model: string;
 	    input_tokens: number;
 	    output_tokens: number;
+	    cost: number;
 	    latency_ms: number;
 	    route_id: string;
 	    route_label: string;
@@ -154,6 +155,7 @@ export namespace model {
 	        this.model = source["model"];
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
+	        this.cost = source["cost"];
 	        this.latency_ms = source["latency_ms"];
 	        this.route_id = source["route_id"];
 	        this.route_label = source["route_label"];
@@ -430,6 +432,7 @@ export namespace model {
 	    provider_id: string;
 	    provider_name: string;
 	    tokens: number;
+	    cost: number;
 	    percent: number;
 	
 	    static createFrom(source: any = {}) {
@@ -441,6 +444,7 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.provider_name = source["provider_name"];
 	        this.tokens = source["tokens"];
+	        this.cost = source["cost"];
 	        this.percent = source["percent"];
 	    }
 	}

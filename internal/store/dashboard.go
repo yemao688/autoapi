@@ -54,16 +54,25 @@ func (s *Store) computeStats(startOfDay, startOfWeek, startOfMonth int64) ([]mod
 	weekTokens := s.sumTokensSince(startOfWeek)
 	monthTokens := s.sumTokensSince(startOfMonth)
 
+	todayCost := s.sumCostSince(startOfDay)
+	weekCost := s.sumCostSince(startOfWeek)
+	monthCost := s.sumCostSince(startOfMonth)
+
 	// Previous period for delta calculation
 	prevWeekStart := startOfWeek - (7 * 24 * 60 * 60 * 1000)
 	prevMonthStart := startOfMonth - (28 * 24 * 60 * 60 * 1000)
 	prevWeekTokens := s.sumTokensSince(prevWeekStart)
 	prevMonthTokens := s.sumTokensSince(prevMonthStart)
+	prevWeekCost := s.sumCostSince(prevWeekStart)
+	prevMonthCost := s.sumCostSince(prevMonthStart)
 
 	stats := []model.Stat{
 		makeStat("Today's Tokens", fmt.Sprintf("%d", todayTokens), deltaStr(todayTokens, prevWeekTokens/7), ""),
 		makeStat("This Week", fmt.Sprintf("%d", weekTokens), deltaStr(weekTokens, prevWeekTokens), ""),
 		makeStat("This Month", fmt.Sprintf("%d", monthTokens), deltaStr(monthTokens, prevMonthTokens), ""),
+		makeStat("Today's Cost", fmt.Sprintf("$%.2f", todayCost), deltaCostStr(todayCost, prevWeekCost/7), ""),
+		makeStat("This Week Cost", fmt.Sprintf("$%.2f", weekCost), deltaCostStr(weekCost, prevWeekCost), ""),
+		makeStat("This Month Cost", fmt.Sprintf("$%.2f", monthCost), deltaCostStr(monthCost, prevMonthCost), ""),
 		makeStat("Active Providers", fmt.Sprintf("%d", providerCount), "", ""),
 	}
 	return stats, nil
@@ -91,7 +100,8 @@ func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
 	rows, err := s.db.Query(`
 		SELECT date(timestamp_ms / 1000, 'unixepoch') AS day,
 		       COALESCE(SUM(input_tokens), 0),
-		       COALESCE(SUM(output_tokens), 0)
+		       COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(cost), 0)
 		FROM request_logs
 		WHERE timestamp_ms >= ?
 		GROUP BY day
@@ -106,13 +116,15 @@ func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
 	for rows.Next() {
 		var date string
 		var in, out int64
-		if err := rows.Scan(&date, &in, &out); err != nil {
+		var cost float64
+		if err := rows.Scan(&date, &in, &out, &cost); err != nil {
 			return nil, fmt.Errorf("store: scan token trend: %w", err)
 		}
 		pointMap[date] = &model.TokenTrendPoint{
 			Date:         date,
 			InputTokens:  in,
 			OutputTokens: out,
+			Cost:         cost,
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -124,7 +136,6 @@ func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
 	for i := days - 1; i >= 0; i-- {
 		date := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
 		if pt, ok := pointMap[date]; ok {
-			pt.Cost = estimateCost("", pt.InputTokens, pt.OutputTokens)
 			trend = append(trend, *pt)
 		} else {
 			trend = append(trend, model.TokenTrendPoint{
@@ -138,7 +149,7 @@ func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
 func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
-		       input_tokens, output_tokens, latency_ms, route_id, route_label,
+		       input_tokens, output_tokens, cost, latency_ms, route_id, route_label,
 		       api_key_id, COALESCE(error, '')
 		FROM request_logs
 		ORDER BY timestamp_ms DESC
@@ -154,7 +165,7 @@ func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {
 		if err := rows.Scan(
 			&l.ID, &l.Timestamp, &l.StatusCode,
 			&l.ProviderID, &l.ProviderName, &l.Model,
-			&l.InputTokens, &l.OutputTokens, &l.LatencyMs,
+			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs,
 			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan recent log: %w", err)

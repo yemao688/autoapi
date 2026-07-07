@@ -140,19 +140,20 @@ type RouteTarget struct {
 
 // RequestLog is one proxied request through the gateway.
 type RequestLog struct {
-	ID           string `json:"id"`
-	Timestamp    int64  `json:"timestamp"` // ms
-	StatusCode   int    `json:"status_code"`
-	ProviderID   string `json:"provider_id"`
-	ProviderName string `json:"provider_name"`
-	Model        string `json:"model"`
-	InputTokens  int    `json:"input_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-	LatencyMs    int    `json:"latency_ms"`
-	RouteID      string `json:"route_id"` // empty = default route
-	RouteLabel   string `json:"route_label"`
-	APIKeyID     string `json:"api_key_id"`
-	Error        string `json:"error,omitempty"`
+	ID           string  `json:"id"`
+	Timestamp    int64   `json:"timestamp"` // ms
+	StatusCode   int     `json:"status_code"`
+	ProviderID   string  `json:"provider_id"`
+	ProviderName string  `json:"provider_name"`
+	Model        string  `json:"model"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	Cost         float64 `json:"cost"` // estimated USD
+	LatencyMs    int     `json:"latency_ms"`
+	RouteID      string  `json:"route_id"` // empty = default route
+	RouteLabel   string  `json:"route_label"`
+	APIKeyID     string  `json:"api_key_id"`
+	Error        string  `json:"error,omitempty"`
 }
 
 // ----- Aggregation DTOs (dashboard / usage-stats) -----
@@ -179,6 +180,7 @@ type ProviderShare struct {
 	ProviderID   string  `json:"provider_id"`
 	ProviderName string  `json:"provider_name"`
 	Tokens       int64   `json:"tokens"`
+	Cost         float64 `json:"cost"`
 	Percent      float64 `json:"percent"`
 }
 

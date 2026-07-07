@@ -72,6 +72,9 @@ func New(_ context.Context, deps StoreDeps) (*Store, error) {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
 
+	// Best-effort backfill of cost for pre-migration rows.
+	s.backfillCost()
+
 	// Writer
 	s.writer = NewWriter(db, 1024)
 	go s.writer.Run()

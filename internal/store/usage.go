@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"time"
@@ -90,23 +91,12 @@ func (s *Store) tokenStats() ([]model.Stat, error) {
 }
 
 func (s *Store) sumCostSince(startMs int64) float64 {
-	rows, err := s.db.Query(`
-		SELECT model, COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
-		FROM request_logs WHERE timestamp_ms >= ?
-		GROUP BY model`, startMs)
-	if err != nil {
-		return 0
-	}
-	defer rows.Close()
-
+	row := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0)
+		FROM request_logs WHERE timestamp_ms >= ?`, startMs)
 	var total float64
-	for rows.Next() {
-		var modelName string
-		var in, out int64
-		if err := rows.Scan(&modelName, &in, &out); err != nil {
-			continue
-		}
-		total += estimateCost(modelName, in, out)
+	if err := row.Scan(&total); err != nil {
+		slog.Error("store: sumCostSince", "err", err)
 	}
 	return total
 }
@@ -122,7 +112,7 @@ func (s *Store) countRequestsSince(startMs int64) int64 {
 func (s *Store) providerShares() ([]model.ProviderShare, error) {
 	cutoff := time.Now().AddDate(0, 0, -30).UnixMilli()
 	rows, err := s.db.Query(`
-		SELECT COALESCE(provider_id, ''), COALESCE(provider_name, ''), COALESCE(SUM(input_tokens + output_tokens), 0)
+		SELECT COALESCE(provider_id, ''), COALESCE(provider_name, ''), COALESCE(SUM(input_tokens + output_tokens), 0), COALESCE(SUM(cost), 0)
 		FROM request_logs WHERE timestamp_ms >= ?
 		GROUP BY provider_id ORDER BY 3 DESC`, cutoff)
 	if err != nil {
@@ -134,7 +124,7 @@ func (s *Store) providerShares() ([]model.ProviderShare, error) {
 	var grandTotal int64
 	for rows.Next() {
 		var ps model.ProviderShare
-		if err := rows.Scan(&ps.ProviderID, &ps.ProviderName, &ps.Tokens); err != nil {
+		if err := rows.Scan(&ps.ProviderID, &ps.ProviderName, &ps.Tokens, &ps.Cost); err != nil {
 			return nil, fmt.Errorf("store: scan provider share: %w", err)
 		}
 		grandTotal += ps.Tokens
@@ -162,8 +152,7 @@ func (s *Store) modelRanking(limit int) ([]model.ModelRanking, error) {
 		SELECT model, COALESCE(provider_name, ''),
 		       COUNT(*) AS reqs,
 		       COALESCE(SUM(input_tokens + output_tokens), 0),
-		       COALESCE(SUM(input_tokens), 0),
-		       COALESCE(SUM(output_tokens), 0)
+		       COALESCE(SUM(cost), 0)
 		FROM request_logs WHERE timestamp_ms >= ?
 		GROUP BY model
 		ORDER BY reqs DESC
@@ -176,11 +165,9 @@ func (s *Store) modelRanking(limit int) ([]model.ModelRanking, error) {
 	var rankings []model.ModelRanking
 	for rows.Next() {
 		var mr model.ModelRanking
-		var inputTokens, outputTokens int64
-		if err := rows.Scan(&mr.Model, &mr.ProviderName, &mr.Requests, &mr.Tokens, &inputTokens, &outputTokens); err != nil {
+		if err := rows.Scan(&mr.Model, &mr.ProviderName, &mr.Requests, &mr.Tokens, &mr.Cost); err != nil {
 			return nil, fmt.Errorf("store: scan model ranking: %w", err)
 		}
-		mr.Cost = estimateCost(mr.Model, inputTokens, outputTokens)
 		rankings = append(rankings, mr)
 	}
 	if rankings == nil {

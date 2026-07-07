@@ -741,7 +741,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 /* ============== STAT CARDS ============== */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px;
 }
 

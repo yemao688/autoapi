@@ -90,7 +90,8 @@ func (s *Store) exportTokensCSV() ([]byte, string, error) {
 		SELECT date(timestamp_ms / 1000, 'unixepoch') AS day,
 		       provider_name, model,
 		       SUM(input_tokens), SUM(output_tokens),
-		       COUNT(*)
+		       COUNT(*),
+		       SUM(cost)
 		FROM request_logs
 		WHERE timestamp_ms >= ?
 		GROUP BY day, provider_name, model
@@ -102,16 +103,17 @@ func (s *Store) exportTokensCSV() ([]byte, string, error) {
 
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
-	w.Write([]string{"date", "provider", "model", "input_tokens", "output_tokens", "requests"})
+	w.Write([]string{"date", "provider", "model", "input_tokens", "output_tokens", "requests", "cost"})
 
 	for rows.Next() {
 		var date, provider, modelName string
 		var in, out, reqs int64
-		if err := rows.Scan(&date, &provider, &modelName, &in, &out, &reqs); err != nil {
+		var cost float64
+		if err := rows.Scan(&date, &provider, &modelName, &in, &out, &reqs, &cost); err != nil {
 			return nil, "", fmt.Errorf("store: export tokens csv: scan row: %w", err)
 		}
 		if err := w.Write([]string{date, provider, modelName,
-			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%d", reqs)}); err != nil {
+			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%d", reqs), fmt.Sprintf("%.4f", cost)}); err != nil {
 			return nil, "", fmt.Errorf("store: export tokens csv: write row: %w", err)
 		}
 	}
@@ -129,7 +131,7 @@ func (s *Store) exportLogsCSV() ([]byte, string, error) {
 	cutoff := time.Now().AddDate(0, 0, -30).UnixMilli()
 	rows, err := s.db.Query(`
 		SELECT timestamp_ms, status_code, provider_name, model,
-		       input_tokens, output_tokens, latency_ms, route_label,
+		       input_tokens, output_tokens, cost, latency_ms, route_label,
 		       COALESCE(error, '')
 		FROM request_logs
 		WHERE timestamp_ms >= ?
@@ -143,19 +145,20 @@ func (s *Store) exportLogsCSV() ([]byte, string, error) {
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
 	w.Write([]string{"timestamp", "status", "provider", "model",
-		"input_tokens", "output_tokens", "latency_ms", "route", "error"})
+		"input_tokens", "output_tokens", "cost", "latency_ms", "route", "error"})
 
 	for rows.Next() {
 		var ts int64
 		var status int
 		var provider, modelName, route, errStr string
 		var in, out, lat int
-		if err := rows.Scan(&ts, &status, &provider, &modelName, &in, &out, &lat, &route, &errStr); err != nil {
+		var cost float64
+		if err := rows.Scan(&ts, &status, &provider, &modelName, &in, &out, &cost, &lat, &route, &errStr); err != nil {
 			return nil, "", fmt.Errorf("store: export logs csv: scan row: %w", err)
 		}
 		t := time.UnixMilli(ts).Format(time.RFC3339)
 		if err := w.Write([]string{t, fmt.Sprintf("%d", status), provider, modelName,
-			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%d", lat), route, errStr}); err != nil {
+			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%.4f", cost), fmt.Sprintf("%d", lat), route, errStr}); err != nil {
 			return nil, "", fmt.Errorf("store: export logs csv: write row: %w", err)
 		}
 	}

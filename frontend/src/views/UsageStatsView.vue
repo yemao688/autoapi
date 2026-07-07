@@ -440,7 +440,10 @@ watch([providerFilter, statusFilter], () => {
                     <span class="chart-legend-swatch" :style="{ background: providerColor(p.provider_name) }"></span>
                     <span style="font-size: 13px;">{{ p.provider_name }}</span>
                   </div>
-                  <span class="text-mono" style="font-size: 13px; font-weight: 500;">{{ p.percent }}%</span>
+                  <div class="text-mono" style="font-size: 13px; font-weight: 500; text-align: right;">
+                    <div>{{ p.percent }}%</div>
+                    <div class="text-muted" style="font-size: 11px; font-weight: 400;">约 ${{ p.cost.toFixed(2) }}</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -457,7 +460,7 @@ watch([providerFilter, statusFilter], () => {
                 </div>
                 <div class="list-meta" style="min-width: 80px; text-align: right;">
                   <div>{{ formatNumber(m.tokens) }}</div>
-                  <div class="text-mono list-meta-sub">¥{{ m.cost.toFixed(2) }}</div>
+                  <div class="text-mono list-meta-sub">${{ m.cost.toFixed(2) }}</div>
                 </div>
               </div>
             </div>
@@ -554,6 +557,7 @@ watch([providerFilter, statusFilter], () => {
                 <th>Model</th>
                 <th class="right">输入</th>
                 <th class="right">输出</th>
+                <th class="right">成本</th>
                 <th class="right">延迟</th>
                 <th>路由</th>
               </tr>
@@ -566,11 +570,12 @@ watch([providerFilter, statusFilter], () => {
                 <td><span class="text-mono" style="font-size: 12.5px;">{{ log.model }}</span></td>
                 <td class="num">{{ log.input_tokens > 0 ? log.input_tokens : '—' }}</td>
                 <td class="num">{{ log.output_tokens > 0 ? log.output_tokens : '—' }}</td>
+                <td class="num">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</td>
                 <td class="num">{{ (log.latency_ms / 1000).toFixed(2) }}s</td>
                 <td><span class="badge info" style="font-size: 10px;">{{ log.route_label || '默认' }}</span></td>
               </tr>
               <tr v-if="logs.length === 0" class="logs-empty-row">
-                <td colspan="8" style="padding: 56px 20px;">
+                <td colspan="9" style="padding: 56px 20px;">
                   <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;">
                     <div style="width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; color: var(--muted);">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
