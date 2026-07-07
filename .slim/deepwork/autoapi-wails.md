@@ -223,11 +223,21 @@ P0 ──┬── P1a (签名+DTO+generate module, 顺序) ──┬── P1b/
 - [x] 调研：原型地图 (exp-1)
 - [x] 调研：Wails v2 (lib-1)
 - [x] 范围与架构决策
-- [ ] Oracle 评审计划
-- [ ] Phase 0 脚手架
-- [ ] Phase 1 后端骨架
-- [ ] Phase 2 前端骨架
+- [x] Oracle 评审计划 → APPROVE-WITH-CHANGES（9 项修订已并入）
+- [x] Phase 0 脚手架（commit `9627b66`）— wails init vue-ts + 升级 Vue3.5/Vite8/TS6/vue-router4 + modernc/xdg/chi + entitlements + styles.css + `wails build` 通过
+- [x] Phase 1a 后端契约（commit `9627b66`）— `internal/model/model.go`(358 行全 DTO) + `internal/api/app.go`(30+ Bind 签名) + `wails generate module` → `frontend/wailsjs/go/api/App.{js,d.ts}` + `models.ts`
+- [ ] Phase 1b/c/d 后端实现（与 P2 并行）
+- [ ] Phase 2 前端骨架（与 P1 并行）
 - [ ] Phase 3 接口对接
 - [ ] Phase 4 代理网关
-- [ ] Phase 5 集成打磨
-- [ ] Phase 6 验证打包
+- [ ] Phase 5 系统集成
+- [ ] Phase 5.5 错误处理 + slog
+- [ ] Phase 6 验证 + 打包
+
+## Phase 1a 交付的关键路径（给后续 fixer 用）
+- DTO: `internal/model/model.go` — Provider/Model/ApiKey/Route/RouteCondition/RouteTarget/RequestLog/Stat/TokenTrendPoint/ProviderShare/ModelRanking/DashboardData/ServiceHealth/UsageStats/Settings(7 子区)/Endpoint/ApiKeyInput/ProviderInput/RouteInput/LogQuery/ExportFormat/ProviderTestResult/ExportResult/ProxyStatus
+- Bind 入口: `internal/api/app.go` — `type App struct{ctx, deps Deps}`, `NewApp(Deps)`, `Startup/Shutdown`, 30+ 方法
+- DI 接口: `StoreService` / `BusinessService` / `ProxyService`（在 `api/app.go` 顶部定义）
+- 根 `app.go`: `NewApp()` 工厂（目前 deps 全 nil，注释指明 Phase 1b/1c/4 注入点）
+- 生成的 TS: `frontend/wailsjs/go/api/App.{js,d.ts}` + `frontend/wailsjs/go/models.ts`
+- 注意 Wails 把 internal/api 包当 "api" 暴露（不是 main），前端调用是 `window.go.api.App.*`
