@@ -4,13 +4,11 @@ import type { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
-import { useMasterGate } from '@/composables/useMasterGate'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
 
 useRelativeTime()
 const { download } = useExportDownload()
-const { state: gateState } = useMasterGate()
 const toast = useToast()
 
 const { data: usageData, loading, execute: fetchUsage } = useApi(api.usageStats)
@@ -109,7 +107,6 @@ function dateRange(): { start_date: number; end_date: number } {
 }
 
 async function queryLogs() {
-  if (gateState.value !== 'ready') return
   const { start_date, end_date } = dateRange()
   const provider = selectedProviderId.value
   const status = statusMap[statusFilter.value] || ''
@@ -129,7 +126,6 @@ async function queryLogs() {
 }
 
 async function refreshAll() {
-  if (gateState.value !== 'ready') return
   await fetchUsage().catch((e) => toast.push(e?.message || String(e), 'error'))
   if (usageData.value) {
     logs.value = usageData.value.logs || []
@@ -253,10 +249,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopLive()
-})
-
-watch(gateState, (s) => {
-  if (s === 'ready') void refreshAll()
 })
 
 watch([providerFilter, statusFilter], () => {

@@ -156,7 +156,13 @@ ALTER TABLE api_keys DROP COLUMN key_nonce;
 ALTER TABLE api_keys DROP COLUMN permission;
 ALTER TABLE api_keys DROP COLUMN environment;
 ALTER TABLE api_keys DROP COLUMN monthly_tokens;
-ALTER TABLE api_keys DROP COLUMN last_used_at;
+	ALTER TABLE api_keys DROP COLUMN last_used_at;
+`,
+	},
+	{
+		ID: "004_drop_master_password",
+		SQL: `
+DROP TABLE IF EXISTS master_password;
 `,
 	},
 }

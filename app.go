@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"path/filepath"
 
 	"autoapi/internal/api"
 	"autoapi/internal/model"
@@ -28,7 +30,12 @@ func NewApp() *api.App {
 		return s
 	})
 
-	sv := service.New(st, prx)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("FATAL: cannot determine home directory: %v", err)
+	}
+	keyDir := filepath.Join(home, ".autoapi")
+	sv := service.New(st, prx, keyDir)
 
 	// proxy.New needs the service for resolving provider keys; re-create with service now available.
 	prx = proxy.New(st, sv, func() *model.Settings {

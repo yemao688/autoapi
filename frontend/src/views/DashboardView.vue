@@ -4,13 +4,11 @@ import type { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
-import { useMasterGate } from '@/composables/useMasterGate'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
 
 useRelativeTime()
 const { download } = useExportDownload()
-const { state: gateState } = useMasterGate()
 const toast = useToast()
 
 const { data: dashboardData, loading, execute: fetchDashboard } = useApi(api.dashboard)
@@ -70,7 +68,6 @@ function formatTime(ts: number): string {
 }
 
 async function fetchAll() {
-  if (gateState.value !== 'ready') return
   initialLoading.value = false
   await Promise.all([fetchDashboard(), fetchProxyStatus()]).catch((e) => {
     toast.push(e?.message || String(e), 'error')
@@ -90,10 +87,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
-})
-
-watch(gateState, (s) => {
-  if (s === 'ready') void fetchAll()
 })
 </script>
 

@@ -77,15 +77,10 @@ type StoreService interface {
 }
 
 // BusinessService is the higher-level logic implemented by internal/service
-// (provider testing, secret encryption, master password, etc.).
+// (provider testing, secret encryption, system health, etc.).
 type BusinessService interface {
 	TestProvider(providerID string) (*model.ProviderTestResult, error)
-	TestAllProviders() ([]model.ProviderTestResult, error) // keyed by provider id via result? — return list parallel to providers
-	SetMasterPassword(password string) error
-	ChangeMasterPassword(old, new string) error
-	HasMasterPassword() bool
-	Unlock(password string) error
-	IsUnlocked() bool
+	TestAllProviders() ([]model.ProviderTestResult, error)
 	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
@@ -402,43 +397,6 @@ func (a *App) PurgeLogs(olderThanDays int) (int, error) {
 		return 0, errNotImpl
 	}
 	return a.deps.Store.PurgeLogs(olderThanDays)
-}
-
-// ----- Master password / unlock -----
-
-func (a *App) HasMasterPassword() (bool, error) {
-	if a.deps.Service == nil {
-		return false, errNotImpl
-	}
-	return a.deps.Service.HasMasterPassword(), nil
-}
-
-func (a *App) IsUnlocked() (bool, error) {
-	if a.deps.Service == nil {
-		return false, errNotImpl
-	}
-	return a.deps.Service.IsUnlocked(), nil
-}
-
-func (a *App) SetMasterPassword(password string) error {
-	if a.deps.Service == nil {
-		return errNotImpl
-	}
-	return a.deps.Service.SetMasterPassword(password)
-}
-
-func (a *App) ChangeMasterPassword(old, new string) error {
-	if a.deps.Service == nil {
-		return errNotImpl
-	}
-	return a.deps.Service.ChangeMasterPassword(old, new)
-}
-
-func (a *App) Unlock(password string) error {
-	if a.deps.Service == nil {
-		return errNotImpl
-	}
-	return a.deps.Service.Unlock(password)
 }
 
 // ----- Proxy control -----

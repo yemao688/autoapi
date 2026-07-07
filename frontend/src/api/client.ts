@@ -133,28 +133,6 @@ export const api = {
     return wails.ListEndpoints() as Promise<model.Endpoint[]>
   },
 
-  // Master password
-  hasMasterPassword: (): Promise<boolean> => {
-    ensureWails()
-    return wails.HasMasterPassword() as Promise<boolean>
-  },
-  isUnlocked: (): Promise<boolean> => {
-    ensureWails()
-    return wails.IsUnlocked() as Promise<boolean>
-  },
-  setMasterPassword: (password: string): Promise<void> => {
-    ensureWails()
-    return wails.SetMasterPassword(password) as Promise<void>
-  },
-  unlock: (password: string): Promise<void> => {
-    ensureWails()
-    return wails.Unlock(password) as Promise<void>
-  },
-  changeMasterPassword: (old: string, new_: string): Promise<void> => {
-    ensureWails()
-    return wails.ChangeMasterPassword(old, new_) as Promise<void>
-  },
-
   // Export
   exportData: (format: string): Promise<apiModels.ExportResult> => {
     ensureWails()

@@ -9,20 +9,17 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/subtle"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
-	"sync"
 	"time"
 
 	"autoapi/internal/model"
 	"autoapi/internal/store"
-
-	"golang.org/x/crypto/argon2"
 )
 
 // Service implements api.BusinessService.
@@ -30,8 +27,7 @@ type Service struct {
 	store *store.Store
 	proxy ProxyRef
 
-	mu        sync.RWMutex
-	encKey    []byte // 32-byte AES key; nil until Unlock succeeds
+	encKey    []byte // 32-byte AES key; loaded at construction from keyDir
 	startedAt time.Time
 }
 
@@ -42,164 +38,58 @@ type ProxyRef interface {
 	ActiveConnections() int
 }
 
-// New creates a BusinessService with the given store and proxy reference.
-func New(s *store.Store, proxy ProxyRef) *Service {
+// New creates a BusinessService with the given store and proxy reference. The
+// keyDir is the directory that holds the auto-generated AES key file (e.g.
+// ~/.autoapi); it is created if it does not exist.
+func New(s *store.Store, proxy ProxyRef, keyDir string) *Service {
+	encKey, err := loadOrCreateKey(keyDir)
+	if err != nil {
+		// Fail fast if we cannot set up encryption.
+		panic(fmt.Sprintf("service: load encryption key: %v", err))
+	}
+
 	return &Service{
 		store:     s,
 		proxy:     proxy,
+		encKey:    encKey,
 		startedAt: time.Now(),
 	}
 }
+
+// loadOrCreateKey returns the 32-byte AES key stored in keyDir/.key,
+// creating it if necessary.
+func loadOrCreateKey(keyDir string) ([]byte, error) {
+	if err := os.MkdirAll(keyDir, 0700); err != nil {
+		return nil, fmt.Errorf("create key dir: %w", err)
+	}
+
+	keyPath := filepath.Join(keyDir, ".key")
+	data, err := os.ReadFile(keyPath)
+	if err == nil {
+		if len(data) != 32 {
+			return nil, fmt.Errorf("key file %s has unexpected size %d", keyPath, len(data))
+		}
+		return data, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read key file: %w", err)
+	}
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate key: %w", err)
+	}
+	if err := os.WriteFile(keyPath, key, 0600); err != nil {
+		return nil, fmt.Errorf("write key file: %w", err)
+	}
+	return key, nil
+}
+
 
 // SetProxy updates the proxy reference after the proxy has been created. This is
 // used by the composition root to break the service→proxy→service cycle.
 func (s *Service) SetProxy(proxy ProxyRef) {
 	s.proxy = proxy
-}
-
-// ---------------------------------------------------------------------------
-//  Master password
-// ---------------------------------------------------------------------------
-
-// argon2Params defines the hashing parameters.
-const (
-	argonTime    = 3
-	argonMemory  = 64 * 1024 // 64 MB
-	argonThreads = 4
-	argonKeyLen  = 64 // 32 bytes verification + 32 bytes encryption key
-	saltLen      = 16
-)
-
-// SetMasterPassword creates the initial master password. The password is
-// hashed with argon2id; the first 32 bytes of the derived key are stored as
-// the verification hash, the last 32 bytes become the in-memory encryption
-// key. Fails if a master password already exists.
-func (s *Service) SetMasterPassword(password string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	has, err := s.hasMasterPassword()
-	if err != nil {
-		return err
-	}
-	if has {
-		return fmt.Errorf("service: master password already set")
-	}
-
-	salt, key := deriveKey(password)
-	hash := key[:32]
-	encKey := key[32:]
-
-	if err := s.storeSetMasterPassword(salt, hash); err != nil {
-		return err
-	}
-	s.encKey = make([]byte, 32)
-	copy(s.encKey, encKey)
-	return nil
-}
-
-// ChangeMasterPassword verifies the old password and replaces it with a new
-// one. All existing provider upstream keys are re-encrypted with the new key.
-func (s *Service) ChangeMasterPassword(old, new string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Verify old password
-	salt, storedHash, err := s.storeGetMasterPassword()
-	if err != nil {
-		return err
-	}
-	oldKey := argon2.IDKey([]byte(old), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	if subtle.ConstantTimeCompare(oldKey[:32], storedHash) != 1 {
-		return fmt.Errorf("service: wrong master password")
-	}
-
-	// Re-encrypt all provider upstream keys with the new key.
-	newSalt, newKey := deriveKey(new)
-	newHash := newKey[:32]
-	newEncKey := newKey[32:]
-
-	providers, err := s.store.ListProviders()
-	if err != nil {
-		return err
-	}
-	for _, prov := range providers {
-		ciphertext, nonce, err := s.store.GetProviderKeyCiphertext(prov.ID)
-		if err != nil {
-			continue // skip providers with no stored key
-		}
-		if len(ciphertext) == 0 && len(nonce) == 0 {
-			continue // fixtures / providers without keys
-		}
-		// Decrypt with old key
-		block, err := aes.NewCipher(oldKey[32:])
-		if err != nil {
-			return err
-		}
-		gcm, err := cipher.NewGCM(block)
-		if err != nil {
-			return err
-		}
-		plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-		if err != nil {
-			// If we can't decrypt a key with the old password, skip it
-			// (it might be a fixture with dummy ciphertext)
-			continue
-		}
-		// Re-encrypt with new key
-		newNonce := make([]byte, 12)
-		if _, err := io.ReadFull(rand.Reader, newNonce); err != nil {
-			return err
-		}
-		newBlock, _ := aes.NewCipher(newEncKey)
-		newGCM, _ := cipher.NewGCM(newBlock)
-		newCT := newGCM.Seal(nil, newNonce, plaintext, nil)
-
-		if err := s.store.UpdateProviderKeyCiphertext(prov.ID, newCT, newNonce, prov.KeyMasked); err != nil {
-			return fmt.Errorf("service: re-encrypt provider key %q: %w", prov.ID, err)
-		}
-	}
-
-	// Store new master password
-	if err := s.storeSetMasterPassword(newSalt, newHash); err != nil {
-		return err
-	}
-	s.encKey = make([]byte, 32)
-	copy(s.encKey, newEncKey)
-	return nil
-}
-
-// HasMasterPassword returns whether a master password has been configured.
-func (s *Service) HasMasterPassword() bool {
-	ok, _ := s.hasMasterPassword()
-	return ok
-}
-
-// Unlock verifies the password and derives the encryption key in memory.
-func (s *Service) Unlock(password string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	salt, storedHash, err := s.storeGetMasterPassword()
-	if err != nil {
-		return err
-	}
-
-	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	if subtle.ConstantTimeCompare(key[:32], storedHash) != 1 {
-		return fmt.Errorf("service: wrong master password")
-	}
-
-	s.encKey = make([]byte, 32)
-	copy(s.encKey, key[32:])
-	return nil
-}
-
-// IsUnlocked returns true if the encryption key is present in memory.
-func (s *Service) IsUnlocked() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.encKey != nil
 }
 
 // ---------------------------------------------------------------------------
@@ -238,17 +128,14 @@ func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
 //  Crypto operations (AES-256-GCM)
 // ---------------------------------------------------------------------------
 
-// Encrypt encrypts plaintext using AES-256-GCM with the current in-memory key.
+// Encrypt encrypts plaintext using AES-256-GCM with the loaded encryption key.
 // Returns (ciphertext, nonce, error).
 func (s *Service) Encrypt(plaintext []byte) ([]byte, []byte, error) {
-	s.mu.RLock()
-	key := s.encKey
-	s.mu.RUnlock()
-	if key == nil {
-		return nil, nil, fmt.Errorf("service: not unlocked")
+	if len(s.encKey) == 0 {
+		return nil, nil, fmt.Errorf("service: encryption key not loaded")
 	}
 
-	block, err := aes.NewCipher(key)
+	block, err := aes.NewCipher(s.encKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("service: aes new cipher: %w", err)
 	}
@@ -266,16 +153,13 @@ func (s *Service) Encrypt(plaintext []byte) ([]byte, []byte, error) {
 	return ciphertext, nonce, nil
 }
 
-// Decrypt decrypts ciphertext using AES-256-GCM with the current in-memory key.
+// Decrypt decrypts ciphertext using AES-256-GCM with the loaded encryption key.
 func (s *Service) Decrypt(ciphertext, nonce []byte) ([]byte, error) {
-	s.mu.RLock()
-	key := s.encKey
-	s.mu.RUnlock()
-	if key == nil {
-		return nil, fmt.Errorf("service: not unlocked")
+	if len(s.encKey) == 0 {
+		return nil, fmt.Errorf("service: encryption key not loaded")
 	}
 
-	block, err := aes.NewCipher(key)
+	block, err := aes.NewCipher(s.encKey)
 	if err != nil {
 		return nil, fmt.Errorf("service: aes new cipher: %w", err)
 	}
@@ -435,46 +319,6 @@ func (s *Service) ResolveProviderKey(providerID string) (string, error) {
 		return "", fmt.Errorf("decrypt provider key %q: %w", providerID, err)
 	}
 	return string(plaintext), nil
-}
-
-func deriveKey(password string) (salt []byte, key []byte) {
-	salt = make([]byte, saltLen)
-	if _, err := rand.Read(salt); err != nil {
-		panic(fmt.Sprintf("service: salt generation failed: %v", err))
-	}
-	key = argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	return
-}
-
-func (s *Service) hasMasterPassword() (bool, error) {
-	var count int
-	err := s.store.RawDB().QueryRow(`SELECT COUNT(*) FROM master_password`).Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
-
-func (s *Service) storeSetMasterPassword(salt, hash []byte) error {
-	now := time.Now().UnixMilli()
-	return s.store.ExecRaw(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
-			INSERT INTO master_password (id, salt, hash, updated_at) VALUES (1, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET salt=excluded.salt, hash=excluded.hash, updated_at=excluded.updated_at`,
-			salt, hash, now)
-		return err
-	})
-}
-
-func (s *Service) storeGetMasterPassword() (salt, hash []byte, err error) {
-	row := s.store.RawDB().QueryRow(`SELECT salt, hash FROM master_password WHERE id = 1`)
-	if err := row.Scan(&salt, &hash); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil, fmt.Errorf("service: master password not set")
-		}
-		return nil, nil, err
-	}
-	return
 }
 
 func min(a, b int) int {

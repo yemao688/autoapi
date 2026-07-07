@@ -10,14 +10,14 @@ import (
 
 	"autoapi/internal/model"
 
-	"github.com/adrg/xdg"
 	_ "modernc.org/sqlite"
 )
 
 // StoreDeps configures the store. For production use, leave DSN empty to
-// resolve via xdg.DataFile. For tests, set DSN to ":memory:" or a temp path.
+// resolve via the default home directory path ($HOME/.autoapi/autoapi.db).
+// For tests, set DSN to ":memory:" or a temp path.
 type StoreDeps struct {
-	DSN string // empty = xdg default; overridable for tests
+	DSN string // empty = default home directory; overridable for tests
 }
 
 // Store is the SQLite-backed persistence layer implementing api.StoreService.
@@ -33,11 +33,11 @@ type Store struct {
 func New(_ context.Context, deps StoreDeps) (*Store, error) {
 	dsn := deps.DSN
 	if dsn == "" {
-		var err error
-		dsn, err = xdg.DataFile("autoapi/autoapi.db")
+		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil, fmt.Errorf("store: resolve data dir: %w", err)
+			return nil, fmt.Errorf("store: resolve home dir: %w", err)
 		}
+		dsn = filepath.Join(home, ".autoapi", "autoapi.db")
 		if err := os.MkdirAll(filepath.Dir(dsn), 0700); err != nil {
 			return nil, fmt.Errorf("store: mkdir: %w", err)
 		}

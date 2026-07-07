@@ -4,23 +4,18 @@ import type { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
-import { useMasterGate } from '@/composables/useMasterGate'
 import { useToast } from '@/composables/useToast'
 import { useTheme, type ThemeValue } from '@/composables/useTheme'
 
-const { state: gateState } = useMasterGate()
 const { download } = useExportDownload()
 const { data: fetchedSettings, loading, execute: fetchSettings } = useApi(api.getSettings)
 const toast = useToast()
 const { activeTheme } = useTheme()
 
 const isDirty = ref(false)
-const showPasswordModal = ref(false)
-const oldPassword = ref('')
-const newPassword = ref('')
 const activeSection = ref('general')
 
-const defaultStoragePath = '~/Library/Application Support/autoapi/'
+const defaultStoragePath = '~/.autoapi/'
 
 function defaultSettings(): model.Settings {
   return {
@@ -169,37 +164,8 @@ function notImplemented() {
   toast.push('暂未实现', 'warning')
 }
 
-async function submitPasswordChange() {
-  if (!oldPassword.value || !newPassword.value) {
-    toast.push('请输入当前密码和新密码', 'warning')
-    return
-  }
-  if (!confirm('确定修改主密码？')) return
-  try {
-    await api.changeMasterPassword(oldPassword.value, newPassword.value)
-    showPasswordModal.value = false
-    oldPassword.value = ''
-    newPassword.value = ''
-    toast.push('主密码已修改', 'success')
-  } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
-  }
-}
-
-function closePasswordModal() {
-  showPasswordModal.value = false
-  oldPassword.value = ''
-  newPassword.value = ''
-}
-
 onMounted(() => {
-  if (gateState.value === 'ready') {
-    void fetchSettings().then(loadSettings)
-  }
-})
-
-watch(gateState, (s) => {
-  if (s === 'ready') void fetchSettings().then(loadSettings)
+  void fetchSettings().then(loadSettings)
 })
 
 watch(fetchedSettings, loadSettings, { once: true })
@@ -684,17 +650,6 @@ watch(fetchedSettings, loadSettings, { once: true })
             </div>
             <div class="h-divider"></div>
 
-            <div class="field">
-              <div class="row-between" style="margin-bottom: 0;">
-                <div>
-                  <div class="field-label">主密码</div>
-                  <div class="field-help">修改本地加密主密码</div>
-                </div>
-                <button class="btn btn-secondary" style="font-size: 12.5px; padding: 5px 12px;" @click="showPasswordModal = true">修改主密码</button>
-              </div>
-            </div>
-            <div class="h-divider"></div>
-
             <div class="field" style="margin-bottom: 0;">
               <div class="field-label">键盘快捷键</div>
               <div class="stack-tight" style="margin-top: 4px;">
@@ -772,20 +727,5 @@ watch(fetchedSettings, loadSettings, { once: true })
     </div>
   </div>
 
-  <Teleport to="body">
-    <div v-if="showPasswordModal" class="modal-overlay" @click.self="closePasswordModal">
-      <div class="modal-card">
-        <div class="modal-title">修改主密码</div>
-        <form class="stack" @submit.prevent="submitPasswordChange">
-          <input v-model="oldPassword" type="password" class="input" placeholder="当前密码" />
-          <input v-model="newPassword" type="password" class="input" placeholder="新密码" />
-          <div class="row mt-8" style="justify-content: flex-end;">
-            <button type="button" class="btn btn-secondary" style="font-size: 12.5px; padding: 5px 12px;" @click="closePasswordModal">取消</button>
-            <button type="submit" class="btn btn-primary" style="font-size: 12.5px; padding: 5px 12px;">修改</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </Teleport>
 </template>
 

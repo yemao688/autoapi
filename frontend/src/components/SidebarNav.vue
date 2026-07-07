@@ -3,10 +3,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
-import { useMasterGate } from '@/composables/useMasterGate'
 
 const route = useRoute()
-const { state: gateState } = useMasterGate()
 
 const { data: providers, execute: loadProviders } = useApi(api.providers)
 const { data: routes, execute: loadRoutes } = useApi(api.routes)
@@ -36,7 +34,6 @@ function isActive(to: string): boolean {
 let timer: ReturnType<typeof setInterval> | null = null
 
 async function refresh() {
-  if (gateState.value !== 'ready') return
   await Promise.all([loadProviders(), loadRoutes(), loadHealth()])
 }
 

@@ -3,8 +3,6 @@
 import {model} from '../models';
 import {api} from '../models';
 
-export function ChangeMasterPassword(arg1:string,arg2:string):Promise<void>;
-
 export function CreateAPIKey(arg1:model.ApiKeyInput):Promise<model.ApiKey>;
 
 export function CreateProvider(arg1:model.ProviderInput):Promise<model.Provider>;
@@ -33,10 +31,6 @@ export function GetSystemHealth():Promise<model.ServiceHealth>;
 
 export function GetUsageStats():Promise<model.UsageStats>;
 
-export function HasMasterPassword():Promise<boolean>;
-
-export function IsUnlocked():Promise<boolean>;
-
 export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
 export function ListEndpoints():Promise<Array<model.Endpoint>>;
@@ -55,13 +49,9 @@ export function ReorderRoutes(arg1:Array<string>):Promise<void>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 
-export function SetMasterPassword(arg1:string):Promise<void>;
-
 export function TestAllProviders():Promise<Array<model.ProviderTestResult>>;
 
 export function TestProvider(arg1:string):Promise<model.ProviderTestResult>;
-
-export function Unlock(arg1:string):Promise<void>;
 
 export function UpdateAPIKey(arg1:string,arg2:model.ApiKeyInput):Promise<model.ApiKey>;
 
