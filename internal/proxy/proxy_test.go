@@ -111,6 +111,8 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+	defer p.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -169,6 +171,7 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
 
 	for i := 0; i < failureThreshold; i++ {
 		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
@@ -236,6 +239,7 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -283,6 +287,7 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -322,6 +327,7 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
 
 	// Open the breaker.
 	cb := p.breakerFor("p0")
@@ -374,6 +380,7 @@ func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
 		},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return store.settings })
+	defer p.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"user-requested-model","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -387,3 +394,126 @@ func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
 		t.Fatalf("expected upstream body to preserve request model, got %s", seenBody)
 	}
 }
+
+func TestTokenStatsRequiresAuth(t *testing.T) {
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("GET", "/v1/stats/tokens", nil)
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest("GET", "/v1/stats/tokens", nil)
+	req.Header.Set("Authorization", "Bearer key1")
+	rec = httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with auth, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGenericOpenAI_ImagesRoute(t *testing.T) {
+	var seenPath, seenBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"created": 1,
+			"data":    []map[string]interface{}{{"url": "http://example.com/img.png"}},
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		routes: []model.Route{
+			{
+				ID: "r1", Priority: 1, Enabled: true,
+				Targets: []model.RouteTarget{
+					{ProviderID: "p0", ModelName: "dall-e-3", Action: model.RouteActionForward, Tier: 0},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{"model":"dall-e-3","prompt":"a cat"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if seenPath != "/v1/images/generations" {
+		t.Fatalf("expected upstream path /v1/images/generations, got %s", seenPath)
+	}
+	if !strings.Contains(seenBody, `"model":"dall-e-3"`) {
+		t.Fatalf("expected upstream body to contain model, got %s", seenBody)
+	}
+}
+
+func TestStreaming_PassThrough(t *testing.T) {
+	var seenBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\n"))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		routes: []model.Route{
+			{
+				ID: "r1", Priority: 1, Enabled: true,
+				Targets: []model.RouteTarget{
+					{ProviderID: "p0", ModelName: "gpt-4o", Action: model.RouteActionForward, Tier: 0},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "c1") || !strings.Contains(rec.Body.String(), "c2") {
+		t.Fatalf("expected SSE chunks in body, got %s", rec.Body.String())
+	}
+	if !strings.Contains(seenBody, `"stream":true`) {
+		t.Fatalf("expected upstream body to preserve stream flag, got %s", seenBody)
+	}
+}
+

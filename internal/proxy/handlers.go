@@ -149,6 +149,81 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
+// genericOpenAIRequest is the minimal body used to route unknown OpenAI
+// endpoints. If a model field is present we use it; otherwise the request falls
+// back to the default provider.
+type genericOpenAIRequest struct {
+	Model string `json:"model"`
+}
+
+// handleOpenAI proxies any OpenAI-compatible endpoint that does not have a
+// dedicated handler (e.g. images, audio, files). It authenticates, reads the
+// body, and forwards through the same failover path used by chat/embeddings.
+// For streaming endpoints the request should still use the dedicated chat
+// handler so that SSE can be delivered in real time.
+func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	logEntry := &model.RequestLog{Timestamp: start.UnixMilli()}
+	defer p.logRequestEntry(logEntry)
+
+	apiKeyID, ok, err := p.authenticate(r)
+	if err != nil || !ok {
+		status := http.StatusUnauthorized
+		if err != nil {
+			status = http.StatusInternalServerError
+		}
+		p.writeError(w, status, "invalid_request_error", "Invalid API key")
+		logEntry.StatusCode = status
+		logEntry.APIKeyID = apiKeyID
+		logEntry.Error = "authentication failed"
+		return
+	}
+	logEntry.APIKeyID = apiKeyID
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
+	if err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		logEntry.StatusCode = http.StatusBadRequest
+		logEntry.Error = err.Error()
+		return
+	}
+	_ = r.Body.Close()
+
+	var genericReq genericOpenAIRequest
+	_ = json.Unmarshal(body, &genericReq)
+
+	var task string
+	switch r.URL.Path {
+	case "/v1/images/generations":
+		task = "images"
+	case "/v1/audio/transcriptions":
+		task = "audio"
+	case "/v1/files":
+		task = "files"
+	default:
+		task = "generic"
+	}
+
+	inbound := &InboundRequest{
+		Model:           genericReq.Model,
+		Header:          extractHeaders(r.Header),
+		EstimatedTokens: len(body) / 16,
+		Task:            task,
+		TimeHour:        time.Now().Hour(),
+	}
+
+	candidates, err := p.resolveCandidates(inbound)
+	if err != nil {
+		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
+		logEntry.StatusCode = http.StatusServiceUnavailable
+		logEntry.Error = err.Error()
+		return
+	}
+
+	p.forwardWithFailover(w, r, body, candidates, false, inbound.EstimatedTokens, logEntry)
+	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
+}
+
 func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 	models, err := p.store.ListModels("")
 	if err != nil {
@@ -175,6 +250,16 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) handleTokenStats(w http.ResponseWriter, r *http.Request) {
+	_, ok, err := p.authenticate(r)
+	if err != nil || !ok {
+		status := http.StatusUnauthorized
+		if err != nil {
+			status = http.StatusInternalServerError
+		}
+		p.writeError(w, status, "invalid_request_error", "Invalid API key")
+		return
+	}
+
 	dash, err := p.store.Dashboard()
 	if err != nil {
 		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get stats")
