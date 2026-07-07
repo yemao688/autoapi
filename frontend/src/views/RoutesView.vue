@@ -91,6 +91,10 @@ function targetActionLabel(target: model.RouteTarget): string {
   return `路由到 ${targetProviderName(target)} · ${target.model_name || '默认'}`
 }
 
+function tierLabel(n: number): string {
+  return `P${n}`
+}
+
 function priorityBadgeClass(route: model.Route): string {
   return sortedRoutes.value[0]?.id === route.id ? 'info' : ''
 }
@@ -108,7 +112,7 @@ function removeCondition(idx: number) {
 }
 
 function addTarget() {
-  form.value.targets.push(new model.RouteTarget({ provider_id: '', model_name: '', action: 'forward' }))
+  form.value.targets.push(new model.RouteTarget({ provider_id: '', model_name: '', action: 'forward', tier: 0 }))
 }
 
 function removeTarget(idx: number) {
@@ -123,7 +127,7 @@ function openCreate() {
     priority: 10,
     enabled: true,
     conditions: [new model.RouteCondition({ field: 'model', operator: 'matches', value: '' })],
-    targets: [new model.RouteTarget({ provider_id: '', model_name: '', action: 'forward' })],
+    targets: [new model.RouteTarget({ provider_id: '', model_name: '', action: 'forward', tier: 0 })],
   }
   modalOpen.value = true
 }
@@ -136,7 +140,7 @@ function openEdit(route: model.Route) {
     priority: route.priority,
     enabled: route.enabled,
     conditions: route.conditions.map((c) => new model.RouteCondition({ field: c.field, operator: c.operator, value: c.value })),
-    targets: route.targets.map((t) => new model.RouteTarget({ provider_id: t.provider_id, model_name: t.model_name, action: t.action })),
+    targets: route.targets.map((t) => new model.RouteTarget({ provider_id: t.provider_id, model_name: t.model_name, action: t.action, tier: t.tier })),
   }
   modalOpen.value = true
 }
@@ -299,6 +303,7 @@ onMounted(() => {
                   <div style="font-size: 13px; font-weight: 500;">{{ targetProviderName(target) }}</div>
                   <div class="text-mono text-muted" style="font-size: 11.5px;">{{ target.model_name || targetActionLabel(target) }}</div>
                 </div>
+                <span class="badge" style="font-size: 10px; color: var(--muted); align-self: center;">{{ tierLabel(target.tier) }}</span>
               </div>
               <div v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">无</div>
             </div>
@@ -376,6 +381,12 @@ onMounted(() => {
           <div v-for="(target, idx) in form.targets" :key="idx" class="row" style="gap: 8px; align-items: flex-start;">
             <select v-model="target.provider_id" class="select" style="flex: 1;">
               <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
+            </select>
+            <select v-model.number="target.tier" class="select" style="width: 80px;">
+              <option value="0">P0</option>
+              <option value="1">P1</option>
+              <option value="2">P2</option>
+              <option value="3">P3</option>
             </select>
             <input v-model="target.model_name" class="input" style="flex: 1;" placeholder="模型">
             <select v-model="target.action" class="select" style="width: 110px;">
