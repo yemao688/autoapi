@@ -403,6 +403,14 @@ func (sr *statusRecorder) Write(p []byte) (int, error) {
 	return sr.ResponseWriter.Write(p)
 }
 
+// Flush passes the flush through to the underlying ResponseWriter so that SSE
+// streaming works when ReverseProxy is configured with FlushInterval=-1.
+func (sr *statusRecorder) Flush() {
+	if f, ok := sr.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // bufferPool wraps sync.Pool to satisfy httputil.BufferPool.
 type bufferPool struct {
 	pool *sync.Pool
