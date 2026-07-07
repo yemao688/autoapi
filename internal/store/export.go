@@ -28,23 +28,41 @@ func (s *Store) Export(format model.ExportFormat) ([]byte, string, error) {
 }
 
 func (s *Store) exportAllJSON() ([]byte, string, error) {
-	providers, _ := s.ListProviders()
-	models, _ := s.ListModels("")
-	keys, _ := s.ListAPIKeys()
-	routes, _ := s.ListRoutes()
-	settings, _ := s.GetSettings()
+	providers, err := s.ListProviders()
+	if err != nil {
+		return nil, "", fmt.Errorf("store: export all json: list providers: %w", err)
+	}
+	models, err := s.ListModels("")
+	if err != nil {
+		return nil, "", fmt.Errorf("store: export all json: list models: %w", err)
+	}
+	keys, err := s.ListAPIKeys()
+	if err != nil {
+		return nil, "", fmt.Errorf("store: export all json: list api keys: %w", err)
+	}
+	routes, err := s.ListRoutes()
+	if err != nil {
+		return nil, "", fmt.Errorf("store: export all json: list routes: %w", err)
+	}
+	settings, err := s.GetSettings()
+	if err != nil {
+		return nil, "", fmt.Errorf("store: export all json: get settings: %w", err)
+	}
 
 	// Request logs (last 10000)
-	logs, _, _ := s.QueryLogs(model.LogQuery{Page: 1, PageSize: 10000})
+	logs, _, err := s.QueryLogs(model.LogQuery{Page: 1, PageSize: 10000})
+	if err != nil {
+		return nil, "", fmt.Errorf("store: export all json: query logs: %w", err)
+	}
 
 	payload := map[string]interface{}{
-		"providers":   providers,
-		"models":      models,
-		"api_keys":    keys,
-		"routes":      routes,
-		"settings":    settings,
-		"request_logs": logs,
-		"exported_at": time.Now().UnixMilli(),
+		"providers":     providers,
+		"models":        models,
+		"api_keys":      keys,
+		"routes":        routes,
+		"settings":      settings,
+		"request_logs":  logs,
+		"exported_at":   time.Now().UnixMilli(),
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -90,10 +108,15 @@ func (s *Store) exportTokensCSV() ([]byte, string, error) {
 		var date, provider, modelName string
 		var in, out, reqs int64
 		if err := rows.Scan(&date, &provider, &modelName, &in, &out, &reqs); err != nil {
-			continue
+			return nil, "", fmt.Errorf("store: export tokens csv: scan row: %w", err)
 		}
-		w.Write([]string{date, provider, modelName,
-			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%d", reqs)})
+		if err := w.Write([]string{date, provider, modelName,
+			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%d", reqs)}); err != nil {
+			return nil, "", fmt.Errorf("store: export tokens csv: write row: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("store: export tokens csv: iterate rows: %w", err)
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
@@ -128,11 +151,16 @@ func (s *Store) exportLogsCSV() ([]byte, string, error) {
 		var provider, modelName, route, errStr string
 		var in, out, lat int
 		if err := rows.Scan(&ts, &status, &provider, &modelName, &in, &out, &lat, &route, &errStr); err != nil {
-			continue
+			return nil, "", fmt.Errorf("store: export logs csv: scan row: %w", err)
 		}
 		t := time.UnixMilli(ts).Format(time.RFC3339)
-		w.Write([]string{t, fmt.Sprintf("%d", status), provider, modelName,
-			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%d", lat), route, errStr})
+		if err := w.Write([]string{t, fmt.Sprintf("%d", status), provider, modelName,
+			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%d", lat), route, errStr}); err != nil {
+			return nil, "", fmt.Errorf("store: export logs csv: write row: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("store: export logs csv: iterate rows: %w", err)
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {

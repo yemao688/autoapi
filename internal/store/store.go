@@ -24,8 +24,9 @@ type StoreDeps struct {
 // All write operations go through the single-writer goroutine (Writer); reads
 // go directly against the shared *sql.DB (safe under WAL mode).
 type Store struct {
-	db     *sql.DB
-	writer *Writer
+	db      *sql.DB
+	writer  *Writer
+	dsnPath string
 }
 
 // New opens (or creates) the SQLite database, applies migrations, seeds dev
@@ -63,7 +64,7 @@ func New(_ context.Context, deps StoreDeps) (*Store, error) {
 		}
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, dsnPath: dsn}
 
 	// Migrations
 	if err := migrate(db); err != nil {

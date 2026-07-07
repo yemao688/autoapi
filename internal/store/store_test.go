@@ -346,8 +346,8 @@ func TestListEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
-	if len(eps) != 4 {
-		t.Fatalf("expected 4 endpoints, got %d", len(eps))
+	if len(eps) != 7 {
+		t.Fatalf("expected 7 endpoints, got %d", len(eps))
 	}
 }
 

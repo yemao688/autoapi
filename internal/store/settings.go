@@ -29,8 +29,8 @@ func (s *Store) GetSettings() (*model.Settings, error) {
 		return nil, err
 	}
 
-	// Start with defaults, overlay stored values.
 	settings := defaultSettings()
+	settings.Data.StoragePath = s.dsnPath
 	for section, data := range raw {
 		switch section {
 		case "general":
@@ -103,6 +103,9 @@ func (s *Store) ListEndpoints() ([]model.Endpoint, error) {
 	return []model.Endpoint{
 		{Method: "POST", Path: "/v1/chat/completions", Desc: "Chat completions (OpenAI-compatible)"},
 		{Method: "POST", Path: "/v1/embeddings", Desc: "Text embeddings"},
+		{Method: "POST", Path: "/v1/images/generations", Desc: "Image generations"},
+		{Method: "POST", Path: "/v1/audio/transcriptions", Desc: "Audio transcriptions"},
+		{Method: "POST", Path: "/v1/files", Desc: "File uploads"},
 		{Method: "GET", Path: "/v1/models", Desc: "List models from providers"},
 		{Method: "GET", Path: "/v1/stats/tokens", Desc: "Token usage statistics"},
 	}, nil

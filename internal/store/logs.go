@@ -32,7 +32,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		case "success":
 			where += " AND status_code >= 200 AND status_code < 300"
 		case "failed":
-			where += " AND (status_code >= 300 OR error != '')"
+			where += " AND (status_code >= 400 OR error != '')"
 		case "rate_limited":
 			where += " AND status_code = 429"
 		}
