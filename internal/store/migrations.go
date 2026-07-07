@@ -180,6 +180,21 @@ ALTER TABLE models ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		ID: "007_route_reorder_retry_counters",
+		SQL: `
+-- Route targets: drop the forward/skip action column (every target now forwards),
+-- and add per-target retry budget + hit/failure counters for the new drag-reorder UX.
+-- NOTE: the routes.priority and route_targets.tier columns are intentionally KEPT
+-- as internal ordinal sort keys (they back ORDER BY); they are removed from the Go
+-- struct/JSON only. Skip/block rules (action='skip') lose their blocking semantics
+-- and become normal forwarding targets — accepted per product decision.
+ALTER TABLE route_targets DROP COLUMN action;
+ALTER TABLE route_targets ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE route_targets ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE route_targets ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have

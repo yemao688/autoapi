@@ -53,6 +53,7 @@ type storeProxy interface {
 	GetSettings() (*model.Settings, error)
 	Dashboard() (*model.DashboardData, error)
 	UpdateProviderHealth(id string, status model.ProviderStatus, errorMessage string) error
+	IncrementTargetStats(targetID string, hitDelta, failDelta int64) error
 }
 
 // Proxy implements api.ProxyService. It owns the chi router and the underlying
@@ -375,7 +376,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 		p.forwardStream(w, r, body, candidates, inputEstimate, logEntry)
 		return
 	}
-	var lastErr error
+	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
 
 	for _, c := range candidates {
@@ -405,120 +406,169 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 			continue
 		}
 
-		attemptReq := r.Clone(r.Context())
-		attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
-		attemptReq.ContentLength = int64(len(rewrittenBody))
-		attemptReq.Header.Del("Transfer-Encoding")
-		if attemptReq.Header.Get("Content-Type") == "" {
-			attemptReq.Header.Set("Content-Type", "application/json")
-		}
-		attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
+		// Per-target retry loop: retry only on CategoryRetryable, up to
+		// maxRetries additional attempts. The circuit breaker is recorded
+		// ONCE on the final outcome (success or last failure), not per
+		// attempt, to preserve its original "one signal per candidate"
+		// calibration. Before each retry we re-check the breaker so an
+		// open circuit aborts further attempts on this target and we fall
+		// through to the next candidate.
+		var succeeded bool
+		var finalCat ErrorCategory
+		var finalAttemptErr error
+		for attempt := 0; attempt <= c.maxRetries; attempt++ {
+			if attempt > 0 && !p.breakerFor(c.provider.ID).Allow() {
+				slog.Debug("proxy: circuit opened mid-retry, falling through", "provider", c.provider.Name, "attempt", attempt)
+				break
+			}
+
+			attemptReq := r.Clone(r.Context())
+			attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
+			attemptReq.ContentLength = int64(len(rewrittenBody))
+			attemptReq.Header.Del("Transfer-Encoding")
+			if attemptReq.Header.Get("Content-Type") == "" {
+				attemptReq.Header.Set("Content-Type", "application/json")
+			}
+			attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 
 		proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
-		if isStream {
-			proxy.FlushInterval = -1
-		}
 		proxy.BufferPool = p.bufferPool
 		proxy.ErrorLog = p.errorLog
 
-		proxy.Director = func(req *http.Request) {
-			req.URL.Scheme = upstreamURL.Scheme
-			req.URL.Host = upstreamURL.Host
-			req.URL.Path = upstreamURL.Path
-			req.URL.RawPath = upstreamURL.RawPath
-			req.URL.RawQuery = r.URL.RawQuery
-			req.Host = upstreamURL.Host
-			req.Header.Del("Authorization")
-			req.Header.Set("Authorization", "Bearer "+upstreamKey)
-			req.Header.Set("X-Autoapi-Route", c.routeID)
-			if req.Header.Get("Content-Type") == "" {
-				req.Header.Set("Content-Type", "application/json")
-			}
-		}
-
-		buf := &responseBuffer{statusCode: http.StatusOK, header: make(http.Header), body: bytes.NewBuffer(nil)}
-		var attemptErr error
-
-		proxy.ModifyResponse = func(resp *http.Response) error {
-			respBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return err
-			}
-			_ = resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
-
-			if isStream {
-				it, ot := parseStreamUsage(respBody)
-				if it > 0 || ot > 0 {
-					logEntry.InputTokens, logEntry.OutputTokens = it, ot
-				} else {
-					logEntry.InputTokens = inputEstimate
-					logEntry.OutputTokens = len(respBody) / 4
-				}
-			} else {
-				it, ot := parseJSONUsage(respBody)
-				if it > 0 || ot > 0 {
-					logEntry.InputTokens, logEntry.OutputTokens = it, ot
-				} else {
-					logEntry.InputTokens = inputEstimate
-					logEntry.OutputTokens = len(respBody) / 4
+			proxy.Director = func(req *http.Request) {
+				req.URL.Scheme = upstreamURL.Scheme
+				req.URL.Host = upstreamURL.Host
+				req.URL.Path = upstreamURL.Path
+				req.URL.RawPath = upstreamURL.RawPath
+				req.URL.RawQuery = r.URL.RawQuery
+				req.Host = upstreamURL.Host
+				req.Header.Del("Authorization")
+				req.Header.Set("Authorization", "Bearer "+upstreamKey)
+				req.Header.Set("X-Autoapi-Route", c.routeID)
+				if req.Header.Get("Content-Type") == "" {
+					req.Header.Set("Content-Type", "application/json")
 				}
 			}
-			return nil
-		}
 
-		proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
-			attemptErr = err
-		}
+			buf := &responseBuffer{statusCode: http.StatusOK, header: make(http.Header), body: bytes.NewBuffer(nil)}
+			var attemptErr error
 
-		proxy.ServeHTTP(buf, attemptReq)
+			proxy.ModifyResponse = func(resp *http.Response) error {
+				respBody, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				_ = resp.Body.Close()
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
-		cat := CategorizeError(attemptErr, buf.statusCode)
-		slog.Debug("proxy: candidate attempt",
-			"provider", c.provider.Name,
-			"model", c.modelName,
-			"category", cat,
-			"status", buf.statusCode,
-			"err", attemptErr)
-
-		if attemptErr == nil && buf.statusCode < 400 {
-			copyBufferedResponse(w, buf)
-			logEntry.StatusCode = buf.statusCode
-			logEntry.ProviderID = c.provider.ID
-			logEntry.ProviderName = c.provider.Name
-			logEntry.Model = c.modelName
-			logEntry.RouteID = c.routeID
-			logEntry.RouteLabel = c.routeLabel
-			p.breakerFor(c.provider.ID).Record(true)
-			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusConnected, ""); err != nil {
-				slog.Error("proxy: update provider health", "err", err)
+				if isStream {
+					it, ot := parseStreamUsage(respBody)
+					if it > 0 || ot > 0 {
+						logEntry.InputTokens, logEntry.OutputTokens = it, ot
+					} else {
+						logEntry.InputTokens = inputEstimate
+						logEntry.OutputTokens = len(respBody) / 4
+					}
+				} else {
+					it, ot := parseJSONUsage(respBody)
+					if it > 0 || ot > 0 {
+						logEntry.InputTokens, logEntry.OutputTokens = it, ot
+					} else {
+						logEntry.InputTokens = inputEstimate
+						logEntry.OutputTokens = len(respBody) / 4
+					}
+				}
+				return nil
 			}
-			return
-		}
 
-		lastErr = attemptErr
-		if lastErr == nil {
-			lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, buf.statusCode)
-		}
-		lastStatus = buf.statusCode
+			proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
+				attemptErr = err
+			}
 
-		switch cat {
-		case CategoryClientAbort:
-			p.writeError(w, http.StatusBadRequest, "client_error", lastErr.Error())
-			logEntry.StatusCode = http.StatusBadRequest
-			logEntry.Error = lastErr.Error()
-			return
-		case CategoryNonRetryable:
-			p.writeError(w, buf.statusCode, "invalid_request_error", lastErr.Error())
-			logEntry.StatusCode = buf.statusCode
-			logEntry.Error = lastErr.Error()
-			return
-		case CategoryRetryable:
-			if isCircuitBreakerFailure(attemptErr, buf.statusCode) {
-				p.breakerFor(c.provider.ID).Record(false)
-				if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
+			proxy.ServeHTTP(buf, attemptReq)
+
+			cat := CategorizeError(attemptErr, buf.statusCode)
+			finalCat = cat
+			finalAttemptErr = attemptErr
+			slog.Debug("proxy: candidate attempt",
+				"provider", c.provider.Name,
+				"model", c.modelName,
+				"attempt", attempt,
+				"category", cat,
+				"status", buf.statusCode,
+				"err", attemptErr)
+
+			if attemptErr == nil && buf.statusCode < 400 {
+				// SUCCESS — copy response, record breaker + hit counter once.
+				copyBufferedResponse(w, buf)
+				logEntry.StatusCode = buf.statusCode
+				logEntry.ProviderID = c.provider.ID
+				logEntry.ProviderName = c.provider.Name
+				logEntry.Model = c.modelName
+				logEntry.RouteID = c.routeID
+				logEntry.RouteLabel = c.routeLabel
+				p.breakerFor(c.provider.ID).Record(true)
+				if c.targetID != "" {
+					if err := p.store.IncrementTargetStats(c.targetID, 1, 0); err != nil {
+						slog.Error("proxy: increment target hit count", "err", err)
+					}
+				}
+				if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusConnected, ""); err != nil {
 					slog.Error("proxy: update provider health", "err", err)
 				}
+				succeeded = true
+				break
+			}
+
+			// FAILED attempt — record failure counter on every failed attempt.
+			lastErr = attemptErr
+			if lastErr == nil {
+				lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, buf.statusCode)
+			}
+			lastStatus = buf.statusCode
+			if c.targetID != "" {
+				if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
+					slog.Error("proxy: increment target failure count", "err", err)
+				}
+			}
+
+			switch cat {
+			case CategoryClientAbort:
+				p.writeError(w, http.StatusBadRequest, "client_error", lastErr.Error())
+				logEntry.StatusCode = http.StatusBadRequest
+				logEntry.Error = lastErr.Error()
+				// No breaker record: client errors aren't provider failures.
+				return
+			case CategoryNonRetryable:
+				p.writeError(w, buf.statusCode, "invalid_request_error", lastErr.Error())
+				logEntry.StatusCode = buf.statusCode
+				logEntry.Error = lastErr.Error()
+				// Record breaker once on the (final) provider-side non-retryable.
+				if isCircuitBreakerFailure(attemptErr, buf.statusCode) {
+					p.breakerFor(c.provider.ID).Record(false)
+					if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
+						slog.Error("proxy: update provider health", "err", err)
+					}
+				}
+				return
+			case CategoryRetryable:
+				// Retryable: loop continues. Breaker is recorded only on the
+				// final outcome below (or in the NonRetryable/ClientAbort
+				// branches above for hard stops).
+				continue
+			}
+		}
+
+		if succeeded {
+			return
+		}
+
+		// Exhausted retries (or breaker opened mid-retry): record breaker
+		// once on the final outcome, then fall through to the next candidate.
+		if finalCat == CategoryRetryable && isCircuitBreakerFailure(finalAttemptErr, lastStatus) {
+			p.breakerFor(c.provider.ID).Record(false)
+			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
+				slog.Error("proxy: update provider health", "err", err)
 			}
 		}
 	}
@@ -620,6 +670,11 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 
 	if attemptErr == nil && ww.Status() < 400 {
 		p.breakerFor(chosen.provider.ID).Record(true)
+		if chosen.targetID != "" {
+			if err := p.store.IncrementTargetStats(chosen.targetID, 1, 0); err != nil {
+				slog.Error("proxy: increment target hit count (stream)", "err", err)
+			}
+		}
 		if err := p.store.UpdateProviderHealth(chosen.provider.ID, model.ProviderStatusConnected, ""); err != nil {
 			slog.Error("proxy: update provider health", "err", err)
 		}
@@ -630,6 +685,12 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 		attemptErr = fmt.Errorf("upstream %s returned status %d", chosen.provider.Name, ww.Status())
 	}
 	logEntry.Error = attemptErr.Error()
+	// Stream path: client-abort mid-stream counts as a failure (gray area; documented).
+	if chosen.targetID != "" {
+		if err := p.store.IncrementTargetStats(chosen.targetID, 0, 1); err != nil {
+			slog.Error("proxy: increment target failure count (stream)", "err", err)
+		}
+	}
 	if isCircuitBreakerFailure(attemptErr, ww.Status()) {
 		p.breakerFor(chosen.provider.ID).Record(false)
 		if err := p.store.UpdateProviderHealth(chosen.provider.ID, model.ProviderStatusError, attemptErr.Error()); err != nil {

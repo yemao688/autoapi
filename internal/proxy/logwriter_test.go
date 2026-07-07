@@ -33,6 +33,9 @@ func (f *fakeBatchStore) Dashboard() (*model.DashboardData, error)             {
 func (f *fakeBatchStore) UpdateProviderHealth(id string, status model.ProviderStatus, errorMessage string) error {
 	return nil
 }
+func (f *fakeBatchStore) IncrementTargetStats(targetID string, hitDelta, failDelta int64) error {
+	return nil
+}
 
 func (f *fakeBatchStore) logCount() int {
 	f.mu.Lock()

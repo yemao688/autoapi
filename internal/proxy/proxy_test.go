@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"autoapi/internal/model"
@@ -17,6 +18,12 @@ type mockStore struct {
 	routes    []model.Route
 	apiKeys   []model.ApiKey
 	settings  *model.Settings
+
+	mu       sync.Mutex
+	statsDeltas map[string]struct {
+		hit  int64
+		fail int64
+	}
 }
 
 func (m *mockStore) ListProviders() ([]model.Provider, error) {
@@ -66,6 +73,32 @@ func (m *mockStore) UpdateProviderHealth(id string, status model.ProviderStatus,
 	return nil
 }
 
+func (m *mockStore) IncrementTargetStats(targetID string, hitDelta, failDelta int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.statsDeltas == nil {
+		m.statsDeltas = map[string]struct {
+			hit  int64
+			fail int64
+		}{}
+	}
+	d := m.statsDeltas[targetID]
+	d.hit += hitDelta
+	d.fail += failDelta
+	m.statsDeltas[targetID] = d
+	return nil
+}
+
+func (m *mockStore) statsFor(targetID string) (int64, int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.statsDeltas == nil {
+		return 0, 0
+	}
+	d := m.statsDeltas[targetID]
+	return d.hit, d.fail
+}
+
 type mockService struct{}
 
 func (m *mockService) ResolveProviderKey(providerID string) (string, error) { return "secret", nil }
@@ -101,10 +134,10 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -161,10 +194,10 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -229,10 +262,10 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -277,10 +310,10 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
-					{ProviderID: "p1", ModelName: "m1", Action: model.RouteActionForward, Tier: 1},
+					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p1", ModelName: "m1"},
 				},
 			},
 		},
@@ -314,13 +347,13 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0", Action: model.RouteActionForward, Tier: 0},
+					{ProviderID: "p0", ModelName: "m0"},
 				},
 			},
 		},
@@ -437,9 +470,9 @@ func TestGenericOpenAI_ImagesRoute(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "dall-e-3", Action: model.RouteActionForward, Tier: 0},
+					{ProviderID: "p0", ModelName: "dall-e-3"},
 				},
 			},
 		},
@@ -489,9 +522,9 @@ func TestStreaming_PassThrough(t *testing.T) {
 		},
 		routes: []model.Route{
 			{
-				ID: "r1", Priority: 1, Enabled: true,
+				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "gpt-4o", Action: model.RouteActionForward, Tier: 0},
+					{ProviderID: "p0", ModelName: "gpt-4o"},
 				},
 			},
 		},
@@ -514,6 +547,163 @@ func TestStreaming_PassThrough(t *testing.T) {
 	}
 	if !strings.Contains(seenBody, `"stream":true`) {
 		t.Fatalf("expected upstream body to preserve stream flag, got %s", seenBody)
+	}
+}
+
+// TestFailover_RetryBoundedSucceedsWithinBudget verifies that a target with
+// maxRetries=2 is retried on CategoryRetryable errors and that a successful
+// attempt within the retry budget produces hit_count=1, failure_count=(failed
+// attempts), and does NOT fall through to the next candidate.
+func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			if p0Hits <= 2 {
+				// First two attempts fail with 500 (CategoryRetryable).
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "transient"})
+				return
+			}
+			// Third attempt succeeds.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":    "chatcmpl-p0",
+				"model": "m0",
+				"usage": map[string]interface{}{"prompt_tokens": 1, "completion_tokens": 1},
+			})
+			return
+		}
+		p1Hits++
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "chatcmpl-p1"})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+		},
+		routes: []model.Route{
+			{
+				ID: "r1", Enabled: true,
+				Targets: []model.RouteTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "chatcmpl-p0") {
+		t.Fatalf("expected response from P0, got %s", rec.Body.String())
+	}
+	if p0Hits != 3 {
+		t.Fatalf("expected P0 hit 3 times (2 fails + 1 success), got %d", p0Hits)
+	}
+	if p1Hits != 0 {
+		t.Fatalf("expected P1 not hit (P0 succeeded within retry budget), got %d", p1Hits)
+	}
+	hits, fails := store.statsFor("t0")
+	if hits != 1 {
+		t.Fatalf("expected t0 hit_count=1, got %d", hits)
+	}
+	if fails != 2 {
+		t.Fatalf("expected t0 failure_count=2 (one per failed attempt), got %d", fails)
+	}
+	hits, fails = store.statsFor("t1")
+	if hits != 0 || fails != 0 {
+		t.Fatalf("expected t1 untouched, got hit=%d fail=%d", hits, fails)
+	}
+}
+
+// TestFailover_RetryBoundedExhaustedFallsThrough verifies that when a target
+// exhausts its retry budget on CategoryRetryable errors, the proxy falls
+// through to the next candidate AND records failure_count for ALL attempts
+// (no hit_count increment).
+func TestFailover_RetryBoundedExhaustedFallsThrough(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "p0 always fails"})
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chatcmpl-p1",
+			"model": "m1",
+			"usage": map[string]interface{}{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+		},
+		routes: []model.Route{
+			{
+				ID: "r1", Enabled: true,
+				Targets: []model.RouteTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "chatcmpl-p1") {
+		t.Fatalf("expected response from P1 after P0 exhaustion, got %s", rec.Body.String())
+	}
+	// MaxRetries=2 → 1 initial + 2 retries = 3 attempts on P0.
+	if p0Hits != 3 {
+		t.Fatalf("expected P0 hit 3 times (1 + maxRetries), got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after P0 exhaustion, got %d", p1Hits)
+	}
+	hits, fails := store.statsFor("t0")
+	if hits != 0 {
+		t.Fatalf("expected t0 hit_count=0 (all attempts failed), got %d", hits)
+	}
+	if fails != 3 {
+		t.Fatalf("expected t0 failure_count=3 (one per attempt), got %d", fails)
+	}
+	hits, fails = store.statsFor("t1")
+	if hits != 1 {
+		t.Fatalf("expected t1 hit_count=1, got %d", hits)
+	}
+	if fails != 0 {
+		t.Fatalf("expected t1 failure_count=0, got %d", fails)
 	}
 }
 

@@ -1,13 +1,12 @@
 // matcher.go implements the route rule engine used by the proxy to select a
-// target provider/model. Rules are evaluated by priority ascending; only enabled
-// rules are considered. All conditions in a rule must match (AND semantics).
-// A rule whose only target is "skip" causes a fall-through to the next rule.
+// target provider/model. Rules are evaluated in slice order (top = highest
+// priority); only enabled rules are considered. All conditions in a rule must
+// match (AND semantics).
 package proxy
 
 import (
 	"fmt"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -29,13 +28,16 @@ type candidate struct {
 	modelName  string
 	routeID    string
 	routeLabel string
+	targetID   string
+	maxRetries int
 }
 
-// selectCandidates picks the highest-priority enabled route, collects all of
-// its forward targets ordered by tier (lower tier = higher priority), filters
-// out providers whose circuit breaker is open, and falls back to the default
-// provider when every routed target is open. The getProvider closure resolves
-// provider IDs to full provider records.
+// selectCandidates picks the highest-priority enabled route (callers must
+// supply `rules` sorted highest-priority first — see selectRoute), collects
+// all of its forwarding targets in slice order, filters out providers whose
+// circuit breaker is open, and falls back to the default provider when every
+// routed target is open. The getProvider closure resolves provider IDs to
+// full provider records.
 func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderID string, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
 	route, matched := selectRoute(req, rules)
 	if !matched {
@@ -52,16 +54,8 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 		return []candidate{{provider: p, modelName: req.Model, routeID: "", routeLabel: ""}}, nil
 	}
 
-	var targets []model.RouteTarget
-	for _, t := range route.Targets {
-		if t.Action == model.RouteActionForward {
-			targets = append(targets, t)
-		}
-	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Tier < targets[j].Tier })
-
 	var out []candidate
-	for _, t := range targets {
+	for _, t := range route.Targets {
 		if isOpen(t.ProviderID, breakers) {
 			continue
 		}
@@ -74,6 +68,8 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 			modelName:  modelNameForTarget(t.ModelName, req.Model),
 			routeID:    route.ID,
 			routeLabel: route.Name,
+			targetID:   t.ID,
+			maxRetries: t.MaxRetries,
 		})
 	}
 
@@ -102,28 +98,18 @@ func isOpen(providerID string, breakers map[string]*CircuitBreaker) bool {
 }
 
 // selectRoute picks the highest-priority enabled route whose conditions all
-// match and which contains at least one "forward" target. If the matched rule
-// only has "skip" targets, it falls through to the next rule. The returned
-// route is the caller's to inspect ( Targets[0] is typically the forward
-// target). The bool reports whether a route was selected.
+// match. Callers MUST provide `rules` already sorted by priority ascending;
+// ListRoutes does this via ORDER BY priority ASC. The bool reports whether a
+// route was selected.
 func selectRoute(req *InboundRequest, rules []model.Route) (*model.Route, bool) {
-	sorted := make([]model.Route, len(rules))
-	copy(sorted, rules)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Priority < sorted[j].Priority })
-
-	for i := range sorted {
-		if !sorted[i].Enabled {
+	for i := range rules {
+		if !rules[i].Enabled {
 			continue
 		}
-		if !matchAll(req, sorted[i].Conditions) {
+		if !matchAll(req, rules[i].Conditions) {
 			continue
 		}
-		for _, t := range sorted[i].Targets {
-			if t.Action == model.RouteActionForward {
-				return &sorted[i], true
-			}
-		}
-		// Skip-only rule matched: continue to lower-priority rules.
+		return &rules[i], true
 	}
 	return nil, false
 }

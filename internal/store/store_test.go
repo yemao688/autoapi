@@ -232,13 +232,12 @@ func TestRouteCRUD(t *testing.T) {
 	r, err := s.CreateRoute(model.RouteInput{
 		Name:        "Test Route",
 		Description: "A test route",
-		Priority:    1,
 		Enabled:     true,
 		Conditions: []model.RouteCondition{
 			{Field: "model", Operator: model.OpMatches, Value: "gpt-*"},
 		},
 		Targets: []model.RouteTarget{
-			{ProviderID: "p01", ModelName: "gpt-4o", Action: model.RouteActionForward},
+			{ProviderID: "p01", ModelName: "gpt-4o"},
 		},
 	})
 	if err != nil {
@@ -273,7 +272,6 @@ func TestRouteCRUD(t *testing.T) {
 	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
 		Name:        "Updated Route",
 		Description: "Updated",
-		Priority:    2,
 		Enabled:     false,
 		Conditions:  []model.RouteCondition{},
 		Targets:     []model.RouteTarget{},
@@ -300,6 +298,211 @@ func TestRouteCRUD(t *testing.T) {
 	_, err = s.GetRoute(r.ID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestRouteUpdatePreservesTargetCounters verifies the round-trip fix: editing
+// a route must NOT reset per-target hit_count/failure_count on targets that
+// were kept (same ID round-trips). It also covers reorder (tier rewritten from
+// slice index while ID is preserved), add (new row, counters default 0), and
+// remove (deleted).
+func TestRouteUpdatePreservesTargetCounters(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create with three targets.
+	r, err := s.CreateRoute(model.RouteInput{
+		Name:    "Counter Test",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ProviderID: "p01", ModelName: "m1"}, // tier 0
+			{ProviderID: "p01", ModelName: "m2"}, // tier 1
+			{ProviderID: "p02", ModelName: "m3"}, // tier 2
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRoute: %v", err)
+	}
+	if len(r.Targets) != 3 {
+		t.Fatalf("expected 3 targets, got %d", len(r.Targets))
+	}
+	m1, m2, m3 := r.Targets[0], r.Targets[1], r.Targets[2]
+
+	// Set distinct counters on each target so we can prove preservation.
+	if err := s.IncrementTargetStats(m1.ID, 5, 2); err != nil {
+		t.Fatalf("IncrementTargetStats[m1]: %v", err)
+	}
+	if err := s.IncrementTargetStats(m2.ID, 3, 7); err != nil {
+		t.Fatalf("IncrementTargetStats[m2]: %v", err)
+	}
+	if err := s.IncrementTargetStats(m3.ID, 1, 0); err != nil {
+		t.Fatalf("IncrementTargetStats[m3]: %v", err)
+	}
+
+	// Sanity: counters reflected before update.
+	pre, err := s.GetRoute(r.ID)
+	if err != nil {
+		t.Fatalf("GetRoute (pre): %v", err)
+	}
+	want := []struct {
+		id              string
+		model           string
+		hit, fail       int64
+	}{
+		{m1.ID, "m1", 5, 2},
+		{m2.ID, "m2", 3, 7},
+		{m3.ID, "m3", 1, 0},
+	}
+	for i, w := range want {
+		if pre.Targets[i].ID != w.id || pre.Targets[i].ModelName != w.model ||
+			pre.Targets[i].HitCount != w.hit || pre.Targets[i].FailureCount != w.fail {
+			t.Fatalf("pre[%d]: got %+v, want id=%s model=%s hit=%d fail=%d",
+				i, pre.Targets[i], w.id, w.model, w.hit, w.fail)
+		}
+	}
+
+	// Update: reorder (m3 first, m1 second), drop m2, add a brand-new m4.
+	//   - m3 and m1 keep their IDs → counters must round-trip.
+	//   - m2 omitted → DELETEd.
+	//   - m4 has empty ID → INSERTed fresh; counters default to 0.
+	//   - MaxRetries change on m1 must persist via UPDATE.
+	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+		Name:    "Counter Test (renamed)",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ID: m3.ID, ProviderID: "p02", ModelName: "m3"},
+			{ID: m1.ID, ProviderID: "p01", ModelName: "m1", MaxRetries: 4},
+			{ProviderID: "p03", ModelName: "m4"}, // new, empty ID
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoute: %v", err)
+	}
+
+	if len(updated.Targets) != 3 {
+		t.Fatalf("expected 3 targets after update, got %d", len(updated.Targets))
+	}
+
+	// Slice order after update: [m3, m1, m4] (m3 promoted to top).
+	if updated.Targets[0].ModelName != "m3" {
+		t.Fatalf("expected tier 0 = m3, got %q", updated.Targets[0].ModelName)
+	}
+	if updated.Targets[0].ID != m3.ID {
+		t.Fatalf("m3 ID not preserved: got %q, want %q", updated.Targets[0].ID, m3.ID)
+	}
+	if updated.Targets[0].HitCount != 1 || updated.Targets[0].FailureCount != 0 {
+		t.Fatalf("m3 counters lost: expected 1/0, got %d/%d",
+			updated.Targets[0].HitCount, updated.Targets[0].FailureCount)
+	}
+
+	if updated.Targets[1].ModelName != "m1" {
+		t.Fatalf("expected tier 1 = m1, got %q", updated.Targets[1].ModelName)
+	}
+	if updated.Targets[1].ID != m1.ID {
+		t.Fatalf("m1 ID not preserved: got %q, want %q", updated.Targets[1].ID, m1.ID)
+	}
+	if updated.Targets[1].HitCount != 5 || updated.Targets[1].FailureCount != 2 {
+		t.Fatalf("m1 counters lost: expected 5/2, got %d/%d",
+			updated.Targets[1].HitCount, updated.Targets[1].FailureCount)
+	}
+	if updated.Targets[1].MaxRetries != 4 {
+		t.Fatalf("m1 MaxRetries not updated: expected 4, got %d", updated.Targets[1].MaxRetries)
+	}
+
+	// m4 must be a fresh row (non-empty ID, default counters).
+	if updated.Targets[2].ModelName != "m4" {
+		t.Fatalf("expected tier 2 = m4, got %q", updated.Targets[2].ModelName)
+	}
+	if updated.Targets[2].ID == "" {
+		t.Fatal("new target m4 should have a generated ID")
+	}
+	if updated.Targets[2].ID == m1.ID || updated.Targets[2].ID == m2.ID || updated.Targets[2].ID == m3.ID {
+		t.Fatalf("new target m4 must not reuse an existing ID; got %q", updated.Targets[2].ID)
+	}
+	if updated.Targets[2].HitCount != 0 || updated.Targets[2].FailureCount != 0 {
+		t.Fatalf("m4 counters must default to 0, got %d/%d",
+			updated.Targets[2].HitCount, updated.Targets[2].FailureCount)
+	}
+
+	// m2 must be gone.
+	for _, tg := range updated.Targets {
+		if tg.ID == m2.ID {
+			t.Fatalf("expected removed target m2 (ID %q) to be deleted, but it still exists", m2.ID)
+		}
+	}
+
+	// Confirm the preserved target is still writable (proves the row is real,
+	// not just echoed from the in-memory slice).
+	if err := s.IncrementTargetStats(updated.Targets[1].ID, 1, 0); err != nil {
+		t.Fatalf("IncrementTargetStats after update: %v", err)
+	}
+	post, err := s.GetRoute(r.ID)
+	if err != nil {
+		t.Fatalf("GetRoute (post): %v", err)
+	}
+	for _, tg := range post.Targets {
+		if tg.ID == m1.ID {
+			if tg.HitCount != 6 || tg.FailureCount != 2 {
+				t.Fatalf("m1 after extra +1 hit: expected 6/2, got %d/%d", tg.HitCount, tg.FailureCount)
+			}
+		}
+	}
+
+	// Edge case: updating with an empty Targets slice deletes all targets
+	// cleanly (no incoming IDs → DELETE WHERE route_id = ?).
+	cleared, err := s.UpdateRoute(r.ID, model.RouteInput{
+		Name:    "Counter Test (renamed)",
+		Enabled: true,
+		Targets: []model.RouteTarget{},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoute (clear): %v", err)
+	}
+	if len(cleared.Targets) != 0 {
+		t.Fatalf("expected 0 targets after clearing, got %d", len(cleared.Targets))
+	}
+}
+
+// TestRouteClampsNegativeMaxRetries verifies Fix 2: a negative max_retries
+// coming from the API is clamped to 0 rather than rejected (friendlier, and
+// prevents the silent-skip footgun in the retry loop).
+func TestRouteClampsNegativeMaxRetries(t *testing.T) {
+	s := newTestStore(t)
+
+	// CreateRoute clamps too.
+	r, err := s.CreateRoute(model.RouteInput{
+		Name:    "Clamp Test",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ProviderID: "p01", ModelName: "m1", MaxRetries: -7},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRoute: %v", err)
+	}
+	if r.Targets[0].MaxRetries != 0 {
+		t.Fatalf("CreateRoute: expected MaxRetries clamped to 0, got %d", r.Targets[0].MaxRetries)
+	}
+
+	// UpdateRoute (upsert path) clamps as well.
+	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+		Name:    "Clamp Test",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ID: r.Targets[0].ID, ProviderID: "p01", ModelName: "m1", MaxRetries: -1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoute: %v", err)
+	}
+	if len(updated.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(updated.Targets))
+	}
+	if updated.Targets[0].MaxRetries != 0 {
+		t.Fatalf("UpdateRoute: expected MaxRetries clamped to 0, got %d", updated.Targets[0].MaxRetries)
+	}
+	// And the existing target ID was preserved (not a new row).
+	if updated.Targets[0].ID != r.Targets[0].ID {
+		t.Fatalf("expected target ID preserved (%q), got %q", r.Targets[0].ID, updated.Targets[0].ID)
 	}
 }
 

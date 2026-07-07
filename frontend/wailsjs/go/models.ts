@@ -472,8 +472,9 @@ export namespace model {
 	    route_id: string;
 	    provider_id: string;
 	    model_name: string;
-	    action: string;
-	    tier: number;
+	    max_retries: number;
+	    hit_count: number;
+	    failure_count: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new RouteTarget(source);
@@ -485,8 +486,9 @@ export namespace model {
 	        this.route_id = source["route_id"];
 	        this.provider_id = source["provider_id"];
 	        this.model_name = source["model_name"];
-	        this.action = source["action"];
-	        this.tier = source["tier"];
+	        this.max_retries = source["max_retries"];
+	        this.hit_count = source["hit_count"];
+	        this.failure_count = source["failure_count"];
 	    }
 	}
 	export class RouteCondition {
@@ -513,7 +515,6 @@ export namespace model {
 	    id: string;
 	    name: string;
 	    description: string;
-	    priority: number;
 	    enabled: boolean;
 	    created_at: number;
 	    updated_at: number;
@@ -531,7 +532,6 @@ export namespace model {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.description = source["description"];
-	        this.priority = source["priority"];
 	        this.enabled = source["enabled"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -563,7 +563,6 @@ export namespace model {
 	export class RouteInput {
 	    name: string;
 	    description: string;
-	    priority: number;
 	    enabled: boolean;
 	    conditions: RouteCondition[];
 	    targets: RouteTarget[];
@@ -576,7 +575,6 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.description = source["description"];
-	        this.priority = source["priority"];
 	        this.enabled = source["enabled"];
 	        this.conditions = this.convertValues(source["conditions"], RouteCondition);
 	        this.targets = this.convertValues(source["targets"], RouteTarget);
