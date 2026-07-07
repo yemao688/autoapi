@@ -39,8 +39,8 @@ func (m *mockStore) GetProvider(id string) (*model.Provider, error) {
 
 func (m *mockStore) ListAPIKeys() ([]model.ApiKey, error) { return m.apiKeys, nil }
 
-func (m *mockStore) GetAPIKeyCiphertext(id string) (ciphertext, nonce []byte, providerID string, err error) {
-	return nil, nil, "", nil
+func (m *mockStore) GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error) {
+	return nil, nil, nil
 }
 
 func (m *mockStore) InsertRequestLog(l model.RequestLog) error { return nil }
@@ -68,7 +68,7 @@ func (m *mockStore) UpdateProviderHealth(id string, status model.ProviderStatus,
 
 type mockService struct{}
 
-func (m *mockService) ResolveAPIKey(keyID string) (string, error) { return "secret", nil }
+func (m *mockService) ResolveProviderKey(providerID string) (string, error) { return "secret", nil }
 
 func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 	var p0Hits, p1Hits int
@@ -96,8 +96,8 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", APIKeyID: "k0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", APIKeyID: "k1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
 		routes: []model.Route{
 			{
@@ -154,8 +154,8 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", APIKeyID: "k0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", APIKeyID: "k1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
 		routes: []model.Route{
 			{
@@ -221,8 +221,8 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", APIKeyID: "k0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", APIKeyID: "k1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
 		routes: []model.Route{
 			{
@@ -268,8 +268,8 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", APIKeyID: "k0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", APIKeyID: "k1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
 		routes: []model.Route{
 			{
@@ -309,7 +309,7 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", APIKeyID: "k0"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
 		},
 		routes: []model.Route{
 			{
@@ -365,7 +365,7 @@ func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"default": {ID: "default", Name: "Default", BaseURL: srv.URL, APIKeyID: "k0"},
+			"default": {ID: "default", Name: "Default", BaseURL: srv.URL},
 		},
 		routes:  []model.Route{},
 		apiKeys: []model.ApiKey{{ID: "key1"}},

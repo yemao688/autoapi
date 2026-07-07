@@ -32,9 +32,10 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// keyResolver is the subset of *service.Service the proxy uses.
-type keyResolver interface {
-	ResolveAPIKey(keyID string) (string, error)
+// upstreamKeyProvider is the subset of *service.Service the proxy uses to
+// decrypt provider upstream keys.
+type upstreamKeyProvider interface {
+	ResolveProviderKey(providerID string) (string, error)
 }
 
 // storeProxy is the subset of *store.Store methods the proxy needs. Passing
@@ -45,7 +46,7 @@ type storeProxy interface {
 	ListRoutes() ([]model.Route, error)
 	GetProvider(id string) (*model.Provider, error)
 	ListAPIKeys() ([]model.ApiKey, error)
-	GetAPIKeyCiphertext(id string) (ciphertext, nonce []byte, providerID string, err error)
+	GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error)
 	InsertRequestLog(l model.RequestLog) error
 	InsertRequestLogsBatch(logs []model.RequestLog) error
 	ListModels(providerID string) ([]model.Model, error)
@@ -58,7 +59,7 @@ type storeProxy interface {
 // http.Server. The zero value is not ready for use; call New.
 type Proxy struct {
 	store            storeProxy
-	service          keyResolver
+	service          upstreamKeyProvider
 	settingsProvider func() *model.Settings
 
 	mu       sync.RWMutex
@@ -77,7 +78,7 @@ type Proxy struct {
 // New creates a Proxy. The settingsProvider is called on Start/Restart to read
 // the current port/bind configuration. Pass a concrete *store.Store as the
 // store argument.
-func New(store storeProxy, service keyResolver, settingsProvider func() *model.Settings) *Proxy {
+func New(store storeProxy, service upstreamKeyProvider, settingsProvider func() *model.Settings) *Proxy {
 	p := &Proxy{
 		store:            store,
 		service:          service,
@@ -277,9 +278,6 @@ func (p *Proxy) authenticate(r *http.Request) (apiKeyID string, ok bool, err err
 	now := time.Now().UnixMilli()
 	for _, k := range keys {
 		if k.ID == token {
-			if k.Environment == model.KeyEnvDisabled {
-				return "", false, nil
-			}
 			if k.ExpiresAt > 0 && k.ExpiresAt < now {
 				return "", false, nil
 			}
@@ -363,7 +361,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 			continue
 		}
 
-		upstreamKey, err := p.service.ResolveAPIKey(c.provider.APIKeyID)
+		upstreamKey, err := p.service.ResolveProviderKey(c.provider.ID)
 		if err != nil {
 			lastErr = fmt.Errorf("resolve key for %s: %w", c.provider.Name, err)
 			slog.Debug("proxy: candidate key resolution failed", "provider", c.provider.Name, "err", lastErr)

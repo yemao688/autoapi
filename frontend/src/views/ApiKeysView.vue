@@ -2,18 +2,13 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
-import { useExportDownload } from '../composables/useExportDownload'
 import { useRelativeTime } from '../composables/useRelativeTime'
-import { useProviderMeta } from '../composables/useProviderMeta'
-import { useFormatters } from '../composables/useFormatters'
+import { toDateTimeLocal, fromDateTimeLocal } from '../composables/useDateTime'
 import { useToast } from '../composables/useToast'
 import type { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
-const { color: providerColor, letter: providerLetter } = useProviderMeta()
-const { tokens: fmtTokens } = useFormatters()
 const toast = useToast()
-const { download } = useExportDownload()
 
 const {
   data: keys,
@@ -22,51 +17,29 @@ const {
   execute: loadKeys,
 } = useApi(() => api.apiKeys())
 
-const {
-  data: providers,
-  execute: loadProviders,
-} = useApi(() => api.providers())
-
-const activeTab = ref<'all' | 'production' | 'test' | 'disabled'>('all')
 const search = ref('')
 const modalOpen = ref(false)
+const modalMode = ref<'create' | 'edit'>('create')
+const editingId = ref('')
 const saving = ref(false)
 const openMenuId = ref('')
+const revealedToken = ref('')
 
 const form = ref<model.ApiKeyInput>({
-  provider_id: '',
   name: '',
-  key: '',
-  permission: 'read_write',
-  environment: 'production',
   expires_at: 0,
 })
 
 const filteredKeys = computed(() => {
   let list = keys.value || []
-  if (activeTab.value !== 'all') {
-    list = list.filter((k) => k.environment === activeTab.value)
-  }
   const q = search.value.trim().toLowerCase()
   if (q) {
-    list = list.filter(
-      (k) =>
-        k.name.toLowerCase().includes(q) ||
-        providerNameMap.value[k.provider_id]?.toLowerCase().includes(q)
-    )
+    list = list.filter((k) => k.name.toLowerCase().includes(q))
   }
   return list
 })
 
-const providerNameMap = computed(() => {
-  const map: Record<string, string> = {}
-  ;(providers.value || []).forEach((p) => (map[p.id] = p.name))
-  return map
-})
-
 const activeCount = computed(() => (keys.value || []).length)
-const providerKeyCount = computed(() => (keys.value || []).filter((k) => k.provider_id).length)
-const customKeyCount = computed(() => (keys.value || []).filter((k) => !k.provider_id).length)
 
 const expiringCount = computed(() => {
   const now = Date.now()
@@ -76,56 +49,27 @@ const expiringCount = computed(() => {
   ).length
 })
 
-const totalMonthlyTokens = computed(() =>
-  (keys.value || []).reduce((sum, k) => sum + k.monthly_tokens, 0)
-)
-
-const mostRecentKey = computed(() => {
-  const list = keys.value || []
-  if (!list.length) return null
-  return [...list].sort((a, b) => b.updated_at - a.updated_at)[0]
-})
-
-function keyMasked(key: model.ApiKey): string {
-  if (key.key_masked) return key.key_masked
-  if (key.key_prefix && key.key_suffix) return `${key.key_prefix}****${key.key_suffix}`
-  return '****'
+function tokenDisplay(id: string): string {
+  if (id.length <= 12) return id
+  return `${id.slice(0, 8)}...${id.slice(-4)}`
 }
 
-function permissionLabel(p: string): string {
-  if (p === 'read_write') return '读 + 写'
-  if (p === 'read_only') return '只读'
-  if (p === 'write_only') return '只写'
-  if (p === 'admin') return '管理'
-  return p
+function formatExpiresAt(ms: number): string {
+  if (!ms || ms <= 0) return '不过期'
+  return new Date(ms).toLocaleString()
 }
 
-function permissionBadgeClass(p: string): string {
-  if (p === 'read_write') return 'info'
-  if (p === 'admin') return 'warn'
-  return ''
-}
-
-function environmentLabel(env: string): string {
-  if (env === 'production') return '生产'
-  if (env === 'test') return '测试'
-  if (env === 'disabled') return '已禁用'
-  return env
-}
-
-function environmentBadgeClass(env: string): string {
-  if (env === 'production') return 'info'
-  if (env === 'disabled') return 'warn'
-  return ''
-}
-
-async function copyKey(key: model.ApiKey) {
+async function copyToken(token: string) {
   try {
-    await navigator.clipboard.writeText(keyMasked(key))
+    await navigator.clipboard.writeText(token)
     toast.push('已复制到剪贴板', 'success')
   } catch (e: any) {
     toast.push('复制失败：' + (e?.message || String(e)), 'error')
   }
+}
+
+async function copyKey(key: model.ApiKey) {
+  await copyToken(key.id)
   openMenuId.value = ''
 }
 
@@ -134,41 +78,54 @@ async function deleteKey(id: string) {
   try {
     await api.deleteApiKey(id)
     await loadKeys()
-    toast.push('密钥已删除', 'success')
+    toast.push('令牌已删除', 'success')
   } catch (e: any) {
     toast.push('删除失败：' + (e?.message || String(e)), 'error')
   }
   openMenuId.value = ''
 }
 
-async function exportEnv() {
-  await download('settings_json')
+function openCreateModal() {
+  modalMode.value = 'create'
+  editingId.value = ''
+  revealedToken.value = ''
+  form.value = {
+    name: '',
+    expires_at: 0,
+  }
+  modalOpen.value = true
 }
 
-function openModal() {
+function openEditModal(key: model.ApiKey) {
+  modalMode.value = 'edit'
+  editingId.value = key.id
+  revealedToken.value = ''
   form.value = {
-    provider_id: '',
-    name: '',
-    key: '',
-    permission: 'read_write',
-    environment: 'production',
-    expires_at: 0,
+    name: key.name,
+    expires_at: key.expires_at,
   }
   modalOpen.value = true
 }
 
 function closeModal() {
   modalOpen.value = false
+  revealedToken.value = ''
 }
 
 async function saveKey() {
   saving.value = true
   try {
-    await api.createApiKey(form.value)
-    form.value.key = ''
-    modalOpen.value = false
-    await loadKeys()
-    toast.push('密钥已保存', 'success')
+    if (modalMode.value === 'edit') {
+      await api.updateApiKey(editingId.value, form.value)
+      modalOpen.value = false
+      await loadKeys()
+      toast.push('令牌已更新', 'success')
+    } else {
+      const created = await api.createApiKey(form.value)
+      revealedToken.value = created.id
+      await loadKeys()
+      toast.push('令牌已创建，请复制保存', 'success')
+    }
   } catch (e: any) {
     toast.push('保存失败：' + (e?.message || String(e)), 'error')
   } finally {
@@ -178,7 +135,6 @@ async function saveKey() {
 
 onMounted(() => {
   loadKeys()
-  loadProviders()
 })
 </script>
 
@@ -186,13 +142,12 @@ onMounted(() => {
   <header class="main-header">
     <div class="main-title-group">
       <h1 class="main-title">API 密钥</h1>
-      <span class="main-subtitle">{{ activeCount }} 个密钥 · 存储于本地加密库</span>
+      <span class="main-subtitle">{{ activeCount }} 个令牌 · 存储于本地加密库</span>
     </div>
     <div class="main-actions">
-      <button class="btn btn-secondary" @click="exportEnv">导出 .env</button>
-      <button class="btn btn-primary" @click="openModal">
+      <button class="btn btn-primary" @click="openCreateModal">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-        添加密钥
+        添加令牌
       </button>
     </div>
   </header>
@@ -206,9 +161,9 @@ onMounted(() => {
         <!-- summary stats -->
         <div class="stat-grid">
           <div class="stat-card">
-            <div class="stat-label">活跃密钥</div>
+            <div class="stat-label">活跃令牌</div>
             <div class="stat-value">{{ activeCount }}</div>
-            <div class="stat-meta"><span>{{ providerKeyCount }} Provider · {{ customKeyCount }} 自定义</span></div>
+            <div class="stat-meta"><span>全部可用</span></div>
           </div>
           <div class="stat-card">
             <div class="stat-label">即将过期</div>
@@ -218,32 +173,13 @@ onMounted(() => {
               <span v-else>—</span>
             </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">本月用量</div>
-            <div class="stat-value">{{ fmtTokens(totalMonthlyTokens) }}</div>
-            <div class="stat-meta"><span class="delta positive">tokens</span><span>累计</span></div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">最近轮换</div>
-            <div class="stat-value">{{ mostRecentKey ? format(mostRecentKey.updated_at) : '—' }}</div>
-            <div class="stat-meta" v-if="mostRecentKey">
-              <span>{{ providerNameMap[mostRecentKey.provider_id] || '自定义' }} · {{ environmentLabel(mostRecentKey.environment) }}</span>
-            </div>
-            <div class="stat-meta" v-else><span>—</span></div>
-          </div>
         </div>
 
         <!-- filter bar -->
         <div class="row" style="gap: 8px;">
           <div class="row" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; gap: 6px; flex: 1; max-width: 360px;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;color:var(--muted);"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-            <input v-model="search" class="input" style="border: none; padding: 0; font-size: 13px;" placeholder="搜索密钥名称或 Provider">
-          </div>
-          <div class="tabs">
-            <button class="tab" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部</button>
-            <button class="tab" :class="{ active: activeTab === 'production' }" @click="activeTab = 'production'">生产</button>
-            <button class="tab" :class="{ active: activeTab === 'test' }" @click="activeTab = 'test'">测试</button>
-            <button class="tab" :class="{ active: activeTab === 'disabled' }" @click="activeTab = 'disabled'">已禁用</button>
+            <input v-model="search" class="input" style="border: none; padding: 0; font-size: 13px;" placeholder="搜索令牌名称">
           </div>
         </div>
 
@@ -255,50 +191,37 @@ onMounted(() => {
           <table class="tbl">
             <thead>
               <tr>
-                <th>Provider</th>
                 <th>名称</th>
-                <th>密钥</th>
-                <th>权限</th>
-                <th>最后使用</th>
-                <th class="right">用量</th>
-                <th></th>
+                <th>访问令牌</th>
+                <th>有效期至</th>
+                <th class="right">操作</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="key in filteredKeys" :key="key.id">
                 <td>
-                  <div class="row" style="gap: 8px;">
-                    <div
-                      class="list-icon"
-                      :style="{ background: providerColor(providerNameMap[key.provider_id] || '自定义'), color: 'white', width: '26px', height: '26px', fontSize: '11px', borderRadius: '6px' }"
-                    >
-                      {{ providerLetter(providerNameMap[key.provider_id] || '自定义') }}
-                    </div>
-                    <span>{{ providerNameMap[key.provider_id] || '自定义' }}</span>
-                  </div>
-                </td>
-                <td>
                   <div style="font-weight: 500;">{{ key.name }}</div>
-                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">{{ key.id }}</div>
+                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">{{ format(key.created_at) }}</div>
                 </td>
                 <td>
                   <div class="row" style="gap: 6px;">
-                    <span class="text-mono" style="font-size: 12.5px; color: var(--muted);">{{ keyMasked(key) }}</span>
+                    <span class="text-mono" style="font-size: 12.5px; color: var(--muted);">{{ tokenDisplay(key.id) }}</span>
                     <button class="btn btn-icon" style="width: 22px; height: 22px;" title="复制" @click="copyKey(key)">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
                   </div>
                 </td>
-                <td><span class="badge" :class="permissionBadgeClass(key.permission)">{{ permissionLabel(key.permission) }}</span></td>
-                <td><span :data-time="key.last_used_at" class="text-muted">{{ format(key.last_used_at) }}</span></td>
-                <td class="num">{{ fmtTokens(key.monthly_tokens) }}</td>
+                <td>
+                  <span :class="{ 'text-muted': !key.expires_at }">{{ formatExpiresAt(key.expires_at) }}</span>
+                </td>
                 <td class="right">
                   <div style="position: relative; display: inline-block;">
                     <button class="btn btn-icon" @click="openMenuId = openMenuId === key.id ? '' : key.id">
                       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                     </button>
                     <div v-if="openMenuId === key.id" class="dropdown-menu" style="position: absolute; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: var(--shadow-md); z-index: 10; min-width: 120px;">
-                      <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--fg); cursor: pointer;" @click="copyKey(key)">复制密钥</button>
+                      <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--fg); cursor: pointer;" @click="openEditModal(key); openMenuId = ''">编辑</button>
+                      <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--fg); cursor: pointer;" @click="copyKey(key)">复制</button>
                       <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--negative); cursor: pointer;" @click="deleteKey(key.id)">删除</button>
                     </div>
                   </div>
@@ -311,52 +234,52 @@ onMounted(() => {
     </div>
   </div>
 
-  <!-- Add key modal -->
+  <!-- Create / edit modal -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
       <div class="modal-card">
-        <div class="modal-title">添加密钥</div>
-        <div class="field">
-          <label class="field-label">Provider</label>
-          <select v-model="form.provider_id" class="select">
-            <option value="">自定义</option>
-            <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-        </div>
-        <div class="field">
-          <label class="field-label">名称</label>
-          <input v-model="form.name" class="input" placeholder="例如 生产环境">
-        </div>
-        <div class="field">
-          <label class="field-label">密钥</label>
-          <input v-model="form.key" type="password" class="input mono" placeholder="sk-...">
-        </div>
-        <div class="field">
-          <label class="field-label">权限</label>
-          <select v-model="form.permission" class="select">
-            <option value="read_write">读 + 写</option>
-            <option value="read_only">只读</option>
-            <option value="write_only">只写</option>
-            <option value="admin">管理</option>
-          </select>
-        </div>
-        <div class="field">
-          <label class="field-label">环境</label>
-          <select v-model="form.environment" class="select">
-            <option value="production">生产</option>
-            <option value="test">测试</option>
-            <option value="disabled">已禁用</option>
-          </select>
-        </div>
-        <div class="field">
-          <label class="field-label">过期时间</label>
-          <input v-model="form.expires_at" type="number" class="input" placeholder="0 表示不过期">
-          <div class="field-help">Unix 时间戳（毫秒），0 表示不过期</div>
-        </div>
-        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeModal">取消</button>
-          <button class="btn btn-primary" :disabled="saving" @click="saveKey">{{ saving ? '保存中…' : '保存' }}</button>
-        </div>
+        <div v-if="revealedToken" class="modal-title">保存您的访问令牌</div>
+        <div v-else class="modal-title">{{ modalMode === 'edit' ? '编辑令牌' : '添加令牌' }}</div>
+
+        <template v-if="revealedToken">
+          <div class="field">
+            <label class="field-label">访问令牌</label>
+            <div class="row" style="gap: 6px;">
+              <input
+                :value="revealedToken"
+                readonly
+                class="input mono"
+                style="flex: 1;"
+              >
+              <button class="btn btn-secondary" @click="copyToken(revealedToken)">复制</button>
+            </div>
+            <div class="field-help">这是您的访问令牌 ID，可在列表中随时复制。</div>
+          </div>
+          <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
+            <button class="btn btn-primary" @click="closeModal">完成</button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="field">
+            <label class="field-label">名称</label>
+            <input v-model="form.name" class="input" placeholder="例如 生产环境">
+          </div>
+          <div class="field">
+            <label class="field-label">过期时间</label>
+            <input
+              :value="toDateTimeLocal(form.expires_at)"
+              type="datetime-local"
+              class="input input-datetime"
+              @input="form.expires_at = fromDateTimeLocal(($event.target as HTMLInputElement).value)"
+            >
+            <div class="field-help">本地时间，留空表示不过期</div>
+          </div>
+          <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
+            <button class="btn btn-secondary" @click="closeModal">取消</button>
+            <button class="btn btn-primary" :disabled="saving" @click="saveKey">{{ saving ? '保存中…' : '保存' }}</button>
+          </div>
+        </template>
       </div>
     </div>
   </Teleport>

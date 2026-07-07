@@ -29,28 +29,33 @@ func seedIfEmpty(db *sql.DB) {
 	// -----------------------------------------------------------------------
 	// Providers (5)
 	// -----------------------------------------------------------------------
-	providers := []struct {
-		id, name, baseURL, status, apiKeyID, apiKeyRef string
-		modelsCount                                    int
-		monthlyTokens                                  int64
-		avgLatencyMs                                   int
-		isCustom                                       bool
-	}{
-		{"p01", "OpenAI", "https://api.openai.com", "connected", "k01", "sk-proj-****3fA9", 4, 3420000, 320, false},
-		{"p02", "Anthropic", "https://api.anthropic.com", "connected", "k02", "sk-ant-****Bc12", 3, 890000, 480, false},
-		{"p03", "DeepSeek", "https://api.deepseek.com", "connected", "k03", "sk-deep-****9xY7", 2, 2100000, 210, false},
-		{"p04", "Moonshot", "https://api.moonshot.cn", "error", "k04", "ms-****KpL2", 1, 450000, 680, false},
-		{"p05", "GLM", "https://open.bigmodel.cn/api/paas/v4", "unknown", "", "", 0, 0, 0, false},
+	type providerSeed struct {
+		id, name, baseURL, status string
+		keyCiphertext, keyNonce   []byte
+		keyMasked                 string
+		modelsCount               int
+		monthlyTokens             int64
+		avgLatencyMs              int
+		isCustom                  bool
+	}
+	providers := []providerSeed{
+		{"p01", "OpenAI", "https://api.openai.com", "connected", []byte("enc-openai-p01"), []byte("nonce-p01"), "sk-proj-****3fA9", 4, 3420000, 320, false},
+		{"p02", "Anthropic", "https://api.anthropic.com", "connected", []byte("enc-anthropic-p02"), []byte("nonce-p02"), "sk-ant-****Bc12", 3, 890000, 480, false},
+		{"p03", "DeepSeek", "https://api.deepseek.com", "connected", []byte("enc-deepseek-p03"), []byte("nonce-p03"), "sk-deep-****9xY7", 2, 2100000, 210, false},
+		{"p04", "Moonshot", "https://api.moonshot.cn", "error", []byte("enc-moonshot-p04"), []byte("nonce-p04"), "ms-****KpL2", 1, 450000, 680, false},
+		{"p05", "GLM", "https://open.bigmodel.cn/api/paas/v4", "unknown", []byte{}, []byte{}, "", 0, 0, 0, false},
 	}
 	for _, p := range providers {
 		status := p.status
 		if status == "" {
 			status = "unknown"
 		}
-		db.Exec(`INSERT INTO providers (id, name, base_url, status, api_key_id, api_key_ref,
+		db.Exec(`INSERT INTO providers (id, name, base_url, status,
+			key_ciphertext, key_nonce, key_masked,
 			models_count, monthly_tokens, avg_latency_ms, last_tested_at, error_message, is_custom, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,0,'',?,?,?)`,
-			p.id, p.name, p.baseURL, status, nullString(p.apiKeyID), nullString(p.apiKeyRef),
+			VALUES (?,?,?,?,?,?,?,?,?,?,0,'',?,?,?)`,
+			p.id, p.name, p.baseURL, status,
+			p.keyCiphertext, p.keyNonce, p.keyMasked,
 			p.modelsCount, p.monthlyTokens, p.avgLatencyMs, boolInt(p.isCustom), now, now)
 	}
 
@@ -79,27 +84,24 @@ func seedIfEmpty(db *sql.DB) {
 	}
 
 	// -----------------------------------------------------------------------
-	// API keys (7)
+	// API keys (access tokens) (7)
 	// -----------------------------------------------------------------------
 	type keySeed struct {
-		id, providerID, name, prefix, suffix, permission, env string
+		id, name string
 	}
 	keys := []keySeed{
-		{"k01", "p01", "OpenAI Production", "sk-proj-", "3fA9", "read_write", "production"},
-		{"k02", "p02", "Anthropic Main", "sk-ant-", "Bc12", "read_write", "production"},
-		{"k03", "p03", "DeepSeek API", "sk-deep-", "9xY7", "read_write", "production"},
-		{"k04", "p04", "Moonshot Key", "ms-", "KpL2", "read_write", "production"},
-		{"k05", "", "Custom Gateway", "cg-", "Qr56", "read_only", "test"},
-		{"k06", "p01", "OpenAI Read-only", "sk-proj-", "Tv81", "read_only", "test"},
-		{"k07", "", "Backup Admin", "ba-", "Nm34", "read_write", "production"},
+		{"k01", "OpenAI Production Token"},
+		{"k02", "Anthropic Main Token"},
+		{"k03", "DeepSeek API Token"},
+		{"k04", "Moonshot Token"},
+		{"k05", "Custom Gateway Token"},
+		{"k06", "OpenAI Read-only Token"},
+		{"k07", "Backup Admin Token"},
 	}
 	for _, k := range keys {
-		db.Exec(`INSERT INTO api_keys (id, provider_id, name, key_prefix, key_suffix,
-			key_ciphertext, key_nonce, permission, environment, monthly_tokens,
-			last_used_at, expires_at, created_at, updated_at)
-			VALUES (?,?,?,?,?,X'',X'',?,?,0,0,0,?,?)`,
-			k.id, nullString(k.providerID), k.name, k.prefix, k.suffix,
-			k.permission, k.env, now, now)
+		db.Exec(`INSERT INTO api_keys (id, name, expires_at, created_at, updated_at)
+			VALUES (?,?,0,?,?)`,
+			k.id, k.name, now, now)
 	}
 
 	// -----------------------------------------------------------------------

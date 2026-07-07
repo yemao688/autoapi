@@ -3,6 +3,7 @@
 
 # build outputs
 build/bin/
+frontend/dist/
 *.app/
 *.dmg
 *.exe

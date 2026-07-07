@@ -1,7 +1,7 @@
 // Package service implements the business logic layer (api.BusinessService).
 // It depends on the concrete *store.Store for persistence operations that
 // extend beyond the api.StoreService interface (e.g., UpsertModels,
-// GetAPIKeyCiphertext).
+// GetProviderKeyCiphertext).
 package service
 
 import (
@@ -99,7 +99,7 @@ func (s *Service) SetMasterPassword(password string) error {
 }
 
 // ChangeMasterPassword verifies the old password and replaces it with a new
-// one. All existing API keys are re-encrypted with the new key.
+// one. All existing provider upstream keys are re-encrypted with the new key.
 func (s *Service) ChangeMasterPassword(old, new string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,22 +114,22 @@ func (s *Service) ChangeMasterPassword(old, new string) error {
 		return fmt.Errorf("service: wrong master password")
 	}
 
-	// Re-encrypt all API keys with new key
+	// Re-encrypt all provider upstream keys with the new key.
 	newSalt, newKey := deriveKey(new)
 	newHash := newKey[:32]
 	newEncKey := newKey[32:]
 
-	keys, err := s.store.ListAPIKeys()
+	providers, err := s.store.ListProviders()
 	if err != nil {
 		return err
 	}
-	for _, k := range keys {
-		ciphertext, nonce, providerID, err := s.store.GetAPIKeyCiphertext(k.ID)
+	for _, prov := range providers {
+		ciphertext, nonce, err := s.store.GetProviderKeyCiphertext(prov.ID)
 		if err != nil {
-			continue // skip keys with no ciphertext
+			continue // skip providers with no stored key
 		}
 		if len(ciphertext) == 0 && len(nonce) == 0 {
-			continue // fixtures have empty blobs
+			continue // fixtures / providers without keys
 		}
 		// Decrypt with old key
 		block, err := aes.NewCipher(oldKey[32:])
@@ -155,17 +155,8 @@ func (s *Service) ChangeMasterPassword(old, new string) error {
 		newGCM, _ := cipher.NewGCM(newBlock)
 		newCT := newGCM.Seal(nil, newNonce, plaintext, nil)
 
-		// Update via the ciphertext-aware store method.
-		in := model.ApiKeyInput{
-			ProviderID:  providerID,
-			Name:        k.Name,
-			Key:         string(plaintext),
-			Permission:  k.Permission,
-			Environment: k.Environment,
-			ExpiresAt:   k.ExpiresAt,
-		}
-		if _, err := s.store.UpdateAPIKeyCiphertext(k.ID, in, newCT, newNonce); err != nil {
-			return fmt.Errorf("service: re-encrypt key %q: %w", k.ID, err)
+		if err := s.store.UpdateProviderKeyCiphertext(prov.ID, newCT, newNonce, prov.KeyMasked); err != nil {
+			return fmt.Errorf("service: re-encrypt provider key %q: %w", prov.ID, err)
 		}
 	}
 
@@ -312,12 +303,12 @@ func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, er
 		return nil, err
 	}
 
-	// Get decrypted API key
-	apiKey, err := s.ResolveAPIKey(prov.APIKeyID)
+	// Get decrypted upstream provider key.
+	upstreamKey, err := s.ResolveProviderKey(prov.ID)
 	if err != nil {
 		return &model.ProviderTestResult{
 			OK:    false,
-			Error: fmt.Sprintf("resolve API key: %v", err),
+			Error: fmt.Sprintf("resolve provider key: %v", err),
 		}, nil
 	}
 
@@ -326,7 +317,7 @@ func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, er
 	if err != nil {
 		return s.testFailResult("create request: " + err.Error()), nil
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+upstreamKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -423,15 +414,15 @@ func (s *Service) testFailResult(msg string) *model.ProviderTestResult {
 	return &model.ProviderTestResult{OK: false, Error: msg}
 }
 
-// ResolveAPIKey retrieves and decrypts an API key by ID. It is exported so the
-// proxy package (Phase 4) can fetch the cleartext key for forwarding requests.
-// Returns the cleartext key string, or an empty string if the key ciphertext
-// is empty (e.g. dev fixtures).
-func (s *Service) ResolveAPIKey(keyID string) (string, error) {
-	if keyID == "" {
-		return "", fmt.Errorf("no API key associated")
+// ResolveProviderKey fetches and decrypts the upstream key for a provider.
+// It is exported so the proxy package can fetch the cleartext key for forwarding
+// requests. Returns an empty string if the stored ciphertext is empty (e.g. dev
+// fixtures).
+func (s *Service) ResolveProviderKey(providerID string) (string, error) {
+	if providerID == "" {
+		return "", fmt.Errorf("no provider id")
 	}
-	ciphertext, nonce, _, err := s.store.GetAPIKeyCiphertext(keyID)
+	ciphertext, nonce, err := s.store.GetProviderKeyCiphertext(providerID)
 	if err != nil {
 		return "", err
 	}
@@ -441,7 +432,7 @@ func (s *Service) ResolveAPIKey(keyID string) (string, error) {
 	}
 	plaintext, err := s.Decrypt(ciphertext, nonce)
 	if err != nil {
-		return "", fmt.Errorf("decrypt key %q: %w", keyID, err)
+		return "", fmt.Errorf("decrypt provider key %q: %w", providerID, err)
 	}
 	return string(plaintext), nil
 }

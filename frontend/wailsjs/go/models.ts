@@ -51,15 +51,7 @@ export namespace model {
 	}
 	export class ApiKey {
 	    id: string;
-	    provider_id: string;
 	    name: string;
-	    key_prefix: string;
-	    key_suffix: string;
-	    key_masked: string;
-	    permission: string;
-	    environment: string;
-	    monthly_tokens: number;
-	    last_used_at: number;
 	    expires_at: number;
 	    created_at: number;
 	    updated_at: number;
@@ -71,26 +63,14 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
-	        this.provider_id = source["provider_id"];
 	        this.name = source["name"];
-	        this.key_prefix = source["key_prefix"];
-	        this.key_suffix = source["key_suffix"];
-	        this.key_masked = source["key_masked"];
-	        this.permission = source["permission"];
-	        this.environment = source["environment"];
-	        this.monthly_tokens = source["monthly_tokens"];
-	        this.last_used_at = source["last_used_at"];
 	        this.expires_at = source["expires_at"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
 	export class ApiKeyInput {
-	    provider_id: string;
 	    name: string;
-	    key: string;
-	    permission: string;
-	    environment: string;
 	    expires_at: number;
 	
 	    static createFrom(source: any = {}) {
@@ -99,11 +79,7 @@ export namespace model {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.provider_id = source["provider_id"];
 	        this.name = source["name"];
-	        this.key = source["key"];
-	        this.permission = source["permission"];
-	        this.environment = source["environment"];
 	        this.expires_at = source["expires_at"];
 	    }
 	}
@@ -190,8 +166,7 @@ export namespace model {
 	    name: string;
 	    base_url: string;
 	    status: string;
-	    api_key_id: string;
-	    api_key_ref?: string;
+	    key_masked: string;
 	    models_count: number;
 	    monthly_tokens: number;
 	    avg_latency_ms: number;
@@ -211,8 +186,7 @@ export namespace model {
 	        this.name = source["name"];
 	        this.base_url = source["base_url"];
 	        this.status = source["status"];
-	        this.api_key_id = source["api_key_id"];
-	        this.api_key_ref = source["api_key_ref"];
+	        this.key_masked = source["key_masked"];
 	        this.models_count = source["models_count"];
 	        this.monthly_tokens = source["monthly_tokens"];
 	        this.avg_latency_ms = source["avg_latency_ms"];
@@ -413,7 +387,7 @@ export namespace model {
 	export class ProviderInput {
 	    name: string;
 	    base_url: string;
-	    api_key_id: string;
+	    upstream_key: string;
 	    is_custom: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -424,7 +398,7 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.base_url = source["base_url"];
-	        this.api_key_id = source["api_key_id"];
+	        this.upstream_key = source["upstream_key"];
 	        this.is_custom = source["is_custom"];
 	    }
 	}

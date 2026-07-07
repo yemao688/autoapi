@@ -20,11 +20,6 @@ const {
   execute: loadProviders,
 } = useApi(() => api.providers())
 
-const {
-  data: apiKeys,
-  execute: loadApiKeys,
-} = useApi(() => api.apiKeys())
-
 const modelsMap = ref<Record<string, model.Model[]>>({})
 
 const activeTab = ref<'all' | 'connected' | 'error'>('all')
@@ -41,7 +36,7 @@ const openMenuId = ref('')
 const form = ref<model.ProviderInput>({
   name: '',
   base_url: '',
-  api_key_id: '',
+  upstream_key: '',
   is_custom: false,
 })
 
@@ -138,7 +133,7 @@ async function testAll() {
 function openAdd(isCustom: boolean) {
   modalMode.value = 'add'
   editingId.value = ''
-  form.value = { name: '', base_url: '', api_key_id: '', is_custom: isCustom }
+  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom }
   modalOpen.value = true
 }
 
@@ -148,7 +143,7 @@ function openEdit(provider: model.Provider) {
   form.value = {
     name: provider.name,
     base_url: provider.base_url,
-    api_key_id: provider.api_key_id,
+    upstream_key: '',
     is_custom: provider.is_custom,
   }
   modalOpen.value = true
@@ -222,7 +217,6 @@ function handleTabKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   refresh()
-  loadApiKeys()
 })
 </script>
 
@@ -365,11 +359,12 @@ onMounted(() => {
           <input v-model="form.base_url" class="input mono" placeholder="https://api.example.com">
         </div>
         <div class="field">
-          <label class="field-label">API 密钥</label>
-          <select v-model="form.api_key_id" class="select">
-            <option value="">不指定</option>
-            <option v-for="key in apiKeys || []" :key="key.id" :value="key.id">{{ key.name }}</option>
-          </select>
+          <label class="field-label">上游密钥</label>
+          <div v-if="modalMode === 'edit' && (providers || []).find((p) => p.id === editingId)?.key_masked" class="text-mono" style="font-size: 12px; color: var(--muted); margin-bottom: 6px;">
+            当前：{{ (providers || []).find((p) => p.id === editingId)?.key_masked }}
+          </div>
+          <input v-model="form.upstream_key" type="password" class="input mono" placeholder="sk-...">
+          <div class="field-help">用于向该 Provider 转发请求的加密密钥。编辑时留空可保持现有密钥不变。</div>
         </div>
         <div v-if="modalMode === 'add'" class="field">
           <div class="row-between" style="margin-bottom: 0;">

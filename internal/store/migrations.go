@@ -132,7 +132,33 @@ CREATE INDEX IF NOT EXISTS idx_route_targets_route_tier ON route_targets(route_i
 `,
 	},
 	// Future migrations append here:
-	// {ID: "003_xxx", SQL: `...`},
+	{
+		ID: "003_provider_keys",
+		SQL: `
+ALTER TABLE providers ADD COLUMN key_ciphertext BLOB;
+ALTER TABLE providers ADD COLUMN key_nonce BLOB;
+ALTER TABLE providers ADD COLUMN key_masked TEXT NOT NULL DEFAULT '';
+
+UPDATE providers SET
+  key_ciphertext = (SELECT key_ciphertext FROM api_keys WHERE id = providers.api_key_id),
+  key_nonce = (SELECT key_nonce FROM api_keys WHERE id = providers.api_key_id),
+  key_masked = COALESCE((SELECT key_prefix || '****' || key_suffix FROM api_keys WHERE id = providers.api_key_id), '')
+WHERE api_key_id IS NOT NULL;
+
+ALTER TABLE providers DROP COLUMN api_key_id;
+ALTER TABLE providers DROP COLUMN api_key_ref;
+
+ALTER TABLE api_keys DROP COLUMN provider_id;
+ALTER TABLE api_keys DROP COLUMN key_prefix;
+ALTER TABLE api_keys DROP COLUMN key_suffix;
+ALTER TABLE api_keys DROP COLUMN key_ciphertext;
+ALTER TABLE api_keys DROP COLUMN key_nonce;
+ALTER TABLE api_keys DROP COLUMN permission;
+ALTER TABLE api_keys DROP COLUMN environment;
+ALTER TABLE api_keys DROP COLUMN monthly_tokens;
+ALTER TABLE api_keys DROP COLUMN last_used_at;
+`,
+	},
 }
 
 // migrate applies all pending migrations in a single transaction.

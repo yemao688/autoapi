@@ -42,14 +42,16 @@ type StoreService interface {
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
 
-	// API keys. The store is crypto-agnostic: it only ever sees ciphertext.
-	// The App-layer CreateAPIKey/UpdateAPIKey methods compose Service.Encrypt
-	// + Store.CreateAPIKeyCiphertext; there is no plaintext-taking store method.
+	// API keys are simple access tokens; the App layer no longer encrypts here.
 	ListAPIKeys() ([]model.ApiKey, error)
-	CreateAPIKeyCiphertext(in model.ApiKeyInput, ciphertext, nonce []byte) (*model.ApiKey, error)
-	UpdateAPIKeyCiphertext(id string, in model.ApiKeyInput, ciphertext, nonce []byte) (*model.ApiKey, error)
-	GetAPIKeyCiphertext(id string) (ciphertext, nonce []byte, providerID string, err error)
+	CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error)
+	UpdateAPIKey(id string, in model.ApiKeyInput) (*model.ApiKey, error)
 	DeleteAPIKey(id string) error
+
+	// Provider upstream keys (ciphertext). The App layer composes Service.Encrypt +
+	// Store.UpdateProviderKeyCiphertext; the store never sees plaintext.
+	GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error)
+	UpdateProviderKeyCiphertext(providerID string, ciphertext, nonce []byte, masked string) error
 
 	// Routes
 	ListRoutes() ([]model.Route, error)
@@ -87,8 +89,8 @@ type BusinessService interface {
 	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
-	// api_keys table; Decrypt reverses it. The App layer uses these to compose
-	// crypto-aware key CRUD on top of the crypto-agnostic store.
+	// providers table; Decrypt reverses it. The App layer uses these to encrypt
+	// upstream provider keys before passing ciphertext to the store.
 	Encrypt(plaintext []byte) (ciphertext, nonce []byte, err error)
 	Decrypt(ciphertext, nonce []byte) ([]byte, error)
 }
@@ -162,17 +164,52 @@ func (a *App) GetProvider(id string) (*model.Provider, error) {
 }
 
 func (a *App) CreateProvider(in model.ProviderInput) (*model.Provider, error) {
-	if a.deps.Store == nil {
+	if a.deps.Store == nil || a.deps.Service == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.CreateProvider(in)
+	// The store creates the provider without key columns; we encrypt the upstream
+	// key separately and update the ciphertext columns immediately after.
+	upstreamKey := in.UpstreamKey
+	in.UpstreamKey = ""
+	p, err := a.deps.Store.CreateProvider(in)
+	if err != nil {
+		return nil, err
+	}
+	if upstreamKey != "" {
+		ct, nonce, err := a.deps.Service.Encrypt([]byte(upstreamKey))
+		if err != nil {
+			return nil, err
+		}
+		if err := a.deps.Store.UpdateProviderKeyCiphertext(p.ID, ct, nonce, maskKey(upstreamKey)); err != nil {
+			_ = a.deps.Store.DeleteProvider(p.ID)
+			return nil, err
+		}
+	}
+	return a.deps.Store.GetProvider(p.ID)
 }
 
 func (a *App) UpdateProvider(id string, in model.ProviderInput) (*model.Provider, error) {
-	if a.deps.Store == nil {
+	if a.deps.Store == nil || a.deps.Service == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.UpdateProvider(id, in)
+	// Update the provider body without touching key columns; then encrypt and
+	// store the upstream key separately if a new one was supplied.
+	upstreamKey := in.UpstreamKey
+	in.UpstreamKey = ""
+	_, err := a.deps.Store.UpdateProvider(id, in)
+	if err != nil {
+		return nil, err
+	}
+	if upstreamKey != "" {
+		ct, nonce, err := a.deps.Service.Encrypt([]byte(upstreamKey))
+		if err != nil {
+			return nil, err
+		}
+		if err := a.deps.Store.UpdateProviderKeyCiphertext(id, ct, nonce, maskKey(upstreamKey)); err != nil {
+			return nil, err
+		}
+	}
+	return a.deps.Store.GetProvider(id)
 }
 
 func (a *App) DeleteProvider(id string) error {
@@ -212,29 +249,18 @@ func (a *App) ListAPIKeys() ([]model.ApiKey, error) {
 	return a.deps.Store.ListAPIKeys()
 }
 
-// CreateAPIKey composes Service.Encrypt + Store.CreateAPIKeyCiphertext.
-// The cleartext key never reaches the store layer.
 func (a *App) CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error) {
-	if a.deps.Store == nil || a.deps.Service == nil {
+	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	ct, nonce, err := a.deps.Service.Encrypt([]byte(in.Key))
-	if err != nil {
-		return nil, err
-	}
-	return a.deps.Store.CreateAPIKeyCiphertext(in, ct, nonce)
+	return a.deps.Store.CreateAPIKey(in)
 }
 
-// UpdateAPIKey composes Service.Encrypt + Store.UpdateAPIKeyCiphertext.
 func (a *App) UpdateAPIKey(id string, in model.ApiKeyInput) (*model.ApiKey, error) {
-	if a.deps.Store == nil || a.deps.Service == nil {
+	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	ct, nonce, err := a.deps.Service.Encrypt([]byte(in.Key))
-	if err != nil {
-		return nil, err
-	}
-	return a.deps.Store.UpdateAPIKeyCiphertext(id, in, ct, nonce)
+	return a.deps.Store.UpdateAPIKey(id, in)
 }
 
 func (a *App) DeleteAPIKey(id string) error {
@@ -428,4 +454,23 @@ func (a *App) GetProxyStatus() (ProxyStatus, error) {
 type ProxyStatus struct {
 	Running bool   `json:"running"`
 	URL     string `json:"url,omitempty"`
+}
+
+// maskKey produces a display-only mask for a provider upstream key.
+func maskKey(plaintext string) string {
+	if plaintext == "" {
+		return ""
+	}
+	r := []rune(plaintext)
+	n := len(r)
+	if n <= 4 {
+		return string(r[:1]) + "****"
+	}
+	prefixLen := 12
+	if prefixLen > n-4 {
+		prefixLen = n - 4
+	}
+	prefix := string(r[:prefixLen])
+	suffix := string(r[n-4:])
+	return prefix + "****" + suffix
 }

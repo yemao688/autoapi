@@ -6,8 +6,8 @@
 //     or in tests without round-tripping the DB.
 //   - All timestamps are Unix milliseconds (int64) for simple JSON marshalling and
 //     easy "X minutes ago" rendering on the frontend.
-//   - API keys are NEVER returned in cleartext. List endpoints return KeyPrefix +
-//     KeySuffix only; the full key is encrypted at rest (key_ciphertext column).
+//   - API keys are simple access tokens whose value is the row ID; the cleartext
+//     token is never stored separately and remains visible in the list.
 //   - Models are a LOOKUP table populated from upstream /v1/models during provider
 //     testing, not a first-class user-CRUD entity (per oracle review §4).
 package model
@@ -26,23 +26,6 @@ const (
 	ProviderStatusConnected ProviderStatus = "connected"
 	ProviderStatusError     ProviderStatus = "error"
 	ProviderStatusUnknown   ProviderStatus = "unknown"
-)
-
-// Permission scope for an API key.
-type KeyPermission string
-
-const (
-	KeyPermissionReadWrite KeyPermission = "read_write"
-	KeyPermissionReadOnly  KeyPermission = "read_only"
-)
-
-// Environment tag for an API key (production / test / disabled).
-type KeyEnvironment string
-
-const (
-	KeyEnvProduction KeyEnvironment = "production"
-	KeyEnvTest       KeyEnvironment = "test"
-	KeyEnvDisabled   KeyEnvironment = "disabled"
 )
 
 // RouteActionType describes what a route target does when matched.
@@ -69,13 +52,15 @@ const (
 // ----- Domain entities -----
 
 // Provider is an upstream LLM gateway (OpenAI / Anthropic / DeepSeek / Moonshot / GLM / custom).
+// It stores its own encrypted upstream credential; API keys are now simple access tokens.
 type Provider struct {
 	ID            string         `json:"id"`
 	Name          string         `json:"name"`
 	BaseURL       string         `json:"base_url"`
 	Status        ProviderStatus `json:"status"`
-	APIKeyID      string         `json:"api_key_id"` // FK to api_keys.id (nullable)
-	APIKeyRef     string         `json:"api_key_ref,omitempty"` // display only: "sk-***3fA9"
+	KeyCiphertext []byte         `json:"-"` // encrypted upstream provider key
+	KeyNonce      []byte         `json:"-"` // AES-GCM nonce for the key
+	KeyMasked     string         `json:"key_masked"` // display-only, e.g. "sk-****abcd"
 	ModelsCount   int            `json:"models_count"`
 	MonthlyTokens int64          `json:"monthly_tokens"`
 	AvgLatencyMs  int            `json:"avg_latency_ms"`
@@ -95,23 +80,14 @@ type Model struct {
 	CreatedAt    int64 `json:"created_at"`
 }
 
-// ApiKey is a credential used to authenticate against an upstream provider.
-// The cleartext key is stored AES-256-GCM encrypted; only prefix+suffix are
-// ever returned to the UI.
+// ApiKey is an access token for the autoapi proxy. The token value is the row
+// ID itself; no secret material is stored in this table.
 type ApiKey struct {
-	ID           string         `json:"id"`
-	ProviderID   string         `json:"provider_id"` // nullable; custom keys may be provider-less
-	Name         string         `json:"name"`
-	KeyPrefix    string         `json:"key_prefix"`   // e.g. "sk-prod-"
-	KeySuffix    string         `json:"key_suffix"`   // e.g. "3fA9"
-	KeyMasked    string         `json:"key_masked"`   // pre-rendered "sk-prod-****3fA9"
-	Permission   KeyPermission  `json:"permission"`
-	Environment  KeyEnvironment `json:"environment"`
-	MonthlyTokens int64         `json:"monthly_tokens"`
-	LastUsedAt   int64          `json:"last_used_at"`  // ms; 0 = never
-	ExpiresAt    int64          `json:"expires_at"`    // ms; 0 = no expiry
-	CreatedAt    int64          `json:"created_at"`
-	UpdatedAt    int64          `json:"updated_at"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	ExpiresAt int64  `json:"expires_at"` // ms; 0 = no expiry
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // Route is an ordered routing rule. Lower priority number = higher precedence.
@@ -300,18 +276,10 @@ type Endpoint struct {
 // ----- API key plaintext (write-only — never returned) -----
 
 // ApiKeyInput is the payload for creating/updating an API key.
-//
-// Key carries the cleartext key — write-only. The frontend never logs it, and
-// the App layer encrypts it before reaching the store. After composition, the
-// store receives only the encrypted bytes and a pre-computed KeyMasked for
-// display; the cleartext Key is not stored.
+// API keys are simple access tokens; only the name and expiry are editable.
 type ApiKeyInput struct {
-	ProviderID  string         `json:"provider_id"`
-	Name        string         `json:"name"`
-	Key         string         `json:"key"` // cleartext — write-only, never persisted
-	Permission  KeyPermission  `json:"permission"`
-	Environment KeyEnvironment `json:"environment"`
-	ExpiresAt   int64          `json:"expires_at"`
+	Name      string `json:"name"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 // ----- Provider test result -----
@@ -327,10 +295,10 @@ type ProviderTestResult struct {
 // ----- Request payloads -----
 
 type ProviderInput struct {
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
-	APIKeyID  string `json:"api_key_id"`
-	IsCustom  bool   `json:"is_custom"`
+	Name        string `json:"name"`
+	BaseURL     string `json:"base_url"`
+	UpstreamKey string `json:"upstream_key"` // cleartext provider key; encrypted by App layer before storage
+	IsCustom    bool   `json:"is_custom"`
 }
 
 type RouteInput struct {

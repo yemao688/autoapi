@@ -39,8 +39,9 @@ func TestProviderCRUD(t *testing.T) {
 
 	// Create
 	p, err := s.CreateProvider(model.ProviderInput{
-		Name:    "Test Provider",
-		BaseURL: "https://test.example.com",
+		Name:        "Test Provider",
+		BaseURL:     "https://test.example.com",
+		UpstreamKey: "sk-test-abc123",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -54,6 +55,15 @@ func TestProviderCRUD(t *testing.T) {
 	if p.Status != model.ProviderStatusUnknown {
 		t.Fatalf("expected status 'unknown', got %q", p.Status)
 	}
+	// The store no longer stores the upstream key; key columns should be empty.
+	if len(p.KeyCiphertext) != 0 || p.KeyMasked != "" {
+		t.Fatalf("expected empty key columns on create, got ciphertext=%q masked=%q", p.KeyCiphertext, p.KeyMasked)
+	}
+
+	// The App layer encrypts and stores the upstream key separately.
+	if err := s.UpdateProviderKeyCiphertext(p.ID, []byte("dummy-ciphertext"), []byte("dummy-nonce"), "sk-test-****c123"); err != nil {
+		t.Fatalf("UpdateProviderKeyCiphertext: %v", err)
+	}
 
 	// Get
 	got, err := s.GetProvider(p.ID)
@@ -63,17 +73,30 @@ func TestProviderCRUD(t *testing.T) {
 	if got.ID != p.ID || got.Name != p.Name || got.BaseURL != p.BaseURL {
 		t.Fatalf("GetProvider mismatch: got %+v, want %+v", got, p)
 	}
+	if string(got.KeyCiphertext) != "dummy-ciphertext" {
+		t.Fatalf("expected ciphertext set by helper, got %q", got.KeyCiphertext)
+	}
+	if got.KeyMasked != "sk-test-****c123" {
+		t.Fatalf("expected masked key 'sk-test-****c123', got %q", got.KeyMasked)
+	}
 
-	// Update
+	// Update provider body; key columns should be preserved.
 	updated, err := s.UpdateProvider(p.ID, model.ProviderInput{
-		Name:    "Updated Provider",
-		BaseURL: "https://updated.example.com",
+		Name:        "Updated Provider",
+		BaseURL:     "https://updated.example.com",
+		UpstreamKey: "sk-updated-xyz789",
 	})
 	if err != nil {
 		t.Fatalf("UpdateProvider: %v", err)
 	}
 	if updated.Name != "Updated Provider" {
 		t.Fatalf("expected 'Updated Provider', got %q", updated.Name)
+	}
+	if string(updated.KeyCiphertext) != "dummy-ciphertext" {
+		t.Fatalf("expected key columns preserved, got %q", updated.KeyCiphertext)
+	}
+	if updated.KeyMasked != "sk-test-****c123" {
+		t.Fatalf("expected masked key preserved, got %q", updated.KeyMasked)
 	}
 
 	// List
@@ -127,28 +150,29 @@ func TestModels(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-//  API Key CRUD (ciphertext variant)
+//  API Key CRUD (simple access token model)
 // ---------------------------------------------------------------------------
 
 func TestAPIKeyCRUD(t *testing.T) {
 	s := newTestStore(t)
 
-	// Create via ciphertext path
+	// Create
 	in := model.ApiKeyInput{
-		Name:        "Test Key",
-		Key:         "sk-test-abcdefghijklmnop",
-		Permission:  model.KeyPermissionReadWrite,
-		Environment: model.KeyEnvProduction,
+		Name:      "Test Token",
+		ExpiresAt: 1893456000000, // 2030-01-01
 	}
-	k, err := s.CreateAPIKeyCiphertext(in, []byte("ciphertext_data"), []byte("nonce_data"))
+	k, err := s.CreateAPIKey(in)
 	if err != nil {
-		t.Fatalf("CreateAPIKeyCiphertext: %v", err)
+		t.Fatalf("CreateAPIKey: %v", err)
 	}
-	if k.KeyPrefix != "sk-test-abcd" {
-		t.Fatalf("expected key_prefix 'sk-test-abcd', got %q", k.KeyPrefix)
+	if k.ID == "" {
+		t.Fatal("expected non-empty ID")
 	}
-	if k.KeySuffix != "mnop" {
-		t.Fatalf("expected key_suffix 'mnop', got %q", k.KeySuffix)
+	if k.Name != "Test Token" {
+		t.Fatalf("expected name 'Test Token', got %q", k.Name)
+	}
+	if k.ExpiresAt != in.ExpiresAt {
+		t.Fatalf("expected expires_at %d, got %d", in.ExpiresAt, k.ExpiresAt)
 	}
 
 	// List
@@ -159,35 +183,23 @@ func TestAPIKeyCRUD(t *testing.T) {
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key, got %d", len(keys))
 	}
-	if keys[0].KeyMasked != "sk-test-abcd****mnop" {
-		t.Fatalf("unexpected masked: %q", keys[0].KeyMasked)
-	}
-
-	// Get ciphertext
-	ct, nonce, pid, err := s.GetAPIKeyCiphertext(k.ID)
-	if err != nil {
-		t.Fatalf("GetAPIKeyCiphertext: %v", err)
-	}
-	if string(ct) != "ciphertext_data" {
-		t.Fatalf("unexpected ciphertext: %q", ct)
-	}
-	if string(nonce) != "nonce_data" {
-		t.Fatalf("unexpected nonce: %q", nonce)
-	}
-	if pid != "" {
-		t.Fatalf("expected empty provider_id, got %q", pid)
+	if keys[0].ID != k.ID || keys[0].Name != k.Name {
+		t.Fatalf("list mismatch: got %+v", keys[0])
 	}
 
 	// Update
-	in2 := model.ApiKeyInput{
-		Name:        "Updated Key",
-		Key:         "sk-new-abcdefghijklmnop",
-		Permission:  model.KeyPermissionReadOnly,
-		Environment: model.KeyEnvTest,
-	}
-	_, err = s.UpdateAPIKeyCiphertext(k.ID, in2, []byte("new_ct"), []byte("new_nonce"))
+	updated, err := s.UpdateAPIKey(k.ID, model.ApiKeyInput{
+		Name:      "Updated Token",
+		ExpiresAt: 1924992000000, // 2031-01-01
+	})
 	if err != nil {
-		t.Fatalf("UpdateAPIKeyCiphertext: %v", err)
+		t.Fatalf("UpdateAPIKey: %v", err)
+	}
+	if updated.Name != "Updated Token" {
+		t.Fatalf("expected 'Updated Token', got %q", updated.Name)
+	}
+	if updated.ExpiresAt != 1924992000000 {
+		t.Fatalf("expected updated expiry 1924992000000, got %d", updated.ExpiresAt)
 	}
 
 	// Delete
@@ -199,14 +211,13 @@ func TestAPIKeyCRUD(t *testing.T) {
 		t.Fatalf("expected 0 keys after delete, got %d", len(keys))
 	}
 
-	// The store no longer has a plaintext-taking CreateAPIKey — the App layer
-	// is responsible for encrypting first. Verify the ciphertext path works.
-	created, err := s.CreateAPIKeyCiphertext(in, []byte("ciphertext-bytes"), []byte("nonce-bytes"))
+	// Recreate to verify the simple path works end-to-end
+	created, err := s.CreateAPIKey(model.ApiKeyInput{Name: "Another Token"})
 	if err != nil {
-		t.Fatalf("CreateAPIKeyCiphertext: %v", err)
+		t.Fatalf("CreateAPIKey: %v", err)
 	}
-	if created.KeyPrefix == "" || created.KeySuffix == "" {
-		t.Fatalf("expected prefix/suffix to be set, got %q / %q", created.KeyPrefix, created.KeySuffix)
+	if created.ID == "" || created.Name != "Another Token" {
+		t.Fatalf("unexpected recreated key: %+v", created)
 	}
 }
 
