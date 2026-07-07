@@ -16,8 +16,11 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"autoapi/internal/model"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Deps bundles the collaborators App needs. Any nil field makes the
@@ -101,6 +104,10 @@ type ProxyService interface {
 	URL() string
 	// Restart rebinds the listener (called when the user changes port/bind in settings).
 	Restart() error
+	// OnLogFlush registers a callback fired after each successful batch flush
+	// of request logs. The App layer uses this to emit real-time Wails events
+	// to the frontend.
+	OnLogFlush(fn func())
 }
 
 // App is the single struct bound to the Wails runtime. All methods here are
@@ -117,12 +124,35 @@ func NewApp(deps Deps) *App {
 }
 
 // Startup is invoked by Wails OnStartup. We save the ctx for runtime calls
-// (events, dialogs) and start the proxy if configured.
+// (events, dialogs) and start the proxy if configured. Also wires a debounced
+// "log:new" Wails event so the dashboard refreshes after new request logs are
+// persisted, without the frontend having to poll QueryLogs.
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	if a.deps.Proxy != nil {
 		_ = a.deps.Proxy.Start() // best-effort; surface via IsRunning()
+		a.wireLogEventEmitter()
 	}
+}
+
+// wireLogEventEmitter subscribes a debounced real-time log event to the proxy's
+// log-writer. Every batched insert into request_logs triggers this callback; we
+// coalesce bursts within 200ms so a high-traffic period does not flood the
+// frontend with events. The frontend's log:new handler then re-queries
+// QueryLogs and patches the UI.
+func (a *App) wireLogEventEmitter() {
+	var debounce *time.Timer
+	a.deps.Proxy.OnLogFlush(func() {
+		if debounce != nil {
+			debounce.Stop()
+		}
+		debounce = time.AfterFunc(200*time.Millisecond, func() {
+			if a.ctx == nil {
+				return
+			}
+			runtime.EventsEmit(a.ctx, "log:new")
+		})
+	})
 }
 
 // Shutdown is invoked by Wails OnShutdown. Stop the proxy cleanly.

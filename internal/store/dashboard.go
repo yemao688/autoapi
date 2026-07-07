@@ -149,7 +149,8 @@ func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
 func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
-		       input_tokens, output_tokens, cost, latency_ms, route_id, route_label,
+		       input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
+		       route_id, route_label,
 		       api_key_id, COALESCE(error, '')
 		FROM request_logs
 		ORDER BY timestamp_ms DESC
@@ -165,7 +166,7 @@ func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {
 		if err := rows.Scan(
 			&l.ID, &l.Timestamp, &l.StatusCode,
 			&l.ProviderID, &l.ProviderName, &l.Model,
-			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs,
+			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
 			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan recent log: %w", err)

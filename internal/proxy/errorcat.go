@@ -60,6 +60,24 @@ func isCircuitBreakerFailure(err error, statusCode int) bool {
 	return statusCode >= 500
 }
 
+// isClientDisconnect reports whether err represents the client disconnecting
+// (broken pipe on write, or request context canceled) — NOT an upstream failure.
+// Such errors must not penalize the provider's circuit breaker or health.
+func isClientDisconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "write" {
+		// broken pipe / connection reset writing TO the client
+		return true
+	}
+	return false
+}
+
 // isNetError reports whether the error is a network, timeout, connection, or
 // DNS failure. These are the failure modes circuit breakers are meant to
 // detect.

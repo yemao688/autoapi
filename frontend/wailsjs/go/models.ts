@@ -136,6 +136,8 @@ export namespace model {
 	    output_tokens: number;
 	    cost: number;
 	    latency_ms: number;
+	    first_token_ms: number;
+	    is_stream: boolean;
 	    route_id: string;
 	    route_label: string;
 	    api_key_id: string;
@@ -157,6 +159,8 @@ export namespace model {
 	        this.output_tokens = source["output_tokens"];
 	        this.cost = source["cost"];
 	        this.latency_ms = source["latency_ms"];
+	        this.first_token_ms = source["first_token_ms"];
+	        this.is_stream = source["is_stream"];
 	        this.route_id = source["route_id"];
 	        this.route_label = source["route_label"];
 	        this.api_key_id = source["api_key_id"];

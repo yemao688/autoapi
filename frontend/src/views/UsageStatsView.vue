@@ -6,6 +6,7 @@ import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
+import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 
 useRelativeTime()
 const { download } = useExportDownload()
@@ -84,9 +85,13 @@ function formatNumber(n: number): string {
   return String(n)
 }
 
-const { format: relativeFormat } = useRelativeTime()
 function formatTime(ts: number): string {
-  return relativeFormat(ts)
+  const d = new Date(ts)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `${mm}/${dd} ${hh}:${mi}`
 }
 
 function statusBadgeClass(statusCode: number): string {
@@ -158,6 +163,9 @@ function switchPane(paneId: string) {
   activePane.value = paneId
   liveSync.value = false
   stopLive()
+  if (paneId === 'logs') {
+    void queryLogs()
+  }
 }
 
 async function applyFilters() {
@@ -245,10 +253,18 @@ function handlePaneKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   void refreshAll()
+  EventsOn('log:new', () => {
+    // Only refresh if the user is currently viewing the logs pane.
+    // This avoids unnecessary fetches when on the tokens pane.
+    if (activePane.value === 'logs') {
+      void queryLogs()
+    }
+  })
 })
 
 onUnmounted(() => {
   stopLive()
+  EventsOff('log:new')
 })
 
 watch([providerFilter, statusFilter], () => {
@@ -558,7 +574,7 @@ watch([providerFilter, statusFilter], () => {
                 <th class="right">输入</th>
                 <th class="right">输出</th>
                 <th class="right">成本</th>
-                <th class="right">延迟</th>
+                <th class="right">延迟/首字</th>
                 <th>路由</th>
               </tr>
             </thead>
@@ -567,11 +583,19 @@ watch([providerFilter, statusFilter], () => {
                 <td><span class="text-mono" style="font-size: 12.5px;">{{ formatTime(log.timestamp) }}</span></td>
                 <td><span class="badge" :class="statusBadgeClass(log.status_code)"><span :class="statusBadgeClass(log.status_code) === 'success' ? 'dot green' : (statusBadgeClass(log.status_code) === 'warn' ? 'dot amber' : 'dot red')"></span>{{ statusText(log.status_code) }}</span></td>
                 <td><div class="row" style="gap: 6px;"><div class="list-icon" :style="{ background: providerColor(log.provider_name), color: providerColor(log.provider_name) === '#272729' ? 'rgba(255,255,255,0.86)' : '#fff', width: '22px', height: '22px', fontSize: '10px', borderRadius: '5px' }">{{ providerInitial(log.provider_name) }}</div><span style="font-size: 12.5px;">{{ log.provider_name }}</span></div></td>
-                <td><span class="text-mono" style="font-size: 12.5px;">{{ log.model }}</span></td>
+                <td><span class="text-mono" style="font-size: 12.5px;">
+                  {{ log.model }}
+                  <span v-if="log.is_stream" class="text-muted" style="font-size: 10px;" title="流式请求">⇄</span>
+                </span></td>
                 <td class="num">{{ log.input_tokens > 0 ? log.input_tokens : '—' }}</td>
                 <td class="num">{{ log.output_tokens > 0 ? log.output_tokens : '—' }}</td>
                 <td class="num">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</td>
-                <td class="num">{{ (log.latency_ms / 1000).toFixed(2) }}s</td>
+                <td class="num">
+                  {{ (log.latency_ms / 1000).toFixed(2) }}s
+                  <span v-if="log.is_stream && log.first_token_ms > 0" class="text-muted" style="font-size: 11px;">
+                    /{{ (log.first_token_ms / 1000).toFixed(2) }}s
+                  </span>
+                </td>
                 <td><span class="badge info" style="font-size: 10px;">{{ log.route_label || '默认' }}</span></td>
               </tr>
               <tr v-if="logs.length === 0" class="logs-empty-row">

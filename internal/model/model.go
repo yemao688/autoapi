@@ -150,6 +150,8 @@ type RequestLog struct {
 	OutputTokens int     `json:"output_tokens"`
 	Cost         float64 `json:"cost"` // estimated USD
 	LatencyMs    int     `json:"latency_ms"`
+	FirstTokenMs int     `json:"first_token_ms"` // TTFT for streaming; 0 for non-streaming
+	IsStream     bool    `json:"is_stream"`      // true if the request was streaming
 	RouteID      string  `json:"route_id"` // empty = default route
 	RouteLabel   string  `json:"route_label"`
 	APIKeyID     string  `json:"api_key_id"`

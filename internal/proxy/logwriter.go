@@ -30,6 +30,12 @@ type logWriter struct {
 	batchSize     int
 	flushInterval time.Duration
 	wg            sync.WaitGroup
+
+	// onFlush is an optional callback fired after each successful batch flush.
+	// It runs on the writer goroutine; the API layer uses it to emit real-time
+	// UI events when new logs are persisted. Guard with mu when reading/writing.
+	muFlush  sync.Mutex
+	onFlush  func()
 }
 
 // newLogWriter starts a background log writer. The caller must call Stop to
@@ -95,6 +101,16 @@ func (w *logWriter) loop() {
 			slog.Error("proxy: failed to flush request logs",
 				"err", err,
 				"count", len(batch))
+		} else {
+			// Fire the real-time UI event after a successful batch write.
+			// Read under muFlush so a concurrent OnLogFlush swap doesn't race
+			// with the in-progress callback dispatch.
+			w.muFlush.Lock()
+			cb := w.onFlush
+			w.muFlush.Unlock()
+			if cb != nil {
+				cb()
+			}
 		}
 		batch = batch[:0]
 	}

@@ -180,6 +180,13 @@ ALTER TABLE models ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		ID: "007_request_log_timing",
+		SQL: `
+ALTER TABLE request_logs ADD COLUMN first_token_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE request_logs ADD COLUMN is_stream INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have
