@@ -225,11 +225,14 @@ P0 ──┬── P1a (签名+DTO+generate module, 顺序) ──┬── P1b/
 - [x] 范围与架构决策
 - [x] Oracle 评审计划 → APPROVE-WITH-CHANGES（9 项修订已并入）
 - [x] Phase 0 脚手架（commit `9627b66`）— wails init vue-ts + 升级 Vue3.5/Vite8/TS6/vue-router4 + modernc/xdg/chi + entitlements + styles.css + `wails build` 通过
-- [x] Phase 0 脚手架（commit `9627b66`→`3aefe39`）
+- [x] Phase 0 脚手架（commit `3aefe39`）
 - [x] Phase 1a 后端契约（commit `3aefe39`）
-- [x] Phase 1b/c/d 后端实现（commit `e6c670e`，fixer-1）— 17 文件，14 测试通过，wails dev 验证 fixtures seed 1480 条日志
-- [x] Phase 2 前端骨架（commit `e6c670e`，fixer-2）— 6 views + 2 components + 3 composables + typed client，npm build 通过
-- [ ] Oracle 评审 Phase 1+2
+- [x] Phase 1b/c/d 后端实现（commit `e6c670e`，fixer-1）
+- [x] Phase 2 前端骨架（commit `e6c670e`，fixer-2）
+- [x] Oracle 评审 Phase 1+2 → APPROVE-WITH-FIXES（commit `2bac68e` 修复）
+  - B1: usage.go sortInts O(n²) → sort.Ints
+  - B2: StoreService 去掉 plaintext 方法，App.CreateAPIKey 合成 Encrypt+Ciphertext
+  - N1: writer.go 文档化 ErrQueueFull → caller 视为 drop 而非 fail
 - [ ] Phase 3 接口对接
 - [ ] Phase 4 代理网关
 - [ ] Phase 5 系统集成
