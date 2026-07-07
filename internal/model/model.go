@@ -148,6 +148,7 @@ type RouteTarget struct {
 	ProviderID string          `json:"provider_id"`
 	ModelName  string          `json:"model_name"` // empty when action=skip
 	Action     RouteActionType `json:"action"`
+	Tier       int             `json:"tier"` // lower = higher priority (P0=0, P1=1, ...)
 }
 
 // RequestLog is one proxied request through the gateway.

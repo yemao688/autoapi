@@ -5,6 +5,7 @@
 package proxy
 
 import (
+	"fmt"
 	"path"
 	"sort"
 	"strconv"
@@ -20,6 +21,84 @@ type InboundRequest struct {
 	EstimatedTokens int
 	Task            string
 	TimeHour        int
+}
+
+// candidate is one possible provider/model the proxy can forward a request to.
+type candidate struct {
+	provider   *model.Provider
+	modelName  string
+	routeID    string
+	routeLabel string
+}
+
+// selectCandidates picks the highest-priority enabled route, collects all of
+// its forward targets ordered by tier (lower tier = higher priority), filters
+// out providers whose circuit breaker is open, and falls back to the default
+// provider when every routed target is open. The getProvider closure resolves
+// provider IDs to full provider records.
+func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderID string, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
+	route, matched := selectRoute(req, rules)
+	if !matched {
+		if defaultProviderID == "" {
+			return nil, fmt.Errorf("no route matched and no default provider configured")
+		}
+		p, err := getProvider(defaultProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("default provider not found")
+		}
+		if isOpen(defaultProviderID, breakers) {
+			return nil, fmt.Errorf("no available provider: default provider circuit is open")
+		}
+		return []candidate{{provider: p, modelName: "", routeID: "", routeLabel: ""}}, nil
+	}
+
+	var targets []model.RouteTarget
+	for _, t := range route.Targets {
+		if t.Action == model.RouteActionForward {
+			targets = append(targets, t)
+		}
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Tier < targets[j].Tier })
+
+	var out []candidate
+	for _, t := range targets {
+		if isOpen(t.ProviderID, breakers) {
+			continue
+		}
+		p, err := getProvider(t.ProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("matched provider not found")
+		}
+		out = append(out, candidate{
+			provider:   p,
+			modelName:  t.ModelName,
+			routeID:    route.ID,
+			routeLabel: route.Name,
+		})
+	}
+
+	if len(out) == 0 && defaultProviderID != "" {
+		p, err := getProvider(defaultProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("no available provider")
+		}
+		if isOpen(defaultProviderID, breakers) {
+			return nil, fmt.Errorf("no available provider: all targets and default are open")
+		}
+		out = append(out, candidate{provider: p, modelName: "", routeID: "", routeLabel: ""})
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no available provider")
+	}
+	return out, nil
+}
+
+func isOpen(providerID string, breakers map[string]*CircuitBreaker) bool {
+	if cb, ok := breakers[providerID]; ok {
+		return !cb.Allow()
+	}
+	return false
 }
 
 // selectRoute picks the highest-priority enabled route whose conditions all

@@ -168,6 +168,25 @@ func (s *Store) resolveAPIKeyRef(keyID string) string {
 	return prefix + "****" + suffix
 }
 
+// UpdateProviderHealth updates only the health-related fields of a provider.
+func (s *Store) UpdateProviderHealth(id string, status model.ProviderStatus, errorMessage string) error {
+	now := nowMs()
+	return s.execTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE providers SET status=?, error_message=?, updated_at=?
+			WHERE id=?`,
+			status, errorMessage, now, id)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("store: update provider health %q: %w", id, ErrNotFound)
+		}
+		return nil
+	})
+}
+
 // ---------------------------------------------------------------------------
 //  Internal helpers used by the service layer
 // ---------------------------------------------------------------------------

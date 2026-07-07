@@ -124,8 +124,15 @@ CREATE TABLE IF NOT EXISTS _migrations (
 );
 `,
 	},
+	{
+		ID: "002_failover",
+		SQL: `
+ALTER TABLE route_targets ADD COLUMN tier INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_route_targets_route_tier ON route_targets(route_id, tier);
+`,
+	},
 	// Future migrations append here:
-	// {ID: "002_xxx", SQL: `...`},
+	// {ID: "003_xxx", SQL: `...`},
 }
 
 // migrate applies all pending migrations in a single transaction.
