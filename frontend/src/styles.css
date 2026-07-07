@@ -116,6 +116,8 @@ button { font: inherit; cursor: pointer; }
   position: relative;
   -webkit-user-select: none;
   user-select: none;
+  -webkit-app-region: drag;
+  app-region: drag;
   flex-shrink: 0;
 }
 
@@ -138,6 +140,8 @@ button { font: inherit; cursor: pointer; }
   gap: 14px;
   font-size: 12px;
   color: var(--muted);
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   z-index: 2;
 }
 
@@ -154,12 +158,10 @@ button { font: inherit; cursor: pointer; }
 .titlebar-actions svg {
   width: 16px;
   height: 16px;
-  cursor: pointer;
+  cursor: default;
   color: var(--muted);
   transition: color 0.12s ease;
 }
-
-.titlebar-actions svg:hover { color: var(--fg); }
 
 /* ============== BODY LAYOUT ============== */
 .app-body {

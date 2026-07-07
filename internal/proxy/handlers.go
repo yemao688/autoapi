@@ -205,8 +205,11 @@ func (p *Proxy) handleNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 // rewriteBodyModel sets the "model" field in the JSON body. If the body is not
-// valid JSON, it returns the original body unchanged.
+// valid JSON or modelName is empty, it returns the original body unchanged.
 func rewriteBodyModel(body []byte, modelName string) ([]byte, error) {
+	if modelName == "" {
+		return body, nil
+	}
 	var m map[string]interface{}
 	if err := json.Unmarshal(body, &m); err != nil {
 		return body, nil

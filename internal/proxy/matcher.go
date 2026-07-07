@@ -49,7 +49,7 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 		if isOpen(defaultProviderID, breakers) {
 			return nil, fmt.Errorf("no available provider: default provider circuit is open")
 		}
-		return []candidate{{provider: p, modelName: "", routeID: "", routeLabel: ""}}, nil
+		return []candidate{{provider: p, modelName: req.Model, routeID: "", routeLabel: ""}}, nil
 	}
 
 	var targets []model.RouteTarget
@@ -71,7 +71,7 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 		}
 		out = append(out, candidate{
 			provider:   p,
-			modelName:  t.ModelName,
+			modelName:  modelNameForTarget(t.ModelName, req.Model),
 			routeID:    route.ID,
 			routeLabel: route.Name,
 		})
@@ -85,7 +85,7 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 		if isOpen(defaultProviderID, breakers) {
 			return nil, fmt.Errorf("no available provider: all targets and default are open")
 		}
-		out = append(out, candidate{provider: p, modelName: "", routeID: "", routeLabel: ""})
+		out = append(out, candidate{provider: p, modelName: req.Model, routeID: "", routeLabel: ""})
 	}
 
 	if len(out) == 0 {
@@ -96,7 +96,7 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 
 func isOpen(providerID string, breakers map[string]*CircuitBreaker) bool {
 	if cb, ok := breakers[providerID]; ok {
-		return !cb.Allow()
+		return !cb.WouldAllow()
 	}
 	return false
 }
@@ -111,16 +111,16 @@ func selectRoute(req *InboundRequest, rules []model.Route) (*model.Route, bool) 
 	copy(sorted, rules)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Priority < sorted[j].Priority })
 
-	for _, r := range sorted {
-		if !r.Enabled {
+	for i := range sorted {
+		if !sorted[i].Enabled {
 			continue
 		}
-		if !matchAll(req, r.Conditions) {
+		if !matchAll(req, sorted[i].Conditions) {
 			continue
 		}
-		for _, t := range r.Targets {
+		for _, t := range sorted[i].Targets {
 			if t.Action == model.RouteActionForward {
-				return &r, true
+				return &sorted[i], true
 			}
 		}
 		// Skip-only rule matched: continue to lower-priority rules.
@@ -283,4 +283,11 @@ func parseFloat(s string) (float64, bool) {
 	}
 	f, err := strconv.ParseFloat(s, 64)
 	return f, err == nil
+}
+
+func modelNameForTarget(targetModel, requestModel string) string {
+	if targetModel != "" {
+		return targetModel
+	}
+	return requestModel
 }

@@ -84,6 +84,26 @@ func (cb *CircuitBreaker) Allow() bool {
 	}
 }
 
+// WouldAllow reports whether the breaker would allow a request without
+// consuming a probe or transitioning from open to half-open. It is used by
+// the matcher to decide which candidates are available without claiming the
+// single half-open probe.
+func (cb *CircuitBreaker) WouldAllow() bool {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+
+	switch cb.state {
+	case StateClosed:
+		return true
+	case StateOpen:
+		return cb.nowFn().Sub(cb.openedAt) >= cb.recoveryTimeout
+	case StateHalfOpen:
+		return !cb.pendingProbe
+	default:
+		return false
+	}
+}
+
 // Record updates the breaker based on the outcome of the last request. When
 // the breaker is half-open, a probe outcome transitions to closed or re-opens
 // the circuit.

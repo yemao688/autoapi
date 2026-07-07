@@ -23,9 +23,9 @@ const (
 )
 
 // CategorizeError classifies an upstream response. If err is non-nil, the error
-// type takes precedence over the status code. Status codes that indicate a
-// client-side mistake (4xx) are non-retryable; 5xx and network errors are
-// retryable.
+// type takes precedence over the status code. Client-side 4xx errors are
+// generally non-retryable, except 401/403/404/408/409/429 which may succeed on
+// a different provider; 5xx and network errors are retryable.
 func CategorizeError(err error, statusCode int) ErrorCategory {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -75,7 +75,7 @@ func isNetError(err error) bool {
 	if errors.As(err, &opErr) {
 		return true
 	}
-	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) || errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ECONNRESET) {
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) || errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	return false
