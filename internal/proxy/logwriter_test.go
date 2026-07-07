@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 )
 
 type fakeBatchStore struct {
+	mu   sync.Mutex
 	logs []model.RequestLog
 }
 
@@ -20,6 +22,8 @@ func (f *fakeBatchStore) GetProviderKeyCiphertext(providerID string) (ciphertext
 }
 func (f *fakeBatchStore) InsertRequestLog(l model.RequestLog) error { return nil }
 func (f *fakeBatchStore) InsertRequestLogsBatch(logs []model.RequestLog) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.logs = append(f.logs, logs...)
 	return nil
 }
@@ -28,6 +32,12 @@ func (f *fakeBatchStore) GetSettings() (*model.Settings, error)               { 
 func (f *fakeBatchStore) Dashboard() (*model.DashboardData, error)             { return &model.DashboardData{}, nil }
 func (f *fakeBatchStore) UpdateProviderHealth(id string, status model.ProviderStatus, errorMessage string) error {
 	return nil
+}
+
+func (f *fakeBatchStore) logCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.logs)
 }
 
 func TestLogWriter_BatchFlush(t *testing.T) {
@@ -44,8 +54,8 @@ func TestLogWriter_BatchFlush(t *testing.T) {
 	// Wait for the flush interval to elapse.
 	time.Sleep(2 * logWriterFlushInterval)
 
-	if len(st.logs) != 5 {
-		t.Fatalf("expected 5 logs flushed, got %d", len(st.logs))
+	if st.logCount() != 5 {
+		t.Fatalf("expected 5 logs flushed, got %d", st.logCount())
 	}
 }
 
@@ -60,7 +70,7 @@ func TestLogWriter_StopFlushesPending(t *testing.T) {
 	}
 	w.Stop()
 
-	if len(st.logs) != 3 {
-		t.Fatalf("expected 3 logs flushed on stop, got %d", len(st.logs))
+	if st.logCount() != 3 {
+		t.Fatalf("expected 3 logs flushed on stop, got %d", st.logCount())
 	}
 }

@@ -5,7 +5,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -239,7 +238,7 @@ func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) 
 	}
 
 	start := time.Now()
-	req, err := http.NewRequest("GET", prov.BaseURL+"/v1/models", nil)
+	req, err := http.NewRequest("GET", store.JoinProviderURL(prov.BaseURL, "/v1/models"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -293,53 +292,27 @@ func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) 
 	return s.store.ListModels(providerID)
 }
 
-// TestModelLatency measures the API latency for a single model by sending a
-// tiny chat completion request. This gives a per-model latency rather than the
-// coarse latency of the provider's /v1/models list. For embedding-only or
-// non-chat models the provider may return an error; the caller should treat
-// that as a probe failure.
+// TestModelLatency returns the latency recorded for a single model by
+// querying the provider's /v1/models endpoint. This is intentionally coarse
+// for v1: it avoids issuing paid chat completions just to measure latency.
+// A future per-model paid probe can be added behind an explicit user action.
 func (s *Service) TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error) {
-	prov, err := s.store.GetProvider(providerID)
+	models, err := s.FetchUpstreamModels(providerID)
 	if err != nil {
 		return &model.ModelTestResult{OK: false, Error: err.Error()}, nil
 	}
 
-	upstreamKey, err := s.ResolveProviderKey(providerID)
-	if err != nil {
-		return &model.ModelTestResult{OK: false, Error: err.Error()}, nil
+	found := false
+	latencyMs := 0
+	for _, m := range models {
+		if m.Name == modelName {
+			found = true
+			latencyMs = m.LatencyMs
+			break
+		}
 	}
-
-	payload := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]string{
-			{"role": "user", "content": "ping"},
-		},
-		"max_tokens": 1,
-	}
-	bodyJSON, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("service: marshal latency probe body: %w", err)
-	}
-
-	start := time.Now()
-	req, err := http.NewRequest("POST", prov.BaseURL+"/v1/chat/completions", bytes.NewReader(bodyJSON))
-	if err != nil {
-		return nil, fmt.Errorf("service: create latency probe request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+upstreamKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	latencyMs := int(time.Since(start).Milliseconds())
-	if err != nil {
-		return &model.ModelTestResult{OK: false, Error: err.Error()}, nil
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode >= 400 {
-		return &model.ModelTestResult{OK: false, Error: fmt.Sprintf("HTTP %d", resp.StatusCode)}, nil
+	if !found {
+		return &model.ModelTestResult{OK: false, Error: "model not found in upstream list"}, nil
 	}
 
 	if err := s.store.UpdateModelLatency(providerID, modelName, latencyMs); err != nil {

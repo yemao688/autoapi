@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"autoapi/internal/model"
+	"autoapi/internal/store"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -397,7 +398,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 			continue
 		}
 
-		upstreamURL, err := url.Parse(strings.TrimSuffix(c.provider.BaseURL, "/") + r.URL.Path)
+		upstreamURL, err := url.Parse(store.JoinProviderURL(c.provider.BaseURL, r.URL.Path))
 		if err != nil {
 			lastErr = fmt.Errorf("invalid base URL for %s: %w", c.provider.Name, err)
 			slog.Debug("proxy: candidate URL invalid", "provider", c.provider.Name, "err", lastErr)
@@ -563,7 +564,7 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	}
 
 	rewrittenBody, _ := rewriteBodyModel(body, chosen.modelName)
-	upstreamURL, err := url.Parse(strings.TrimSuffix(chosen.provider.BaseURL, "/") + r.URL.Path)
+	upstreamURL, err := url.Parse(store.JoinProviderURL(chosen.provider.BaseURL, r.URL.Path))
 	if err != nil {
 		p.writeError(w, http.StatusInternalServerError, "internal_error", "invalid provider base URL")
 		logEntry.StatusCode = http.StatusInternalServerError
