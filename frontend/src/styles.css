@@ -112,32 +112,12 @@ button { font: inherit; cursor: pointer; }
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 12px 0 76px;
   position: relative;
   -webkit-user-select: none;
   user-select: none;
   flex-shrink: 0;
 }
-
-.traffic-lights {
-  display: flex;
-  gap: 8px;
-  z-index: 2;
-}
-
-.light {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  cursor: pointer;
-  position: relative;
-  transition: filter 0.12s ease;
-}
-
-.light:hover { filter: brightness(1.05); }
-.light.close { background: #ff5f57; box-shadow: inset 0 0 0 0.5px #e0443e; }
-.light.min { background: #febc2e; box-shadow: inset 0 0 0 0.5px #dea123; }
-.light.max { background: #28c840; box-shadow: inset 0 0 0 0.5px #1aab29; }
 
 .window-title {
   position: absolute;
@@ -696,7 +676,6 @@ button { font: inherit; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .view-pane.is-entering { animation: none; }
   .status-dot { animation: none !important; box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.18); }
-  .light:hover { filter: none; }
   .btn { transition: none; }
   .tab::after { transition: none; }
   .nav-item { transition: none; }
