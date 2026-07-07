@@ -158,6 +158,9 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 	data := make([]modelItem, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
 	for _, m := range models {
+		if !m.Active {
+			continue
+		}
 		if _, ok := seen[m.Name]; ok {
 			continue
 		}

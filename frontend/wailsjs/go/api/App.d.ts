@@ -17,6 +17,8 @@ export function DeleteRoute(arg1:string):Promise<void>;
 
 export function ExportData(arg1:model.ExportFormat):Promise<api.ExportResult>;
 
+export function FetchUpstreamModels(arg1:string):Promise<Array<model.Model>>;
+
 export function GetDashboard():Promise<model.DashboardData>;
 
 export function GetProvider(arg1:string):Promise<model.Provider>;
@@ -49,7 +51,11 @@ export function ReorderRoutes(arg1:Array<string>):Promise<void>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 
+export function SetModelsActive(arg1:string,arg2:Array<string>,arg3:boolean):Promise<void>;
+
 export function TestAllProviders():Promise<Array<model.ProviderTestResult>>;
+
+export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTestResult>;
 
 export function TestProvider(arg1:string):Promise<model.ProviderTestResult>;
 

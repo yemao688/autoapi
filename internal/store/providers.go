@@ -167,28 +167,84 @@ func (s *Store) UpdateProviderHealth(id string, status model.ProviderStatus, err
 //  Internal helpers used by the service layer
 // ---------------------------------------------------------------------------
 
-// UpsertModels replaces all models for a provider. Called after a successful
-// provider test.
-func (s *Store) UpsertModels(providerID string, names []string) error {
+// UpsertModels inserts or updates models for a provider, preserving existing
+// active, latency_ms, and created_at values on conflict.
+func (s *Store) UpsertModels(providerID string, models []model.Model) error {
 	now := nowMs()
 	return s.execTx(func(tx *sql.Tx) error {
-		// Delete existing models for this provider.
-		if _, err := tx.Exec(`DELETE FROM models WHERE provider_id = ?`, providerID); err != nil {
-			return err
-		}
-		for _, name := range names {
-			id := makeID()
-			if _, err := tx.Exec(`
-				INSERT INTO models (id, provider_id, name, context_window, created_at)
-				VALUES (?, ?, ?, 0, ?)`,
-				id, providerID, name, now); err != nil {
+		for _, m := range models {
+			id := m.ID
+			if id == "" {
+				id = makeID()
+			}
+			createdAt := m.CreatedAt
+			if createdAt == 0 {
+				createdAt = now
+			}
+			_, err := tx.Exec(`
+				INSERT INTO models (id, provider_id, name, context_window, owned_by, active, latency_ms, updated_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(provider_id, name) DO UPDATE SET
+					context_window = excluded.context_window,
+					owned_by = excluded.owned_by,
+					updated_at = excluded.updated_at
+					-- active, latency_ms, created_at preserved from existing row
+`,
+				id, providerID, m.Name, m.ContextWindow, m.OwnedBy, boolInt(m.Active), m.LatencyMs, now, createdAt)
+			if err != nil {
 				return err
 			}
 		}
-		// Update provider model count.
-		_, err := tx.Exec(`UPDATE providers SET models_count = ?, updated_at = ? WHERE id = ?`,
-			len(names), now, providerID)
+		// Update provider model count and timestamp.
+		_, err := tx.Exec(`
+			UPDATE providers SET models_count = (SELECT COUNT(*) FROM models WHERE provider_id = ?), updated_at = ?
+			WHERE id = ?`,
+			providerID, now, providerID)
 		return err
+	})
+}
+
+// UpdateModelLatency sets the measured latency for a single model.
+func (s *Store) UpdateModelLatency(providerID, modelName string, latencyMs int) error {
+	now := nowMs()
+	return s.execTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE models SET latency_ms = ?, updated_at = ?
+			WHERE provider_id = ? AND name = ?`,
+			latencyMs, now, providerID, modelName)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("store: update model latency %q for provider %q: %w", modelName, providerID, ErrNotFound)
+		}
+		return nil
+	})
+}
+
+// SetModelsActive enables or disables a set of model names for a provider.
+func (s *Store) SetModelsActive(providerID string, modelNames []string, active bool) error {
+	now := nowMs()
+	activeInt := 0
+	if active {
+		activeInt = 1
+	}
+	return s.execTx(func(tx *sql.Tx) error {
+		for _, name := range modelNames {
+			res, err := tx.Exec(`
+				UPDATE models SET active = ?, updated_at = ?
+				WHERE provider_id = ? AND name = ?`,
+				activeInt, now, providerID, name)
+			if err != nil {
+				return err
+			}
+			n, _ := res.RowsAffected()
+			if n == 0 {
+				return fmt.Errorf("store: set model active %q for provider %q: %w", name, providerID, ErrNotFound)
+			}
+		}
+		return nil
 	})
 }
 

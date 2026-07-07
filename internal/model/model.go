@@ -73,11 +73,22 @@ type Provider struct {
 
 // Model is a model offered by a provider (lookup table, populated from upstream).
 type Model struct {
-	ID           string `json:"id"`
-	ProviderID   string `json:"provider_id"`
-	Name         string `json:"name"`
-	ContextWindow int   `json:"context_window"` // max tokens, 0 if unknown
-	CreatedAt    int64 `json:"created_at"`
+	ID            string `json:"id"`
+	ProviderID    string `json:"provider_id"`
+	Name          string `json:"name"`
+	ContextWindow int    `json:"context_window"` // max tokens, 0 if unknown
+	OwnedBy       string `json:"owned_by"`
+	Active        bool   `json:"active"`
+	LatencyMs     int    `json:"latency_ms"`
+	UpdatedAt     int64  `json:"updated_at"`
+	CreatedAt     int64  `json:"created_at"`
+}
+
+// ModelTestResult is returned by the per-model latency test.
+type ModelTestResult struct {
+	OK        bool  `json:"ok"`
+	LatencyMs int   `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ApiKey is an access token for the autoapi proxy. The token value is the row

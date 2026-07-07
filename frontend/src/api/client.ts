@@ -50,6 +50,18 @@ export const api = {
     ensureWails()
     return wails.ListModels(providerId) as Promise<model.Model[]>
   },
+  fetchUpstreamModels: (providerId: string): Promise<model.Model[]> => {
+    ensureWails()
+    return wails.FetchUpstreamModels(providerId) as Promise<model.Model[]>
+  },
+  testModelLatency: (providerId: string, modelName: string): Promise<model.ModelTestResult> => {
+    ensureWails()
+    return wails.TestModelLatency(providerId, modelName) as Promise<model.ModelTestResult>
+  },
+  setModelsActive: (providerId: string, modelNames: string[], active: boolean): Promise<void> => {
+    ensureWails()
+    return wails.SetModelsActive(providerId, modelNames, active) as Promise<void>
+  },
 
   // Routes
   routes: (): Promise<model.Route[]> => {

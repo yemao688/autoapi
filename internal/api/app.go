@@ -41,6 +41,7 @@ type StoreService interface {
 
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
+	SetModelsActive(providerID string, modelNames []string, active bool) error
 
 	// API keys are simple access tokens; the App layer no longer encrypts here.
 	ListAPIKeys() ([]model.ApiKey, error)
@@ -81,6 +82,8 @@ type StoreService interface {
 type BusinessService interface {
 	TestProvider(providerID string) (*model.ProviderTestResult, error)
 	TestAllProviders() ([]model.ProviderTestResult, error)
+	FetchUpstreamModels(providerID string) ([]model.Model, error)
+	TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error)
 	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
@@ -226,6 +229,27 @@ func (a *App) TestAllProviders() ([]model.ProviderTestResult, error) {
 		return nil, errNotImpl
 	}
 	return a.deps.Service.TestAllProviders()
+}
+
+func (a *App) FetchUpstreamModels(providerID string) ([]model.Model, error) {
+	if a.deps.Service == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Service.FetchUpstreamModels(providerID)
+}
+
+func (a *App) TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error) {
+	if a.deps.Service == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Service.TestModelLatency(providerID, modelName)
+}
+
+func (a *App) SetModelsActive(providerID string, modelNames []string, active bool) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	return a.deps.Store.SetModelsActive(providerID, modelNames, active)
 }
 
 func (a *App) ListModels(providerID string) ([]model.Model, error) {

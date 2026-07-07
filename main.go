@@ -19,8 +19,8 @@ func main() {
 		Title:     "Autoapi",
 		Width:     1280,
 		Height:    800,
-		MinWidth:  1080,
-		MinHeight: 720,
+		MinWidth:  760,
+		MinHeight: 600,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

@@ -179,67 +179,26 @@ func (s *Service) Decrypt(ciphertext, nonce []byte) ([]byte, error) {
 //  Provider testing
 // ---------------------------------------------------------------------------
 
-// TestProvider tests connectivity with a single provider by hitting its
-// /v1/models endpoint, parsing the response, and updating the model list.
+// TestProvider tests connectivity with a single provider by fetching its upstream
+// models and updating health metrics.
 func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, error) {
-	prov, err := s.store.GetProvider(providerID)
+	models, err := s.FetchUpstreamModels(providerID)
 	if err != nil {
-		return nil, err
+		return s.testFailResult(err.Error()), nil
 	}
 
-	// Get decrypted upstream provider key.
-	upstreamKey, err := s.ResolveProviderKey(prov.ID)
-	if err != nil {
-		return &model.ProviderTestResult{
-			OK:    false,
-			Error: fmt.Sprintf("resolve provider key: %v", err),
-		}, nil
+	latencyMs := 0
+	if len(models) > 0 {
+		latencyMs = models[0].LatencyMs
 	}
 
-	start := time.Now()
-	req, err := http.NewRequest("GET", prov.BaseURL+"/v1/models", nil)
-	if err != nil {
-		return s.testFailResult("create request: " + err.Error()), nil
-	}
-	req.Header.Set("Authorization", "Bearer "+upstreamKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	latencyMs := int(time.Since(start).Milliseconds())
-	if err != nil {
-		return s.testFailResult(fmt.Sprintf("HTTP error: %v", err)), nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return s.testFailResult(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))), nil
+	modelNames := make([]string, len(models))
+	for i, m := range models {
+		modelNames[i] = m.Name
 	}
 
-	// Parse OpenAI-style model list
-	var modelsResp struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
-		return s.testFailResult("parse response: " + err.Error()), nil
-	}
-
-	modelNames := make([]string, len(modelsResp.Data))
-	for i, m := range modelsResp.Data {
-		modelNames[i] = m.ID
-	}
-
-	// Upsert models in store
-	if err := s.store.UpsertModels(providerID, modelNames); err != nil {
-		return nil, fmt.Errorf("service: upsert models: %w", err)
-	}
-
-	// Update provider test result
 	status := model.ProviderStatusConnected
-	if err := s.store.UpdateProviderTestResult(providerID, status, len(modelNames), latencyMs, ""); err != nil {
+	if err := s.store.UpdateProviderTestResult(providerID, status, len(models), latencyMs, ""); err != nil {
 		return nil, fmt.Errorf("service: update provider test result: %w", err)
 	}
 
@@ -248,6 +207,103 @@ func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, er
 		LatencyMs: latencyMs,
 		Models:    modelNames,
 	}, nil
+}
+
+// FetchUpstreamModels loads a provider's upstream model list from /v1/models,
+// upserts them into the local database (preserving active/latency state), and
+// returns the persisted list.
+func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) {
+	prov, err := s.store.GetProvider(providerID)
+	if err != nil {
+		return nil, err
+	}
+
+	upstreamKey, err := s.ResolveProviderKey(prov.ID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve provider key: %w", err)
+	}
+
+	start := time.Now()
+	req, err := http.NewRequest("GET", prov.BaseURL+"/v1/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+upstreamKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	latencyMs := int(time.Since(start).Milliseconds())
+	if err != nil {
+		return nil, fmt.Errorf("HTTP error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
+	}
+
+	// Parse OpenAI-style model list
+	var modelsResp struct {
+		Data []struct {
+			ID           string `json:"id"`
+			OwnedBy      string `json:"owned_by"`
+			ContextWindow int   `json:"context_window"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+
+	now := time.Now().UnixMilli()
+	models := make([]model.Model, len(modelsResp.Data))
+	for i, m := range modelsResp.Data {
+		models[i] = model.Model{
+			ProviderID:    prov.ID,
+			Name:          m.ID,
+			OwnedBy:       m.OwnedBy,
+			ContextWindow: m.ContextWindow,
+			Active:        true,
+			LatencyMs:     latencyMs, // initial latency from the fetch itself
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+	}
+
+	if err := s.store.UpsertModels(providerID, models); err != nil {
+		return nil, fmt.Errorf("service: upsert models: %w", err)
+	}
+
+	return s.store.ListModels(providerID)
+}
+
+// TestModelLatency measures the API latency for a single model by querying the
+// provider's /v1/models endpoint and records the result in the database.
+func (s *Service) TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error) {
+	models, err := s.FetchUpstreamModels(providerID)
+	if err != nil {
+		return &model.ModelTestResult{OK: false, Error: err.Error()}, nil
+	}
+
+	found := false
+	latencyMs := 0
+	for _, m := range models {
+		if m.Name == modelName {
+			found = true
+			latencyMs = m.LatencyMs
+			break
+		}
+	}
+	if !found {
+		return &model.ModelTestResult{OK: false, Error: "model not found in upstream list"}, nil
+	}
+
+	if err := s.store.UpdateModelLatency(providerID, modelName, latencyMs); err != nil {
+		return nil, fmt.Errorf("service: update model latency: %w", err)
+	}
+
+	return &model.ModelTestResult{OK: true, LatencyMs: latencyMs}, nil
 }
 
 // TestAllProviders tests every provider concurrently and returns results.

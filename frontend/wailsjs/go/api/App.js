@@ -30,6 +30,10 @@ export function ExportData(arg1) {
   return window['go']['api']['App']['ExportData'](arg1);
 }
 
+export function FetchUpstreamModels(arg1) {
+  return window['go']['api']['App']['FetchUpstreamModels'](arg1);
+}
+
 export function GetDashboard() {
   return window['go']['api']['App']['GetDashboard']();
 }
@@ -94,8 +98,16 @@ export function SaveSettings(arg1) {
   return window['go']['api']['App']['SaveSettings'](arg1);
 }
 
+export function SetModelsActive(arg1, arg2, arg3) {
+  return window['go']['api']['App']['SetModelsActive'](arg1, arg2, arg3);
+}
+
 export function TestAllProviders() {
   return window['go']['api']['App']['TestAllProviders']();
+}
+
+export function TestModelLatency(arg1, arg2) {
+  return window['go']['api']['App']['TestModelLatency'](arg1, arg2);
 }
 
 export function TestProvider(arg1) {

@@ -165,6 +165,15 @@ ALTER TABLE api_keys DROP COLUMN monthly_tokens;
 DROP TABLE IF EXISTS master_password;
 `,
 	},
+	{
+		ID: "005_model_enrichment",
+		SQL: `
+ALTER TABLE models ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE models ADD COLUMN owned_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE models ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE models ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // migrate applies all pending migrations in a single transaction.

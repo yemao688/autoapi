@@ -33,6 +33,10 @@ const saving = ref(false)
 const testingIds = ref<Set<string>>(new Set())
 const openMenuId = ref('')
 
+const models = ref<model.Model[]>([])
+const testingModelIds = ref<Set<string>>(new Set())
+const fetchingModels = ref(false)
+
 const form = ref<model.ProviderInput>({
   name: '',
   base_url: '',
@@ -130,6 +134,52 @@ async function testAll() {
   await refresh()
 }
 
+function formatContext(n: number): string {
+  if (!n) return '—'
+  if (n >= 1000) return `${Math.round(n / 1000)}K`
+  return String(n)
+}
+
+async function fetchModels() {
+  if (!editingId.value) return
+  fetchingModels.value = true
+  try {
+    models.value = await api.fetchUpstreamModels(editingId.value)
+  } catch (e: any) {
+    toast.push(e?.message || String(e), 'error')
+  } finally {
+    fetchingModels.value = false
+  }
+}
+
+async function toggleModelActive(m: model.Model) {
+  if (!editingId.value) return
+  try {
+    await api.setModelsActive(editingId.value, [m.name], !m.active)
+    m.active = !m.active
+  } catch (e: any) {
+    toast.push(e?.message || String(e), 'error')
+  }
+}
+
+async function testModelLatency(m: model.Model) {
+  if (!editingId.value) return
+  testingModelIds.value.add(m.id)
+  try {
+    const result = await api.testModelLatency(editingId.value, m.name)
+    if (result.ok) {
+      m.latency_ms = result.latency_ms
+      toast.push(`${m.name} 延迟 ${result.latency_ms} ms`, 'success')
+    } else {
+      toast.push(result.error || '测试失败', 'error')
+    }
+  } catch (e: any) {
+    toast.push(e?.message || String(e), 'error')
+  } finally {
+    testingModelIds.value.delete(m.id)
+  }
+}
+
 function openAdd(isCustom: boolean) {
   modalMode.value = 'add'
   editingId.value = ''
@@ -146,7 +196,9 @@ function openEdit(provider: model.Provider) {
     upstream_key: '',
     is_custom: provider.is_custom,
   }
+  models.value = []
   modalOpen.value = true
+  void api.listModels(provider.id).then((list) => { models.value = list }).catch(() => { models.value = [] })
 }
 
 async function saveProvider() {
@@ -169,6 +221,9 @@ async function saveProvider() {
 
 function closeModal() {
   modalOpen.value = false
+  models.value = []
+  testingModelIds.value.clear()
+  fetchingModels.value = false
 }
 
 async function deleteProvider(id: string) {
@@ -322,9 +377,9 @@ onMounted(() => {
                   <button class="btn btn-icon" title="更多" @click="openMenuId = openMenuId === provider.id ? '' : provider.id">
                     <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                   </button>
-                  <div v-if="openMenuId === provider.id" class="dropdown-menu" style="position: absolute; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: var(--shadow-md); z-index: 10; min-width: 120px;">
-                    <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--fg); cursor: pointer;" @click="openEdit(provider); openMenuId = ''">编辑</button>
-                    <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--negative); cursor: pointer;" @click="deleteProvider(provider.id)">删除</button>
+                  <div v-if="openMenuId === provider.id" class="dropdown-menu">
+                    <button class="dropdown-item" @click="openEdit(provider); openMenuId = ''">编辑</button>
+                    <button class="dropdown-item danger" @click="deleteProvider(provider.id)">删除</button>
                   </div>
                 </div>
               </div>
@@ -348,7 +403,7 @@ onMounted(() => {
   <!-- Provider modal -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
-      <div class="modal-card">
+      <div class="modal-card wide">
         <div class="modal-title">{{ modalMode === 'edit' ? '编辑 Provider' : (form.is_custom ? '添加自定义 Provider' : '添加 Provider') }}</div>
         <div class="field">
           <label class="field-label">名称</label>
@@ -375,6 +430,56 @@ onMounted(() => {
             </label>
           </div>
         </div>
+
+        <div v-if="modalMode === 'edit'" class="field">
+          <div class="row-between" style="margin-bottom: 8px;">
+            <label class="field-label">模型</label>
+            <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" :disabled="fetchingModels" @click="fetchModels">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+              {{ fetchingModels ? '获取中…' : '获取上游模型' }}
+            </button>
+          </div>
+          <div class="model-list">
+            <div v-if="fetchingModels" class="model-empty">获取上游模型列表…</div>
+            <div v-else-if="!models.length" class="model-empty">暂无模型，点击右上角获取</div>
+            <table v-else class="model-table">
+              <thead>
+                <tr>
+                  <th>模型</th>
+                  <th class="right">上下文</th>
+                  <th class="right">延迟</th>
+                  <th class="right">启用</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="m in models" :key="m.id">
+                  <td>
+                    <div class="model-name">{{ m.name }}</div>
+                    <div class="model-owner">{{ (providers || []).find((p) => p.id === editingId)?.name }}</div>
+                  </td>
+                  <td class="num">{{ formatContext(m.context_window) }}</td>
+                  <td class="num">
+                    <span v-if="m.latency_ms">{{ m.latency_ms }} ms</span>
+                    <span v-else class="text-muted">—</span>
+                  </td>
+                  <td class="right">
+                    <label class="toggle">
+                      <input type="checkbox" :checked="m.active" @change="toggleModelActive(m)">
+                      <span class="toggle-slider blue"></span>
+                    </label>
+                  </td>
+                  <td class="right">
+                    <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" title="测试延迟" @click="testModelLatency(m)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">取消</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? '保存中…' : '保存' }}</button>

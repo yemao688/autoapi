@@ -348,6 +348,10 @@ export namespace model {
 	    provider_id: string;
 	    name: string;
 	    context_window: number;
+	    owned_by: string;
+	    active: boolean;
+	    latency_ms: number;
+	    updated_at: number;
 	    created_at: number;
 	
 	    static createFrom(source: any = {}) {
@@ -360,6 +364,10 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.name = source["name"];
 	        this.context_window = source["context_window"];
+	        this.owned_by = source["owned_by"];
+	        this.active = source["active"];
+	        this.latency_ms = source["latency_ms"];
+	        this.updated_at = source["updated_at"];
 	        this.created_at = source["created_at"];
 	    }
 	}
@@ -381,6 +389,22 @@ export namespace model {
 	        this.requests = source["requests"];
 	        this.tokens = source["tokens"];
 	        this.cost = source["cost"];
+	    }
+	}
+	export class ModelTestResult {
+	    ok: boolean;
+	    latency_ms: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.latency_ms = source["latency_ms"];
+	        this.error = source["error"];
 	    }
 	}
 	

@@ -14,12 +14,12 @@ func (s *Store) ListModels(providerID string) ([]model.Model, error) {
 	var err error
 	if providerID == "" {
 		rows, err = s.db.Query(`
-			SELECT id, provider_id, name, context_window, created_at
-			FROM models ORDER BY name ASC`)
+			SELECT id, provider_id, name, context_window, owned_by, active, latency_ms, updated_at, created_at
+			FROM models ORDER BY active DESC, name ASC`)
 	} else {
 		rows, err = s.db.Query(`
-			SELECT id, provider_id, name, context_window, created_at
-			FROM models WHERE provider_id = ? ORDER BY name ASC`, providerID)
+			SELECT id, provider_id, name, context_window, owned_by, active, latency_ms, updated_at, created_at
+			FROM models WHERE provider_id = ? ORDER BY active DESC, name ASC`, providerID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: list models: %w", err)
@@ -29,13 +29,32 @@ func (s *Store) ListModels(providerID string) ([]model.Model, error) {
 	var out []model.Model
 	for rows.Next() {
 		var m model.Model
-		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Name, &m.ContextWindow, &m.CreatedAt); err != nil {
+		var activeInt int
+		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Name, &m.ContextWindow, &m.OwnedBy, &activeInt, &m.LatencyMs, &m.UpdatedAt, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("store: scan model: %w", err)
 		}
+		m.Active = activeInt != 0
 		out = append(out, m)
 	}
 	if out == nil {
 		out = []model.Model{}
 	}
 	return out, rows.Err()
+}
+
+// GetModel returns a single model by provider ID and model name.
+func (s *Store) GetModel(providerID, name string) (*model.Model, error) {
+	row := s.db.QueryRow(`
+		SELECT id, provider_id, name, context_window, owned_by, active, latency_ms, updated_at, created_at
+		FROM models WHERE provider_id = ? AND name = ?`, providerID, name)
+	var m model.Model
+	var activeInt int
+	if err := row.Scan(&m.ID, &m.ProviderID, &m.Name, &m.ContextWindow, &m.OwnedBy, &activeInt, &m.LatencyMs, &m.UpdatedAt, &m.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("store: get model %q for provider %q: %w", name, providerID, ErrNotFound)
+		}
+		return nil, fmt.Errorf("store: get model %q for provider %q: %w", name, providerID, err)
+	}
+	m.Active = activeInt != 0
+	return &m, nil
 }

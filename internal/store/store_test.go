@@ -127,7 +127,7 @@ func TestModels(t *testing.T) {
 
 	p, _ := s.CreateProvider(model.ProviderInput{Name: "M", BaseURL: "https://m.example.com"})
 
-	if err := s.UpsertModels(p.ID, []string{"model-a", "model-b"}); err != nil {
+	if err := s.UpsertModels(p.ID, []model.Model{{Name: "model-a"}, {Name: "model-b"}}); err != nil {
 		t.Fatalf("UpsertModels: %v", err)
 	}
 
@@ -139,13 +139,13 @@ func TestModels(t *testing.T) {
 		t.Fatalf("expected 2 models, got %d", len(models))
 	}
 
-	// Upsert again (should replace)
-	if err := s.UpsertModels(p.ID, []string{"model-c"}); err != nil {
+	// Upsert again (should preserve count, new models added, existing active preserved)
+	if err := s.UpsertModels(p.ID, []model.Model{{Name: "model-c"}}); err != nil {
 		t.Fatalf("UpsertModels (2): %v", err)
 	}
 	models, _ = s.ListModels(p.ID)
-	if len(models) != 1 || models[0].Name != "model-c" {
-		t.Fatalf("expected 1 model 'model-c', got %+v", models)
+	if len(models) != 3 {
+		t.Fatalf("expected 3 models, got %d", len(models))
 	}
 }
 

@@ -273,10 +273,10 @@ onMounted(() => {
                 <button class="btn btn-icon" @click="openMenuId = openMenuId === route.id ? '' : route.id">
                   <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                 </button>
-                <div v-if="openMenuId === route.id" class="dropdown-menu" style="position: absolute; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: var(--shadow-md); z-index: 10; min-width: 120px;">
-                  <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--fg); cursor: pointer;" @click="openEdit(route); openMenuId = ''">编辑</button>
-                  <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--fg); cursor: pointer;" @click="toggleRoute(route); openMenuId = ''">{{ route.enabled ? '禁用' : '启用' }}</button>
-                  <button class="dropdown-item" style="display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; background: transparent; border: none; color: var(--negative); cursor: pointer;" @click="deleteRoute(route.id)">删除</button>
+                <div v-if="openMenuId === route.id" class="dropdown-menu">
+                  <button class="dropdown-item" @click="openEdit(route); openMenuId = ''">编辑</button>
+                  <button class="dropdown-item" @click="toggleRoute(route); openMenuId = ''">{{ route.enabled ? '禁用' : '启用' }}</button>
+                  <button class="dropdown-item danger" @click="deleteRoute(route.id)">删除</button>
                 </div>
               </div>
             </div>
