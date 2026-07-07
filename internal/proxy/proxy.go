@@ -26,12 +26,16 @@ import (
 	"time"
 
 	"autoapi/internal/model"
-	"autoapi/internal/service"
 	"autoapi/internal/store"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+// keyResolver is the subset of *service.Service the proxy uses.
+type keyResolver interface {
+	ResolveAPIKey(keyID string) (string, error)
+}
 
 // storeProxy is the subset of *store.Store methods the proxy needs. Passing
 // the concrete store keeps the package dependency explicit while still making
@@ -47,13 +51,14 @@ type storeProxy interface {
 	ListModels(providerID string) ([]model.Model, error)
 	GetSettings() (*model.Settings, error)
 	Dashboard() (*model.DashboardData, error)
+	UpdateProviderHealth(id string, status model.ProviderStatus, errorMessage string) error
 }
 
 // Proxy implements api.ProxyService. It owns the chi router and the underlying
 // http.Server. The zero value is not ready for use; call New.
 type Proxy struct {
 	store            storeProxy
-	service          *service.Service
+	service          keyResolver
 	settingsProvider func() *model.Settings
 
 	mu       sync.RWMutex
@@ -64,12 +69,15 @@ type Proxy struct {
 	bufferPool    *bufferPool
 	errorLog      *log.Logger
 	activeConns   atomic.Int32
+
+	breakersMu sync.RWMutex
+	breakers   map[string]*CircuitBreaker
 }
 
 // New creates a Proxy. The settingsProvider is called on Start/Restart to read
 // the current port/bind configuration. Pass a concrete *store.Store as the
 // store argument.
-func New(store storeProxy, service *service.Service, settingsProvider func() *model.Settings) *Proxy {
+func New(store storeProxy, service keyResolver, settingsProvider func() *model.Settings) *Proxy {
 	p := &Proxy{
 		store:            store,
 		service:          service,
@@ -79,6 +87,7 @@ func New(store storeProxy, service *service.Service, settingsProvider func() *mo
 		}},
 		// Route httputil.ReverseProxy error logging through slog.
 		errorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
+		breakers: make(map[string]*CircuitBreaker),
 	}
 	p.router = p.setupRouter()
 	return p
@@ -309,124 +318,232 @@ func (p *Proxy) logRequestEntry(log *model.RequestLog) {
 	}
 }
 
-// resolveTarget selects a provider/model using the route matcher or falls back
-// to the configured default provider.
-func (p *Proxy) resolveTarget(req *InboundRequest) (*model.Provider, string, string, string, error) {
+// resolveCandidates selects one or more provider/model candidates using the
+// route matcher, filtering out providers with an open circuit breaker.
+func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	routes := p.loadRoutes()
-	if route, matched := selectRoute(req, routes); matched {
-		for _, t := range route.Targets {
-			if t.Action == model.RouteActionForward {
-				provider, err := p.store.GetProvider(t.ProviderID)
-				if err != nil {
-					return nil, "", "", "", fmt.Errorf("matched provider not found")
-				}
-				return provider, t.ModelName, route.ID, route.Name, nil
-			}
-		}
-	}
+	defaultProviderID := p.currentSettings().Routing.DefaultProviderID
 
-	s := p.currentSettings()
-	if s.Routing.DefaultProviderID == "" || s.Routing.DefaultModel == "" {
-		return nil, "", "", "", fmt.Errorf("no route matched and no default provider configured")
+	// Snapshot the breaker map to avoid racing with breakerFor writes.
+	p.breakersMu.RLock()
+	breakers := make(map[string]*CircuitBreaker, len(p.breakers))
+	for k, v := range p.breakers {
+		breakers[k] = v
 	}
-	provider, err := p.store.GetProvider(s.Routing.DefaultProviderID)
-	if err != nil {
-		return nil, "", "", "", fmt.Errorf("default provider not found")
-	}
-	return provider, s.Routing.DefaultModel, "", "", nil
+	p.breakersMu.RUnlock()
+
+	return selectCandidates(req, routes, defaultProviderID, breakers, p.store.GetProvider)
 }
 
-// doForward builds a ReverseProxy for the upstream, rewrites the Authorization
-// header to the provider key, captures the response body for usage parsing, and
-// updates the log entry. For SSE streaming, the body is buffered in full before
-// being released to the client (acceptable v1 trade-off; see handlers comments).
-func (p *Proxy) doForward(w http.ResponseWriter, r *http.Request, upstreamURL *url.URL, upstreamKey, routeID string, isStream bool, inputEstimate int, logEntry *model.RequestLog) {
-	proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
-	if isStream {
-		proxy.FlushInterval = -1
+// breakerFor returns the circuit breaker for a provider, creating one if needed.
+func (p *Proxy) breakerFor(providerID string) *CircuitBreaker {
+	p.breakersMu.Lock()
+	defer p.breakersMu.Unlock()
+	if p.breakers == nil {
+		p.breakers = make(map[string]*CircuitBreaker)
 	}
-	proxy.BufferPool = p.bufferPool
-	proxy.ErrorLog = p.errorLog
+	if cb, ok := p.breakers[providerID]; ok {
+		return cb
+	}
+	cb := NewCircuitBreaker()
+	p.breakers[providerID] = cb
+	return cb
+}
 
-	oldDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		oldDirector(req)
-		req.Header.Del("Authorization")
-		req.Header.Set("Authorization", "Bearer "+upstreamKey)
-		req.Header.Set("X-Autoapi-Route", routeID)
-		if req.Header.Get("Content-Type") == "" {
-			req.Header.Set("Content-Type", "application/json")
+// forwardWithFailover tries each candidate in order. It buffers each upstream
+// response in memory and only copies a successful response to the real
+// ResponseWriter, guaranteeing the client never sees a failed provider's output.
+func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body []byte, candidates []candidate, isStream bool, inputEstimate int, logEntry *model.RequestLog) {
+	var lastErr error
+	var lastStatus int
+
+	for _, c := range candidates {
+		if !p.breakerFor(c.provider.ID).Allow() {
+			slog.Debug("proxy: candidate circuit open", "provider", c.provider.Name, "model", c.modelName)
+			continue
 		}
-	}
 
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		body, err := io.ReadAll(resp.Body)
+		upstreamKey, err := p.service.ResolveAPIKey(c.provider.APIKeyID)
 		if err != nil {
-			return err
+			lastErr = fmt.Errorf("resolve key for %s: %w", c.provider.Name, err)
+			slog.Debug("proxy: candidate key resolution failed", "provider", c.provider.Name, "err", lastErr)
+			continue
 		}
-		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(body))
 
+		rewrittenBody, err := rewriteBodyModel(body, c.modelName)
+		if err != nil {
+			lastErr = fmt.Errorf("rewrite body for %s: %w", c.provider.Name, err)
+			slog.Debug("proxy: candidate body rewrite failed", "provider", c.provider.Name, "err", lastErr)
+			continue
+		}
+
+		upstreamURL, err := url.Parse(strings.TrimSuffix(c.provider.BaseURL, "/") + r.URL.Path)
+		if err != nil {
+			lastErr = fmt.Errorf("invalid base URL for %s: %w", c.provider.Name, err)
+			slog.Debug("proxy: candidate URL invalid", "provider", c.provider.Name, "err", lastErr)
+			continue
+		}
+
+		attemptReq := r.Clone(r.Context())
+		attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
+		attemptReq.ContentLength = int64(len(rewrittenBody))
+		attemptReq.Header.Del("Transfer-Encoding")
+		if attemptReq.Header.Get("Content-Type") == "" {
+			attemptReq.Header.Set("Content-Type", "application/json")
+		}
+		attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
+
+		proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
 		if isStream {
-			it, ot := parseStreamUsage(body)
-			if it > 0 || ot > 0 {
-				logEntry.InputTokens, logEntry.OutputTokens = it, ot
-			} else {
-				logEntry.InputTokens = inputEstimate
-				logEntry.OutputTokens = len(body) / 4
-			}
-		} else {
-			it, ot := parseJSONUsage(body)
-			if it > 0 || ot > 0 {
-				logEntry.InputTokens, logEntry.OutputTokens = it, ot
-			} else {
-				logEntry.InputTokens = inputEstimate
-				logEntry.OutputTokens = len(body) / 4
+			proxy.FlushInterval = -1
+		}
+		proxy.BufferPool = p.bufferPool
+		proxy.ErrorLog = p.errorLog
+
+		oldDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			oldDirector(req)
+			req.Header.Del("Authorization")
+			req.Header.Set("Authorization", "Bearer "+upstreamKey)
+			req.Header.Set("X-Autoapi-Route", c.routeID)
+			if req.Header.Get("Content-Type") == "" {
+				req.Header.Set("Content-Type", "application/json")
 			}
 		}
-		return nil
+
+		buf := &responseBuffer{statusCode: http.StatusOK, header: make(http.Header), body: bytes.NewBuffer(nil)}
+		var attemptErr error
+
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+			if isStream {
+				it, ot := parseStreamUsage(respBody)
+				if it > 0 || ot > 0 {
+					logEntry.InputTokens, logEntry.OutputTokens = it, ot
+				} else {
+					logEntry.InputTokens = inputEstimate
+					logEntry.OutputTokens = len(respBody) / 4
+				}
+			} else {
+				it, ot := parseJSONUsage(respBody)
+				if it > 0 || ot > 0 {
+					logEntry.InputTokens, logEntry.OutputTokens = it, ot
+				} else {
+					logEntry.InputTokens = inputEstimate
+					logEntry.OutputTokens = len(respBody) / 4
+				}
+			}
+			return nil
+		}
+
+		proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
+			attemptErr = err
+		}
+
+		proxy.ServeHTTP(buf, attemptReq)
+
+		cat := CategorizeError(attemptErr, buf.statusCode)
+		slog.Debug("proxy: candidate attempt",
+			"provider", c.provider.Name,
+			"model", c.modelName,
+			"category", cat,
+			"status", buf.statusCode,
+			"err", attemptErr)
+
+		if attemptErr == nil && buf.statusCode < 400 {
+			copyBufferedResponse(w, buf)
+			logEntry.StatusCode = buf.statusCode
+			logEntry.ProviderID = c.provider.ID
+			logEntry.ProviderName = c.provider.Name
+			logEntry.Model = c.modelName
+			logEntry.RouteID = c.routeID
+			logEntry.RouteLabel = c.routeLabel
+			p.breakerFor(c.provider.ID).Record(true)
+			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusConnected, ""); err != nil {
+				slog.Error("proxy: update provider health", "err", err)
+			}
+			return
+		}
+
+		lastErr = attemptErr
+		if lastErr == nil {
+			lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, buf.statusCode)
+		}
+		lastStatus = buf.statusCode
+
+		switch cat {
+		case CategoryClientAbort:
+			p.writeError(w, http.StatusBadRequest, "client_error", lastErr.Error())
+			logEntry.StatusCode = http.StatusBadRequest
+			logEntry.Error = lastErr.Error()
+			return
+		case CategoryNonRetryable:
+			p.writeError(w, buf.statusCode, "invalid_request_error", lastErr.Error())
+			logEntry.StatusCode = buf.statusCode
+			logEntry.Error = lastErr.Error()
+			return
+		case CategoryRetryable:
+			if isCircuitBreakerFailure(attemptErr, buf.statusCode) {
+				p.breakerFor(c.provider.ID).Record(false)
+				if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
+					slog.Error("proxy: update provider health", "err", err)
+				}
+			}
+		}
 	}
 
-	sr := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		slog.Error("proxy: upstream error", "err", err)
-		p.writeError(w, http.StatusBadGateway, "upstream_error", "Upstream error: "+err.Error())
-		logEntry.Error = err.Error()
+	status := http.StatusBadGateway
+	if lastStatus >= 500 {
+		status = http.StatusServiceUnavailable
 	}
-
-	proxy.ServeHTTP(sr, r)
-	logEntry.StatusCode = sr.statusCode
+	p.writeError(w, status, "upstream_error", lastErr.Error())
+	logEntry.StatusCode = status
+	logEntry.Error = lastErr.Error()
 }
 
-// statusRecorder captures the written status code.
-type statusRecorder struct {
-	http.ResponseWriter
+// responseBuffer is an in-memory http.ResponseWriter used to capture a single
+// upstream attempt without writing anything to the client.
+type responseBuffer struct {
 	statusCode int
+	header     http.Header
+	body       *bytes.Buffer
 	wrote      bool
 }
 
-func (sr *statusRecorder) WriteHeader(code int) {
-	if sr.wrote {
-		return
+func (rb *responseBuffer) Header() http.Header { return rb.header }
+
+func (rb *responseBuffer) Write(p []byte) (int, error) {
+	if !rb.wrote {
+		rb.statusCode = http.StatusOK
+		rb.wrote = true
 	}
-	sr.statusCode = code
-	sr.wrote = true
-	sr.ResponseWriter.WriteHeader(code)
+	return rb.body.Write(p)
 }
 
-func (sr *statusRecorder) Write(p []byte) (int, error) {
-	if !sr.wrote {
-		sr.WriteHeader(http.StatusOK)
+func (rb *responseBuffer) WriteHeader(code int) {
+	if !rb.wrote {
+		rb.statusCode = code
+		rb.wrote = true
 	}
-	return sr.ResponseWriter.Write(p)
 }
 
-// Flush passes the flush through to the underlying ResponseWriter so that SSE
-// streaming works when ReverseProxy is configured with FlushInterval=-1.
-func (sr *statusRecorder) Flush() {
-	if f, ok := sr.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
+// Flush is a no-op because the response is fully buffered before copying.
+func (rb *responseBuffer) Flush() {}
+
+func copyBufferedResponse(w http.ResponseWriter, buf *responseBuffer) {
+	for k, vv := range buf.header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
 	}
+	w.WriteHeader(buf.statusCode)
+	_, _ = w.Write(buf.body.Bytes())
 }
 
 // bufferPool wraps sync.Pool to satisfy httputil.BufferPool.

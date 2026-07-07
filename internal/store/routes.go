@@ -212,8 +212,8 @@ func (s *Store) listConditions(routeID string) ([]model.RouteCondition, error) {
 
 func (s *Store) listTargets(routeID string) ([]model.RouteTarget, error) {
 	rows, err := s.db.Query(`
-		SELECT id, route_id, provider_id, model_name, action
-		FROM route_targets WHERE route_id = ?`, routeID)
+		SELECT id, route_id, provider_id, model_name, action, tier
+		FROM route_targets WHERE route_id = ? ORDER BY tier ASC`, routeID)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func (s *Store) listTargets(routeID string) ([]model.RouteTarget, error) {
 	var out []model.RouteTarget
 	for rows.Next() {
 		var t model.RouteTarget
-		if err := rows.Scan(&t.ID, &t.RouteID, &t.ProviderID, &t.ModelName, &t.Action); err != nil {
+		if err := rows.Scan(&t.ID, &t.RouteID, &t.ProviderID, &t.ModelName, &t.Action, &t.Tier); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -255,9 +255,9 @@ func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 		t.ID = makeID()
 		t.RouteID = routeID
 		if _, err := tx.Exec(`
-			INSERT INTO route_targets (id, route_id, provider_id, model_name, action)
-			VALUES (?, ?, ?, ?, ?)`,
-			t.ID, t.RouteID, t.ProviderID, t.ModelName, t.Action); err != nil {
+			INSERT INTO route_targets (id, route_id, provider_id, model_name, action, tier)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			t.ID, t.RouteID, t.ProviderID, t.ModelName, t.Action, t.Tier); err != nil {
 			return nil, err
 		}
 		out[i] = t

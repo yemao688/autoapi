@@ -471,6 +471,7 @@ export namespace model {
 	    provider_id: string;
 	    model_name: string;
 	    action: string;
+	    tier: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new RouteTarget(source);
@@ -483,6 +484,7 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.model_name = source["model_name"];
 	        this.action = source["action"];
+	        this.tier = source["tier"];
 	    }
 	}
 	export class RouteCondition {

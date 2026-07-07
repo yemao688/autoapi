@@ -7,13 +7,9 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"autoapi/internal/model"
@@ -85,7 +81,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		TimeHour:        time.Now().Hour(),
 	}
 
-	provider, targetModel, routeID, routeLabel, err := p.resolveTarget(inbound)
+	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
@@ -93,44 +89,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamKey, err := p.service.ResolveAPIKey(provider.APIKeyID)
-	if err != nil {
-		p.writeError(w, http.StatusServiceUnavailable, "upstream_error", "Failed to resolve provider API key")
-		logEntry.StatusCode = http.StatusServiceUnavailable
-		logEntry.Error = err.Error()
-		return
-	}
-
-	body, err = rewriteBodyModel(body, targetModel)
-	if err != nil {
-		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to rewrite request body")
-		logEntry.StatusCode = http.StatusInternalServerError
-		logEntry.Error = err.Error()
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-	r.Header.Del("Transfer-Encoding")
-	if r.Header.Get("Content-Type") == "" {
-		r.Header.Set("Content-Type", "application/json")
-	}
-	r.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-
-	upstreamURL, err := url.Parse(strings.TrimSuffix(provider.BaseURL, "/") + "/v1/chat/completions")
-	if err != nil {
-		p.writeError(w, http.StatusInternalServerError, "internal_error", "Invalid provider base URL")
-		logEntry.StatusCode = http.StatusInternalServerError
-		logEntry.Error = err.Error()
-		return
-	}
-
-	logEntry.ProviderID = provider.ID
-	logEntry.ProviderName = provider.Name
-	logEntry.Model = targetModel
-	logEntry.RouteID = routeID
-	logEntry.RouteLabel = routeLabel
-
-	p.doForward(w, r, upstreamURL, upstreamKey, routeID, chatReq.Stream, inbound.EstimatedTokens, logEntry)
+	p.forwardWithFailover(w, r, body, candidates, chatReq.Stream, inbound.EstimatedTokens, logEntry)
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
@@ -178,7 +137,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		TimeHour:        time.Now().Hour(),
 	}
 
-	provider, targetModel, routeID, routeLabel, err := p.resolveTarget(inbound)
+	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
@@ -186,44 +145,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamKey, err := p.service.ResolveAPIKey(provider.APIKeyID)
-	if err != nil {
-		p.writeError(w, http.StatusServiceUnavailable, "upstream_error", "Failed to resolve provider API key")
-		logEntry.StatusCode = http.StatusServiceUnavailable
-		logEntry.Error = err.Error()
-		return
-	}
-
-	body, err = rewriteBodyModel(body, targetModel)
-	if err != nil {
-		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to rewrite request body")
-		logEntry.StatusCode = http.StatusInternalServerError
-		logEntry.Error = err.Error()
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-	r.Header.Del("Transfer-Encoding")
-	if r.Header.Get("Content-Type") == "" {
-		r.Header.Set("Content-Type", "application/json")
-	}
-	r.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-
-	upstreamURL, err := url.Parse(strings.TrimSuffix(provider.BaseURL, "/") + "/v1/embeddings")
-	if err != nil {
-		p.writeError(w, http.StatusInternalServerError, "internal_error", "Invalid provider base URL")
-		logEntry.StatusCode = http.StatusInternalServerError
-		logEntry.Error = err.Error()
-		return
-	}
-
-	logEntry.ProviderID = provider.ID
-	logEntry.ProviderName = provider.Name
-	logEntry.Model = targetModel
-	logEntry.RouteID = routeID
-	logEntry.RouteLabel = routeLabel
-
-	p.doForward(w, r, upstreamURL, upstreamKey, routeID, false, inbound.EstimatedTokens, logEntry)
+	p.forwardWithFailover(w, r, body, candidates, false, inbound.EstimatedTokens, logEntry)
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
