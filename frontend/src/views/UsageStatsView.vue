@@ -31,9 +31,18 @@ const logPage = ref(1)
 const logPageSize = ref(50)
 const logTotal = ref(0)
 
-const providerOptions = computed(() => {
-  const names = (usageData.value?.providers || []).map((p) => p.provider_name)
-  return ['全部', ...Array.from(new Set(names))]
+interface ProviderOption {
+  name: string
+  id: string
+}
+
+const providerOptions = computed<ProviderOption[]>(() => {
+  const list = usageData.value?.providers || []
+  return [{ name: '全部', id: '' }, ...list.map(p => ({ name: p.provider_name, id: p.provider_id }))]
+})
+const selectedProviderId = computed(() => {
+  const found = providerOptions.value.find(o => o.name === providerFilter.value)
+  return found?.id ?? ''
 })
 
 const tokenStats = computed(() => (usageData.value?.token_stats || []).slice(0, 4))
@@ -100,7 +109,7 @@ function dateRange(): { start_date: number; end_date: number } {
 async function queryLogs() {
   if (gateState.value !== 'ready') return
   const { start_date, end_date } = dateRange()
-  const provider = providerFilter.value === '全部' ? '' : providerFilter.value
+  const provider = selectedProviderId.value
   const status = statusMap[statusFilter.value] || ''
   try {
     const result = await api.queryLogs({
@@ -310,7 +319,7 @@ watch([providerFilter, statusFilter], () => {
       本月
     </button>
     <select v-model="providerFilter" class="select" style="width: auto; padding: 5px 10px; font-size: 12.5px;" aria-label="按 Provider 筛选">
-      <option v-for="opt in providerOptions" :key="opt" :value="opt">Provider · {{ opt }}</option>
+      <option v-for="opt in providerOptions" :key="opt.id" :value="opt.name">Provider · {{ opt.name }}</option>
     </select>
     <select v-if="activePane === 'logs'" v-model="statusFilter" class="select" style="width: auto; padding: 5px 10px; font-size: 12.5px;" aria-label="按状态筛选">
       <option>全部</option>

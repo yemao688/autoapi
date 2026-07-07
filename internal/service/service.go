@@ -261,7 +261,7 @@ func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, er
 	}
 
 	// Get decrypted API key
-	apiKey, err := s.resolveAPIKey(prov.APIKeyID)
+	apiKey, err := s.ResolveAPIKey(prov.APIKeyID)
 	if err != nil {
 		return &model.ProviderTestResult{
 			OK:    false,
@@ -371,9 +371,11 @@ func (s *Service) testFailResult(msg string) *model.ProviderTestResult {
 	return &model.ProviderTestResult{OK: false, Error: msg}
 }
 
-// resolveAPIKey retrieves and decrypts an API key by ID.
-// Returns the cleartext key string.
-func (s *Service) resolveAPIKey(keyID string) (string, error) {
+// ResolveAPIKey retrieves and decrypts an API key by ID. It is exported so the
+// proxy package (Phase 4) can fetch the cleartext key for forwarding requests.
+// Returns the cleartext key string, or an empty string if the key ciphertext
+// is empty (e.g. dev fixtures).
+func (s *Service) ResolveAPIKey(keyID string) (string, error) {
 	if keyID == "" {
 		return "", fmt.Errorf("no API key associated")
 	}

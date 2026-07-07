@@ -233,7 +233,15 @@ P0 ──┬── P1a (签名+DTO+generate module, 顺序) ──┬── P1b/
   - B1: usage.go sortInts O(n²) → sort.Ints
   - B2: StoreService 去掉 plaintext 方法，App.CreateAPIKey 合成 Encrypt+Ciphertext
   - N1: writer.go 文档化 ErrQueueFull → caller 视为 drop 而非 fail
-- [ ] Phase 3 接口对接
+- [x] Phase 3 接口对接（commit `87bd885`）
+  - ProvidersView: providers/apiKeys/listModels/test/testAll/create/update + filters/search/sort
+  - ApiKeysView: apiKeys/providers/create/delete/export + stats/filter/search
+  - RoutesView: routes/providers/getRoute/create/update/delete + enabled toggle
+  - DashboardView: dashboard/proxyStatus polling + export
+  - UsageStatsView: usageStats/queryLogs/purge/export + filters/pagination/live sync
+  - SettingsView: get/save settings + exports + master password change modal
+  - Validation: `go build ./...` ✅ / `go test ./internal/...` ✅ / `go vet ./...` ✅ / `npm run build` ✅ / `wails dev` ✅
+- [ ] Oracle 评审 Phase 3
 - [ ] Phase 4 代理网关
 - [ ] Phase 5 系统集成
 - [ ] Phase 5.5 错误处理 + slog

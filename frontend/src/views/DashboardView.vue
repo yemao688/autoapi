@@ -34,7 +34,7 @@ const providerColors: Record<string, string> = {
 
 function providerColor(p: model.Provider): string {
   const key = p.name.toLowerCase()
-  return providerColors[key] || (p.status === 'ok' ? '#0071e3' : '#6e6e73')
+  return providerColors[key] || (p.status === 'connected' ? '#0071e3' : '#6e6e73')
 }
 
 function providerInitial(p: model.Provider): string {
@@ -233,8 +233,8 @@ watch(gateState, (s) => {
               <div class="list-main">
                 <div class="list-title">{{ p.name }}</div>
                 <div class="list-sub">
-                  <span v-if="p.status !== 'ok'" class="dot red" style="margin-right: 4px;"></span>
-                  {{ p.status === 'ok' ? `${p.models_count} 模型` : (p.error_message || '未连接') }}
+                   <span v-if="p.status !== 'connected'" class="dot red" style="margin-right: 4px;"></span>
+                   {{ p.status === 'connected' ? `${p.models_count} 模型` : (p.error_message || '未连接') }}
                 </div>
               </div>
               <div class="list-meta">{{ p.monthly_tokens ? formatNumber(p.monthly_tokens) : '—' }}</div>
