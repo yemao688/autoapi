@@ -199,10 +199,14 @@ func TestAPIKeyCRUD(t *testing.T) {
 		t.Fatalf("expected 0 keys after delete, got %d", len(keys))
 	}
 
-	// CreateAPIKey should return ErrCryptoRequired
-	_, err = s.CreateAPIKey(in)
-	if !errors.Is(err, ErrCryptoRequired) {
-		t.Fatalf("expected ErrCryptoRequired, got %v", err)
+	// The store no longer has a plaintext-taking CreateAPIKey — the App layer
+	// is responsible for encrypting first. Verify the ciphertext path works.
+	created, err := s.CreateAPIKeyCiphertext(in, []byte("ciphertext-bytes"), []byte("nonce-bytes"))
+	if err != nil {
+		t.Fatalf("CreateAPIKeyCiphertext: %v", err)
+	}
+	if created.KeyPrefix == "" || created.KeySuffix == "" {
+		t.Fatalf("expected prefix/suffix to be set, got %q / %q", created.KeyPrefix, created.KeySuffix)
 	}
 }
 

@@ -128,9 +128,8 @@ type rowScanner interface {
 // ---------------------------------------------------------------------------
 
 var (
-	ErrNotFound       = fmt.Errorf("store: not found")
-	ErrCryptoRequired = fmt.Errorf("store: crypto required — use CreateAPIKeyCiphertext")
-	ErrQueueFull      = fmt.Errorf("store: writer queue full")
+	ErrNotFound  = fmt.Errorf("store: not found")
+	ErrQueueFull = fmt.Errorf("store: writer queue full")
 )
 
 // ---------------------------------------------------------------------------

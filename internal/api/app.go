@@ -42,10 +42,13 @@ type StoreService interface {
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
 
-	// API keys
+	// API keys. The store is crypto-agnostic: it only ever sees ciphertext.
+	// The App-layer CreateAPIKey/UpdateAPIKey methods compose Service.Encrypt
+	// + Store.CreateAPIKeyCiphertext; there is no plaintext-taking store method.
 	ListAPIKeys() ([]model.ApiKey, error)
-	CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error)
-	UpdateAPIKey(id string, in model.ApiKeyInput) (*model.ApiKey, error)
+	CreateAPIKeyCiphertext(in model.ApiKeyInput, ciphertext, nonce []byte) (*model.ApiKey, error)
+	UpdateAPIKeyCiphertext(id string, in model.ApiKeyInput, ciphertext, nonce []byte) (*model.ApiKey, error)
+	GetAPIKeyCiphertext(id string) (ciphertext, nonce []byte, providerID string, err error)
 	DeleteAPIKey(id string) error
 
 	// Routes
@@ -81,6 +84,12 @@ type BusinessService interface {
 	HasMasterPassword() bool
 	Unlock(password string) error
 	IsUnlocked() bool
+
+	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
+	// api_keys table; Decrypt reverses it. The App layer uses these to compose
+	// crypto-aware key CRUD on top of the crypto-agnostic store.
+	Encrypt(plaintext []byte) (ciphertext, nonce []byte, err error)
+	Decrypt(ciphertext, nonce []byte) ([]byte, error)
 }
 
 // ProxyService controls the local OpenAI-compatible HTTP gateway.
@@ -202,18 +211,29 @@ func (a *App) ListAPIKeys() ([]model.ApiKey, error) {
 	return a.deps.Store.ListAPIKeys()
 }
 
+// CreateAPIKey composes Service.Encrypt + Store.CreateAPIKeyCiphertext.
+// The cleartext key never reaches the store layer.
 func (a *App) CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error) {
-	if a.deps.Store == nil {
+	if a.deps.Store == nil || a.deps.Service == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.CreateAPIKey(in)
+	ct, nonce, err := a.deps.Service.Encrypt([]byte(in.Key))
+	if err != nil {
+		return nil, err
+	}
+	return a.deps.Store.CreateAPIKeyCiphertext(in, ct, nonce)
 }
 
+// UpdateAPIKey composes Service.Encrypt + Store.UpdateAPIKeyCiphertext.
 func (a *App) UpdateAPIKey(id string, in model.ApiKeyInput) (*model.ApiKey, error) {
-	if a.deps.Store == nil {
+	if a.deps.Store == nil || a.deps.Service == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.UpdateAPIKey(id, in)
+	ct, nonce, err := a.deps.Service.Encrypt([]byte(in.Key))
+	if err != nil {
+		return nil, err
+	}
+	return a.deps.Store.UpdateAPIKeyCiphertext(id, in, ct, nonce)
 }
 
 func (a *App) DeleteAPIKey(id string) error {

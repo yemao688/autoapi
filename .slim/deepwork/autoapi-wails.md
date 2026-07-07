@@ -225,14 +225,32 @@ P0 ──┬── P1a (签名+DTO+generate module, 顺序) ──┬── P1b/
 - [x] 范围与架构决策
 - [x] Oracle 评审计划 → APPROVE-WITH-CHANGES（9 项修订已并入）
 - [x] Phase 0 脚手架（commit `9627b66`）— wails init vue-ts + 升级 Vue3.5/Vite8/TS6/vue-router4 + modernc/xdg/chi + entitlements + styles.css + `wails build` 通过
-- [x] Phase 1a 后端契约（commit `9627b66`）— `internal/model/model.go`(358 行全 DTO) + `internal/api/app.go`(30+ Bind 签名) + `wails generate module` → `frontend/wailsjs/go/api/App.{js,d.ts}` + `models.ts`
-- [ ] Phase 1b/c/d 后端实现（与 P2 并行）
-- [ ] Phase 2 前端骨架（与 P1 并行）
+- [x] Phase 0 脚手架（commit `9627b66`→`3aefe39`）
+- [x] Phase 1a 后端契约（commit `3aefe39`）
+- [x] Phase 1b/c/d 后端实现（commit `e6c670e`，fixer-1）— 17 文件，14 测试通过，wails dev 验证 fixtures seed 1480 条日志
+- [x] Phase 2 前端骨架（commit `e6c670e`，fixer-2）— 6 views + 2 components + 3 composables + typed client，npm build 通过
+- [ ] Oracle 评审 Phase 1+2
 - [ ] Phase 3 接口对接
 - [ ] Phase 4 代理网关
 - [ ] Phase 5 系统集成
 - [ ] Phase 5.5 错误处理 + slog
 - [ ] Phase 6 验证 + 打包
+
+## Phase 1b/c/d + 2 验证结果
+- `go build ./...` ✅ / `go test ./internal/...` ✅ (14 pass) / `go vet` ✅
+- `npm run build` ✅ (45 modules, 196KB JS / 22KB CSS)
+- `wails dev` ✅ Vite 5173 + Wails 34115 双服务起来，dev fixtures 自动 seed（1480 日志/30 天），app 打包自签名成功
+- 注：fixer-1 把 Writer 做成同步 Submit（非异步 channel），理由是测试需要写后立即可读；接受此决策
+- 注：fixer-1 用纯 Go crypto/rand 生成 UUID，避免显式引入 google/uuid；接受
+- 注：fixer-2 用 hash history（createWebHashHistory），因 vite dev 无 SPA fallback；接受，Phase 6 评估是否切 web history
+
+## fixer-1 设计决策记录（后续 oracle 评审点）
+- Writer.Submit 同步阻塞（非 buffered channel）— 牺牲批量写吞吐换简单+测试可靠
+- execTx() 所有 CRUD 走 Writer；读直通 *sql.DB
+- master_password 表单行 CHECK(id=1)，argon2id 双 pass（一个验密码一个派生 AES key）
+- CreateAPIKey 返回 ErrCryptoRequired，CreateAPIKeyCiphertext 接受密文（store 不碰 crypto）
+- fixtures 用 `initDev` 变量 + `init()` 替换模式绕过 build tag 调用点问题
+- 成本估算用硬编码 per-model 价格表，未知模型走默认价
 
 ## Phase 1a 交付的关键路径（给后续 fixer 用）
 - DTO: `internal/model/model.go` — Provider/Model/ApiKey/Route/RouteCondition/RouteTarget/RequestLog/Stat/TokenTrendPoint/ProviderShare/ModelRanking/DashboardData/ServiceHealth/UsageStats/Settings(7 子区)/Endpoint/ApiKeyInput/ProviderInput/RouteInput/LogQuery/ExportFormat/ProviderTestResult/ExportResult/ProxyStatus

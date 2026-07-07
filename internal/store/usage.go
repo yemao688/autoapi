@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"autoapi/internal/model"
@@ -246,12 +247,11 @@ func computeP95(values []int) int {
 	if len(values) == 0 {
 		return 0
 	}
-	// Simple sort-based percentile (adequate for in-memory aggregations)
-	// For large datasets, use a streaming percentile algorithm.
-	// This is fine for desktop usage with <100K rows.
+	// Sort-based 95th percentile. sort.Ints is O(n log n) — required because
+	// request-log slices can grow into the 100K+ range over months of use.
 	sorted := make([]int, len(values))
 	copy(sorted, values)
-	sortInts(sorted)
+	sort.Ints(sorted)
 	idx := int(math.Ceil(float64(len(sorted))*0.95) - 1)
 	if idx < 0 {
 		idx = 0
@@ -260,15 +260,6 @@ func computeP95(values []int) int {
 		idx = len(sorted) - 1
 	}
 	return sorted[idx]
-}
-
-func sortInts(a []int) {
-	// Simple insertion sort for small slices
-	for i := 1; i < len(a); i++ {
-		for j := i; j > 0 && a[j] < a[j-1]; j-- {
-			a[j], a[j-1] = a[j-1], a[j]
-		}
-	}
 }
 
 func deltaCostStr(current, previous float64) string {

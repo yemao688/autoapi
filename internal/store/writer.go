@@ -35,6 +35,14 @@ func NewWriter(db *sql.DB, cap int) *Writer {
 // Submit enqueues a write operation and blocks until it completes. fn runs
 // inside a transaction. Returns the error from fn, or an error from the
 // transaction lifecycle.
+//
+// Caller contract for non-critical writes (e.g. request_log persistence on the
+// proxy hot path): a Submit returning ErrQueueFull means the system is under
+// sustained write pressure. For non-critical writes, callers MUST treat this
+// as a drop, NOT as a request-failing error — losing one log entry is much
+// better than 503-ing a forwarded LLM call. The buffered channel (cap 1024)
+// absorbs typical bursts; ErrQueueFull should only surface under extreme
+// pressure or after process restart.
 func (w *Writer) Submit(fn func(tx *sql.Tx) error) error {
 	op := &writeOp{
 		fn:   fn,

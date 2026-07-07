@@ -40,44 +40,40 @@ func (s *Store) ListAPIKeys() ([]model.ApiKey, error) {
 	return out, rows.Err()
 }
 
-// CreateAPIKey returns ErrCryptoRequired — call CreateAPIKeyCiphertext instead.
-//
-// TODO(Phase 3): The api.App layer will call service.Encrypt then pass
-// ciphertext to CreateAPIKeyCiphertext. This method exists to satisfy the
-// api.StoreService interface in the interim.
-func (s *Store) CreateAPIKey(_ model.ApiKeyInput) (*model.ApiKey, error) {
-	return nil, ErrCryptoRequired
+// maskKey produces the prefix/suffix/masked fields shown in the UI.
+// Pure function — exported so the App layer can apply it before the
+// ciphertext reaches the store.
+func maskKey(plaintext string) (prefix, suffix, masked string) {
+	if len(plaintext) > 12 {
+		prefix = plaintext[:12]
+	} else {
+		prefix = plaintext
+	}
+	if len(plaintext) > 4 {
+		suffix = plaintext[len(plaintext)-4:]
+	} else {
+		suffix = plaintext
+	}
+	masked = prefix + "****" + suffix
+	return
 }
 
-// UpdateAPIKey returns ErrCryptoRequired — call UpdateAPIKeyCiphertext instead.
-//
-// TODO(Phase 3): Same rationale as CreateAPIKey.
-func (s *Store) UpdateAPIKey(_ string, _ model.ApiKeyInput) (*model.ApiKey, error) {
-	return nil, ErrCryptoRequired
-}
-
-// CreateAPIKeyCiphertext is the real insertion path: the caller (service layer)
-// has already encrypted the cleartext key; we store the opaque bytes.
+// CreateAPIKeyCiphertext is the real insertion path: the caller (App layer)
+// has already encrypted the cleartext key and computed the display mask; the
+// store persists only opaque bytes plus the pre-computed mask.
 func (s *Store) CreateAPIKeyCiphertext(in model.ApiKeyInput, ciphertext, nonce []byte) (*model.ApiKey, error) {
 	now := nowMs()
 	id := makeID()
 
-	keyPrefix := in.Key
-	if len(keyPrefix) > 12 {
-		keyPrefix = keyPrefix[:12]
-	}
-	keySuffix := in.Key
-	if len(keySuffix) > 4 {
-		keySuffix = keySuffix[len(keySuffix)-4:]
-	}
+	prefix, suffix, masked := maskKey(in.Key)
 
 	k := &model.ApiKey{
 		ID:          id,
 		ProviderID:  in.ProviderID,
 		Name:        in.Name,
-		KeyPrefix:   keyPrefix,
-		KeySuffix:   keySuffix,
-		KeyMasked:   keyPrefix + "****" + keySuffix,
+		KeyPrefix:   prefix,
+		KeySuffix:   suffix,
+		KeyMasked:   masked,
 		Permission:  in.Permission,
 		Environment: in.Environment,
 		ExpiresAt:   in.ExpiresAt,
@@ -110,14 +106,7 @@ func (s *Store) CreateAPIKeyCiphertext(in model.ApiKeyInput, ciphertext, nonce [
 func (s *Store) UpdateAPIKeyCiphertext(id string, in model.ApiKeyInput, ciphertext, nonce []byte) (*model.ApiKey, error) {
 	now := nowMs()
 
-	keyPrefix := in.Key
-	if len(keyPrefix) > 12 {
-		keyPrefix = keyPrefix[:12]
-	}
-	keySuffix := in.Key
-	if len(keySuffix) > 4 {
-		keySuffix = keySuffix[len(keySuffix)-4:]
-	}
+	prefix, suffix, _ := maskKey(in.Key)
 
 	if err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
@@ -125,7 +114,7 @@ func (s *Store) UpdateAPIKeyCiphertext(id string, in model.ApiKeyInput, cipherte
 			                    key_ciphertext=?, key_nonce=?,
 			                    permission=?, environment=?, expires_at=?, updated_at=?
 			WHERE id=?`,
-			nullString(in.ProviderID), in.Name, keyPrefix, keySuffix,
+			nullString(in.ProviderID), in.Name, prefix, suffix,
 			ciphertext, nonce,
 			in.Permission, in.Environment, in.ExpiresAt, now, id)
 		if err != nil {

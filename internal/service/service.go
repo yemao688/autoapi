@@ -135,7 +135,7 @@ func (s *Service) ChangeMasterPassword(old, new string) error {
 		newGCM, _ := cipher.NewGCM(newBlock)
 		newCT := newGCM.Seal(nil, newNonce, plaintext, nil)
 
-		// Update via internal method (bypasses the ErrCryptoRequired guard)
+		// Update via the ciphertext-aware store method.
 		in := model.ApiKeyInput{
 			ProviderID:  providerID,
 			Name:        k.Name,

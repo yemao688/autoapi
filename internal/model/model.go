@@ -298,12 +298,16 @@ type Endpoint struct {
 
 // ----- API key plaintext (write-only — never returned) -----
 
-// ApiKeyInput is the payload for creating/updating an API key. The cleartext
-// Key field is encrypted immediately and discarded.
+// ApiKeyInput is the payload for creating/updating an API key.
+//
+// Key carries the cleartext key — write-only. The frontend never logs it, and
+// the App layer encrypts it before reaching the store. After composition, the
+// store receives only the encrypted bytes and a pre-computed KeyMasked for
+// display; the cleartext Key is not stored.
 type ApiKeyInput struct {
 	ProviderID  string         `json:"provider_id"`
 	Name        string         `json:"name"`
-	Key         string         `json:"key"` // cleartext — write-only
+	Key         string         `json:"key"` // cleartext — write-only, never persisted
 	Permission  KeyPermission  `json:"permission"`
 	Environment KeyEnvironment `json:"environment"`
 	ExpiresAt   int64          `json:"expires_at"`
