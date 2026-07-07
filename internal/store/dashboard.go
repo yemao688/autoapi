@@ -41,15 +41,8 @@ func (s *Store) Dashboard() (*model.DashboardData, error) {
 		return nil, err
 	}
 
-	// Service health — placeholder; runtime metrics filled by proxy/phase 5
-	d.ServiceHealth = model.ServiceHealth{
-		Status:        "running",
-		UptimeSeconds: 0,
-		CPUPercent:    0,
-		MemoryMB:      0,
-		ProxyURL:      fmt.Sprintf("http://0.0.0.0:%d", s.getProxyPort()),
-	}
-	// TODO(Phase 5): populate runtime.MemStats, listener count, uptime
+	// ServiceHealth is intentionally left empty here; App.GetDashboard() fills it
+	// from Service.GetSystemHealth() to avoid two sources of truth.
 
 	return d, nil
 }

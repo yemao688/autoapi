@@ -20,6 +20,8 @@ import (
 
 	"autoapi/internal/model"
 	"autoapi/internal/store"
+
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // Service implements api.BusinessService.
@@ -96,6 +98,18 @@ func (s *Service) SetProxy(proxy ProxyRef) {
 //  System health
 // ---------------------------------------------------------------------------
 
+func cpuPercent() float64 {
+	p, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		return 0.0
+	}
+	percent, err := p.Percent(0)
+	if err != nil {
+		return 0.0
+	}
+	return percent
+}
+
 // GetSystemHealth returns live runtime + proxy metrics for the dashboard.
 func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
 	var ms runtime.MemStats
@@ -116,9 +130,9 @@ func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
 		Status:            status,
 		UptimeSeconds:     int64(time.Since(s.startedAt).Seconds()),
 		MemoryMB:          int(ms.Alloc / 1024 / 1024),
-		CPUPercent:        0.0, // TODO: CPU on macOS requires gopsutil; keep 0 for v1
+		CPUPercent:        cpuPercent(),
 		ActiveConnections: activeConns,
-		WebSocketCount:    0, // not implemented in v1
+		WebSocketCount:    0, // v1 does not expose WebSocket endpoints; hide this field in UI if desired
 		HTTPCount:         activeConns,
 		ProxyURL:          proxyURL,
 	}, nil

@@ -98,6 +98,7 @@ type ProxyService interface {
 	Start() error
 	Stop() error
 	IsRunning() bool
+	URL() string
 	// Restart rebinds the listener (called when the user changes port/bind in settings).
 	Restart() error
 }
@@ -429,7 +430,11 @@ func (a *App) GetProxyStatus() (ProxyStatus, error) {
 	if a.deps.Proxy == nil {
 		return ProxyStatus{Running: false}, nil
 	}
-	return ProxyStatus{Running: a.deps.Proxy.IsRunning()}, nil
+	url := ""
+	if a.deps.Proxy.IsRunning() {
+		url = a.deps.Proxy.URL()
+	}
+	return ProxyStatus{Running: a.deps.Proxy.IsRunning(), URL: url}, nil
 }
 
 // ProxyStatus is a tiny DTO for the dashboard "service running" indicator.
