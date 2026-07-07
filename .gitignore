@@ -1,0 +1,21 @@
+.omo
+.slim/deepwork/
+
+# build outputs
+build/bin/
+*.app/
+*.dmg
+*.exe
+*.dll
+*.so
+*.dylib
+
+# deps
+node_modules/
+
+# compiled root binary
+/autoapi
+
+# misc
+.DS_Store
+*.log

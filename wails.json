@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "autoapi",
+  "outputfilename": "autoapi",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "yemao688",
+    "email": "wanghaoxuan688@outlook.com"
+  },
+  "info": {
+    "productName": "Autoapi",
+    "productVersion": "0.4.2",
+    "copyright": "Copyright © 2026",
+    "comments": "AI 模型路由桌面应用"
+  }
+}
