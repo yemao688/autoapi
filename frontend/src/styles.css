@@ -90,8 +90,8 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-a { color: inherit; text-decoration: none; }
-button { font: inherit; cursor: pointer; }
+a { color: inherit; text-decoration: none; -webkit-tap-highlight-color: transparent; }
+button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 /* ============== WINDOW CHROME ============== */
 .window {
@@ -120,6 +120,7 @@ button { font: inherit; cursor: pointer; }
   -webkit-user-select: none;
   user-select: none;
   -webkit-app-region: drag;
+  --wails-draggable: drag;
   flex-shrink: 0;
   cursor: default;
 }
@@ -145,6 +146,7 @@ button { font: inherit; cursor: pointer; }
   color: var(--muted);
   -webkit-app-region: no-drag;
   app-region: no-drag;
+  --wails-draggable: no-drag;
   z-index: 2;
   cursor: default;
 }
@@ -172,6 +174,7 @@ button { font: inherit; cursor: pointer; }
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0;
 }
 
 @media (max-width: 960px), (orientation: portrait) {
@@ -188,10 +191,6 @@ button { font: inherit; cursor: pointer; }
   .main-header { padding: 0 16px; }
 }
 
-@media (max-width: 720px) {
-  .sidebar-footer { display: none; }
-}
-
 .sidebar {
   width: var(--sidebar-width);
   background: rgba(0, 0, 0, 0.025);
@@ -199,6 +198,7 @@ button { font: inherit; cursor: pointer; }
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  min-width: 0;
   padding: 14px 0 0;
 }
 
@@ -368,12 +368,6 @@ button { font: inherit; cursor: pointer; }
 .theme-preview.split .tp-side { display: none; }
 .theme-preview.split .tp-body { display: none; }
 
-.nav-item svg {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  stroke-width: 1.6;
-}
 
 .sidebar-footer {
   padding: 14px 16px;
@@ -1721,4 +1715,47 @@ html[data-theme="dark"] .model-table thead th {
 
 html[data-theme="dark"] .model-table tbody td {
   border-top-color: rgba(255, 255, 255, 0.05);
+}
+
+/* ============== STATUS BAR ============== */
+.statusbar {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+  background: rgba(0, 0, 0, 0.02);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.statusbar .status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.statusbar .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--positive);
+  box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.18);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.statusbar .status-url {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+html[data-theme="dark"] .statusbar {
+  background: rgba(255, 255, 255, 0.02);
+  border-top-color: rgba(255, 255, 255, 0.08);
 }

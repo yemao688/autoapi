@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
@@ -8,12 +8,9 @@ const route = useRoute()
 
 const { data: providers, execute: loadProviders } = useApi(api.providers)
 const { data: routes, execute: loadRoutes } = useApi(api.routes)
-const { data: health, execute: loadHealth } = useApi(api.systemHealth)
 
 const providerCount = computed(() => providers.value?.length ?? 0)
 const routeCount = computed(() => routes.value?.length ?? 0)
-const proxyURL = computed(() => health.value?.proxy_url || '')
-const proxyRunning = computed(() => health.value?.status === 'running')
 
 const navItems = computed(() => [
   { to: '/dashboard', label: '总览', icon: 'dashboard', badge: null as number | null },
@@ -34,7 +31,7 @@ function isActive(to: string): boolean {
 let timer: ReturnType<typeof setInterval> | null = null
 
 async function refresh() {
-  await Promise.all([loadProviders(), loadRoutes(), loadHealth()])
+  await Promise.all([loadProviders(), loadRoutes()])
 }
 
 onMounted(() => {
@@ -91,12 +88,5 @@ onUnmounted(() => {
         <span>{{ item.label }}</span>
       </RouterLink>
     </nav>
-    <div class="sidebar-footer">
-      <div class="status-row">
-        <span class="status-dot" :style="{ background: proxyRunning ? 'var(--positive)' : 'var(--negative)', boxShadow: proxyRunning ? '0 0 0 3px rgba(40, 167, 69, 0.18)' : '0 0 0 3px rgba(217, 48, 37, 0.18)' }"></span>
-        <span>{{ proxyRunning ? '服务运行中' : '服务已停止' }}</span>
-      </div>
-      <div>{{ proxyURL || '未启动' }} · v0.4.2</div>
-    </div>
   </aside>
 </template>
