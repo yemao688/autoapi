@@ -7,6 +7,7 @@ import { useProviderStyle } from '../composables/useProviderStyle'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
+import DropdownMenu from '@/components/DropdownMenu.vue'
 import type { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
@@ -32,8 +33,8 @@ const modalOpen = ref(false)
 const modalMode = ref<'add' | 'edit'>('add')
 const editingId = ref('')
 const saving = ref(false)
+const deleting = ref(false)
 const testingIds = ref<Set<string>>(new Set())
-const openMenuId = ref('')
 
 const models = ref<model.Model[]>([])
 const testingModelIds = ref<Set<string>>(new Set())
@@ -229,7 +230,6 @@ function closeModal() {
 }
 
 async function deleteProvider(id: string, name: string) {
-  openMenuId.value = ''
   const ok = await confirm.open({
     title: '删除 Provider',
     message: `确定删除 Provider「${name}」？该 Provider 下的所有模型与路由引用都将被清理，此操作不可撤销。`,
@@ -237,7 +237,7 @@ async function deleteProvider(id: string, name: string) {
     danger: true,
   })
   if (!ok) return
-  saving.value = true
+  deleting.value = true
   try {
     await api.deleteProvider(id)
     await refresh()
@@ -245,7 +245,7 @@ async function deleteProvider(id: string, name: string) {
   } catch (e: any) {
     toast.push('删除失败：' + (e?.message || String(e)), 'error')
   } finally {
-    saving.value = false
+    deleting.value = false
   }
 }
 
@@ -384,15 +384,24 @@ onMounted(() => {
                 <button class="btn btn-icon" title="编辑" @click="openEdit(provider)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
                 </button>
-                <div style="position: relative; display: inline-block;">
-                  <button class="btn btn-icon" title="更多" @click="openMenuId = openMenuId === provider.id ? '' : provider.id">
-                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-                  </button>
-                  <div v-if="openMenuId === provider.id" class="dropdown-menu">
-                    <button class="dropdown-item" @click="openEdit(provider); openMenuId = ''">编辑</button>
-                    <button class="dropdown-item danger" @click="deleteProvider(provider.id, provider.name)">删除</button>
-                  </div>
-                </div>
+                <DropdownMenu :menu-id="provider.id">
+                  <template #trigger="{ toggle, open }">
+                    <button
+                      class="btn btn-icon"
+                      title="更多"
+                      :aria-expanded="open"
+                      aria-haspopup="menu"
+                      :aria-label="`更多操作：${provider.name}`"
+                      @click="toggle"
+                    >
+                      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                    </button>
+                  </template>
+                  <template #menu="{ close }">
+                    <button class="dropdown-item" role="menuitem" @click="openEdit(provider); close()">编辑</button>
+                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteProvider(provider.id, provider.name); close()">删除</button>
+                  </template>
+                </DropdownMenu>
               </div>
             </div>
           </article>

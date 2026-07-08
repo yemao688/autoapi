@@ -5,10 +5,13 @@ import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
 import { toDateTimeLocal, fromDateTimeLocal } from '../composables/useDateTime'
 import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
+import DropdownMenu from '@/components/DropdownMenu.vue'
 import type { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
 const toast = useToast()
+const confirm = useConfirm()
 
 const {
   data: keys,
@@ -22,7 +25,7 @@ const modalOpen = ref(false)
 const modalMode = ref<'create' | 'edit'>('create')
 const editingId = ref('')
 const saving = ref(false)
-const openMenuId = ref('')
+const deleting = ref(false)
 const revealedToken = ref('')
 
 const form = ref<model.ApiKeyInput>({
@@ -70,19 +73,26 @@ async function copyToken(token: string) {
 
 async function copyKey(key: model.ApiKey) {
   await copyToken(key.id)
-  openMenuId.value = ''
 }
 
-async function deleteKey(id: string) {
-  if (!confirm('确认删除？')) return
+async function deleteKey(id: string, name: string) {
+  const ok = await confirm.open({
+    title: '删除令牌',
+    message: `确定删除令牌「${name}」？此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  deleting.value = true
   try {
     await api.deleteApiKey(id)
     await loadKeys()
     toast.push('令牌已删除', 'success')
   } catch (e: any) {
     toast.push('删除失败：' + (e?.message || String(e)), 'error')
+  } finally {
+    deleting.value = false
   }
-  openMenuId.value = ''
 }
 
 function openCreateModal() {
@@ -215,16 +225,24 @@ onMounted(() => {
                   <span :class="{ 'text-muted': !key.expires_at }">{{ formatExpiresAt(key.expires_at) }}</span>
                 </td>
                 <td class="right">
-                  <div style="position: relative; display: inline-block;">
-                    <button class="btn btn-icon" @click="openMenuId = openMenuId === key.id ? '' : key.id">
-                      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-                    </button>
-                    <div v-if="openMenuId === key.id" class="dropdown-menu">
-                      <button class="dropdown-item" @click="openEditModal(key); openMenuId = ''">编辑</button>
-                      <button class="dropdown-item" @click="copyKey(key)">复制</button>
-                      <button class="dropdown-item danger" @click="deleteKey(key.id)">删除</button>
-                    </div>
-                  </div>
+                  <DropdownMenu :menu-id="key.id">
+                    <template #trigger="{ toggle, open }">
+                      <button
+                        class="btn btn-icon"
+                        :aria-expanded="open"
+                        aria-haspopup="menu"
+                        :aria-label="`更多操作：${key.name}`"
+                        @click="toggle"
+                      >
+                        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                      </button>
+                    </template>
+                    <template #menu="{ close }">
+                      <button class="dropdown-item" role="menuitem" @click="openEditModal(key); close()">编辑</button>
+                      <button class="dropdown-item" role="menuitem" @click="copyKey(key); close()">复制</button>
+                      <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteKey(key.id, key.name); close()">删除</button>
+                    </template>
+                  </DropdownMenu>
                 </td>
               </tr>
             </tbody>
