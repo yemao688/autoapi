@@ -24,7 +24,7 @@ type mockStore struct {
 	apiKeys   []model.ApiKey
 	settings  *model.Settings
 
-	mu       sync.Mutex
+	mu          sync.Mutex
 	statsDeltas map[string]struct {
 		hit  int64
 		fail int64
@@ -428,7 +428,7 @@ func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"default": {ID: "default", Name: "Default", BaseURL: srv.URL},
 		},
-		rules:  []model.ModelRule{},
+		rules:   []model.ModelRule{},
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 		settings: &model.Settings{
 			Routing: model.RoutingSettings{DefaultProviderID: "default"},
@@ -862,7 +862,7 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 	defer resp.Body.Close()
 	buf := make([]byte, 16)
 	_, _ = resp.Body.Read(buf) // read at least one chunk
-	cancel()                    // disconnect
+	cancel()                   // disconnect
 
 	time.Sleep(500 * time.Millisecond)
 	p.Stop() // drain the async writer
@@ -897,4 +897,3 @@ func TestIsClientDisconnect(t *testing.T) {
 		})
 	}
 }
-

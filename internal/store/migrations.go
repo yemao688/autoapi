@@ -8,8 +8,8 @@ import (
 
 // migration defines a single schema migration.
 type migration struct {
-	ID              string                                    // unique identifier, e.g. "001_init"
-	SQL             string                                    // DDL / DML to apply
+	ID              string                                            // unique identifier, e.g. "001_init"
+	SQL             string                                            // DDL / DML to apply
 	SkipIfRedundant func(tx *sql.Tx) (alreadyApplied bool, err error) // optional: if non-nil and returns (true, nil), treat the SQL as a no-op (e.g. the schema change was already made under a different migration ID in an older build). The migration is still recorded as applied.
 }
 
@@ -232,7 +232,7 @@ ALTER TABLE request_logs ADD COLUMN cache_hit INTEGER NOT NULL DEFAULT 0;
 		// column and treats the SQL as a no-op when it's already present,
 		// then records the migration as applied. This means the rename is
 		// safe to ship and existing users with the old ID won't be broken.
-		ID:             "010_route_target_enabled",
+		ID:              "010_route_target_enabled",
 		SkipIfRedundant: routeTargetsHasEnabled,
 		SQL: `
 ALTER TABLE route_targets ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;

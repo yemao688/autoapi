@@ -48,7 +48,7 @@ func TestUsageTrends_BucketShape(t *testing.T) {
 	}
 
 	// Daily range should use daily buckets.
-	start = now - 48 * time.Hour.Milliseconds()
+	start = now - 48*time.Hour.Milliseconds()
 	agg, err = st.GetUsageTrends(model.UsageTrendsQuery{StartDate: start, EndDate: end})
 	if err != nil {
 		t.Fatalf("GetUsageTrends failed: %v", err)

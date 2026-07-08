@@ -166,7 +166,7 @@ var costTable = map[string]modelCost{
 	"claude-3-opus":     {InputPerToken: 15.0 / 1e6, OutputPerToken: 75.0 / 1e6},
 	"claude-3-haiku":    {InputPerToken: 0.25 / 1e6, OutputPerToken: 1.25 / 1e6},
 	"deepseek-chat":     {InputPerToken: 0.27 / 1e6, OutputPerToken: 1.10 / 1e6},
-	"deepseek-reasoner":  {InputPerToken: 0.55 / 1e6, OutputPerToken: 2.19 / 1e6},
+	"deepseek-reasoner": {InputPerToken: 0.55 / 1e6, OutputPerToken: 2.19 / 1e6},
 	"moonshot-v1":       {InputPerToken: 0.12 / 1e6, OutputPerToken: 0.12 / 1e6},
 	"glm-4":             {InputPerToken: 0.10 / 1e6, OutputPerToken: 0.10 / 1e6},
 }

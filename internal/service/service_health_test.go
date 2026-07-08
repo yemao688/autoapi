@@ -39,8 +39,8 @@ func TestGetSystemHealth(t *testing.T) {
 // fakeProxy implements the proxy surface needed by Service.
 type fakeProxy struct{}
 
-func (fakeProxy) IsRunning() bool { return true }
-func (fakeProxy) URL() string     { return "http://127.0.0.1:9999" }
+func (fakeProxy) IsRunning() bool        { return true }
+func (fakeProxy) URL() string            { return "http://127.0.0.1:9999" }
 func (fakeProxy) ActiveConnections() int { return 7 }
 
 func TestGetSystemHealthWithProxy(t *testing.T) {
@@ -79,8 +79,8 @@ func TestGetSystemHealthWithProxy(t *testing.T) {
 // noProxy implements the proxy surface but reports not running.
 type noProxy struct{}
 
-func (noProxy) IsRunning() bool         { return false }
-func (noProxy) URL() string             { return "http://0.0.0.0:8344" }
+func (noProxy) IsRunning() bool        { return false }
+func (noProxy) URL() string            { return "http://0.0.0.0:8344" }
 func (noProxy) ActiveConnections() int { return 0 }
 
 func TestGetSystemHealthAPIAddressWhenProxyDown(t *testing.T) {

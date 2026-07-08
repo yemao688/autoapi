@@ -56,13 +56,13 @@ func (s *Store) exportAllJSON() ([]byte, string, error) {
 	}
 
 	payload := map[string]interface{}{
-		"providers":     providers,
-		"models":        models,
-		"api_keys":      keys,
-		"model_rules":   rules,
-		"settings":      settings,
-		"request_logs":  logs,
-		"exported_at":   time.Now().UnixMilli(),
+		"providers":    providers,
+		"models":       models,
+		"api_keys":     keys,
+		"model_rules":  rules,
+		"settings":     settings,
+		"request_logs": logs,
+		"exported_at":  time.Now().UnixMilli(),
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")

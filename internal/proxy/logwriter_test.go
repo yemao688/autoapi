@@ -13,10 +13,10 @@ type fakeBatchStore struct {
 	logs []model.RequestLog
 }
 
-func (f *fakeBatchStore) ListProviders() ([]model.Provider, error)            { return nil, nil }
-func (f *fakeBatchStore) ListModelRules() ([]model.ModelRule, error)            { return nil, nil }
-func (f *fakeBatchStore) GetProvider(id string) (*model.Provider, error)       { return nil, nil }
-func (f *fakeBatchStore) ListAPIKeys() ([]model.ApiKey, error)                 { return nil, nil }
+func (f *fakeBatchStore) ListProviders() ([]model.Provider, error)       { return nil, nil }
+func (f *fakeBatchStore) ListModelRules() ([]model.ModelRule, error)     { return nil, nil }
+func (f *fakeBatchStore) GetProvider(id string) (*model.Provider, error) { return nil, nil }
+func (f *fakeBatchStore) ListAPIKeys() ([]model.ApiKey, error)           { return nil, nil }
 func (f *fakeBatchStore) GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error) {
 	return nil, nil, nil
 }
@@ -29,7 +29,9 @@ func (f *fakeBatchStore) InsertRequestLogsBatch(logs []model.RequestLog) error {
 }
 func (f *fakeBatchStore) ListModels(providerID string) ([]model.Model, error) { return nil, nil }
 func (f *fakeBatchStore) GetSettings() (*model.Settings, error)               { return &model.Settings{}, nil }
-func (f *fakeBatchStore) Dashboard() (*model.DashboardData, error)             { return &model.DashboardData{}, nil }
+func (f *fakeBatchStore) Dashboard() (*model.DashboardData, error) {
+	return &model.DashboardData{}, nil
+}
 func (f *fakeBatchStore) UpdateProviderHealth(id string, status model.ProviderStatus, errorMessage string) error {
 	return nil
 }
@@ -87,8 +89,8 @@ func TestLogWriter_OnFlush(t *testing.T) {
 	defer w.Stop()
 
 	var (
-		mu    sync.Mutex
-		hits  int
+		mu   sync.Mutex
+		hits int
 	)
 	// Simulate the api.App.wireLogEventEmitter shape: a goroutine-safe counter
 	// that bumps every time the writer flushes a batch.

@@ -100,11 +100,11 @@ func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 
 func TestCircuitBreaker_SuccessResetsFailures(t *testing.T) {
 	cb := NewCircuitBreaker()
-	for i := 0; i < failureThreshold - 2; i++ {
+	for i := 0; i < failureThreshold-2; i++ {
 		cb.Record(false)
 	}
 	cb.Record(true)
-	for i := 0; i < failureThreshold - 1; i++ {
+	for i := 0; i < failureThreshold-1; i++ {
 		cb.Record(false)
 	}
 	if cb.CurrentState() != StateClosed {

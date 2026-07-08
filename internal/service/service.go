@@ -90,7 +90,6 @@ func loadOrCreateKey(keyDir string) ([]byte, error) {
 	return key, nil
 }
 
-
 // SetProxy updates the proxy reference after the proxy has been created. This is
 // used by the composition root to break the service→proxy→service cycle.
 func (s *Service) SetProxy(proxy ProxyRef) {
@@ -383,9 +382,9 @@ func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) 
 	// Parse OpenAI-style model list
 	var modelsResp struct {
 		Data []struct {
-			ID           string `json:"id"`
-			OwnedBy      string `json:"owned_by"`
-			ContextWindow int   `json:"context_window"`
+			ID            string `json:"id"`
+			OwnedBy       string `json:"owned_by"`
+			ContextWindow int    `json:"context_window"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {

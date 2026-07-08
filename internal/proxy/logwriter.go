@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	logWriterBatchSize = 100
+	logWriterBatchSize     = 100
 	logWriterFlushInterval = 1 * time.Second
-	logWriterQueueSize = 1000
+	logWriterQueueSize     = 1000
 )
 
 // logWriter accepts request log entries and flushes them in batches to the
@@ -34,8 +34,8 @@ type logWriter struct {
 	// onFlush is an optional callback fired after each successful batch flush.
 	// It runs on the writer goroutine; the API layer uses it to emit real-time
 	// UI events when new logs are persisted. Guard with mu when reading/writing.
-	muFlush  sync.Mutex
-	onFlush  func()
+	muFlush sync.Mutex
+	onFlush func()
 }
 
 // newLogWriter starts a background log writer. The caller must call Stop to

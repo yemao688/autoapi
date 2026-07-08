@@ -182,10 +182,10 @@ func (s *Store) logStats() ([]model.Stat, error) {
 
 	// Total logs, success count, error count, p95 latency
 	type logAgg struct {
-		total       int64
-		success     int64
-		errCount    int64
-		latencies   []int
+		total     int64
+		success   int64
+		errCount  int64
+		latencies []int
 	}
 
 	rows, err := s.db.Query(`

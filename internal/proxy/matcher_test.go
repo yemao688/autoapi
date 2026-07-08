@@ -384,4 +384,3 @@ func TestSelectCandidates_AllDisabledNoDefault(t *testing.T) {
 		t.Fatal("expected error when all targets disabled and no default configured")
 	}
 }
-
