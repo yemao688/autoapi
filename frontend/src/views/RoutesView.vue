@@ -466,15 +466,18 @@ onMounted(() => {
       <div v-else-if="routesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">加载失败：{{ routesError }}</div>
       <template v-else>
         <!-- Default fallback banner -->
-        <div class="card" style="background: var(--black); color: white; display: flex; align-items: center; gap: 16px; padding: 16px 20px;">
-          <div style="width: 36px; height: 36px; border-radius: 10px; background: rgba(255,255,255,0.12); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <div class="card fallback-banner">
+          <div class="fallback-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           </div>
-          <div style="flex: 1;">
-            <div style="font-size: 13px; font-weight: 600;">默认兜底</div>
-            <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 2px;">所有未匹配的请求将路由至 <span class="text-mono" style="color: white;">{{ defaultFallback.provider }} · {{ defaultFallback.model }}</span></div>
+          <div class="fallback-body">
+            <div class="fallback-title">默认兜底</div>
+            <div class="fallback-desc">
+              所有未匹配的请求将路由至
+              <span class="fallback-model">{{ defaultFallback.provider }} · {{ defaultFallback.model }}</span>
+            </div>
           </div>
-          <button class="btn" style="background: rgba(255,255,255,0.12); color: white;" @click="editDefault">修改</button>
+          <button class="btn btn-secondary" @click="editDefault">修改</button>
         </div>
 
         <!-- Rule list (sortable container) -->
@@ -488,10 +491,14 @@ onMounted(() => {
           class="stack-loose"
           @end="persistRuleOrder"
         >
-          <article v-for="(route, idx) in ruleList" :key="route.id" class="card" :style="{ opacity: route.enabled ? 1 : 0.6 }">
-            <div class="row-between" style="margin-bottom: 14px;">
-              <div class="row" style="gap: 12px;">
-                <!-- Drag handle -->
+          <article
+            v-for="(route, idx) in ruleList"
+            :key="route.id"
+            class="card route-card"
+            :class="{ 'route-disabled': !route.enabled }"
+          >
+            <header class="route-header">
+              <div class="route-header-main">
                 <svg class="drag-handle" viewBox="0 0 16 28" fill="currentColor" width="14" height="24" aria-label="拖拽排序">
                   <circle cx="5" cy="5.5" r="1.4"/>
                   <circle cx="11" cy="5.5" r="1.4"/>
@@ -500,25 +507,17 @@ onMounted(() => {
                   <circle cx="5" cy="22.5" r="1.5"/>
                   <circle cx="11" cy="22.5" r="1.5"/>
                 </svg>
-                <div class="text-mono" style="font-size: 12px; color: var(--muted); width: 24px;">{{ String(idx + 1).padStart(2, '0') }}</div>
-                <div>
-                  <div style="font-size: 14px; font-weight: 600;">{{ route.name }}</div>
-                  <div class="text-muted" style="font-size: 12px; margin-top: 2px;">{{ route.description }}</div>
+                <div class="route-number text-mono">{{ String(idx + 1).padStart(2, '0') }}</div>
+                <div class="route-title">
+                  <div class="route-name">{{ route.name }}</div>
+                  <div class="route-desc">{{ route.description }}</div>
                 </div>
               </div>
-              <div class="row" style="gap: 12px;">
-                <label class="toggle">
+              <div class="route-header-actions">
+                <label class="toggle" :aria-label="route.enabled ? '禁用规则' : '启用规则'">
                   <input type="checkbox" :checked="route.enabled" @change="toggleRoute(route)">
                   <span class="toggle-slider blue"></span>
                 </label>
-                <button
-                  class="btn btn-icon"
-                  style="width: 30px; height: 30px;"
-                  aria-label="添加目标"
-                  @click="openAddTarget(route)"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-                </button>
                 <DropdownMenu :menu-id="route.id">
                   <template #trigger="{ toggle, open }">
                     <button
@@ -538,22 +537,23 @@ onMounted(() => {
                   </template>
                 </DropdownMenu>
               </div>
-            </div>
-            <div class="col-3" style="gap: 0;">
-              <div>
-                <div class="text-muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin-bottom: 6px;">条件 (所有满足)</div>
-                <div class="stack-tight">
-                  <div v-for="(c, cidx) in route.conditions" :key="cidx" class="row" style="gap: 6px;">
-                    <span class="text-mono" style="font-size: 11.5px; color: var(--fg);">{{ c.field }}</span>
-                    <span class="badge mono" style="background: rgba(0,113,227,0.08); color: var(--accent); font-weight: 500;">{{ operatorLabel(c.operator) }}</span>
-                    <span class="text-mono" style="font-size: 11.5px;">{{ c.value }}</span>
-                  </div>
-                  <div v-if="!route.conditions.length" class="text-muted" style="font-size: 12px;">无</div>
-                </div>
+            </header>
+
+            <div class="route-body">
+              <div class="route-conditions">
+                <h3 class="route-section-label">条件（所有满足）</h3>
+                <ul class="route-condition-list">
+                  <li v-for="(c, cidx) in route.conditions" :key="cidx" class="route-condition">
+                    <span class="route-condition-field">{{ c.field }}</span>
+                    <span class="route-condition-op">{{ operatorLabel(c.operator) }}</span>
+                    <span class="route-condition-value">{{ c.value }}</span>
+                  </li>
+                  <li v-if="!route.conditions.length" class="text-muted" style="font-size: 12px;">无</li>
+                </ul>
               </div>
-              <div>
-                <div class="row-between" style="margin-bottom: 6px;">
-                  <div class="text-muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;">目标</div>
+              <div class="route-targets">
+                <h3 class="route-section-label">
+                  <span>目标</span>
                   <button
                     class="btn btn-icon"
                     style="width: 22px; height: 22px;"
@@ -562,37 +562,30 @@ onMounted(() => {
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
                   </button>
-                </div>
-                <div class="stack-tight">
-                  <div
+                </h3>
+                <ul class="route-target-list">
+                  <li
                     v-for="(target, tidx) in route.targets"
                     :key="target.id || tidx"
-                    class="row target-row"
+                    class="target-row"
                     :class="{ 'target-disabled': !target.enabled }"
                   >
-                    <div class="list-icon" :style="{ ...targetIconStyle(target.provider_id), width: '26px', height: '26px', fontSize: '11px', borderRadius: '6px' }">
+                    <div class="list-icon target-icon" :style="targetIconStyle(target.provider_id)">
                       {{ providerLetter(targetProviderName(target)) }}
                     </div>
                     <div class="target-info">
-                      <div class="row" style="gap: 8px; align-items: center;">
-                        <span class="target-provider">{{ targetProviderName(target) }}</span>
-                        <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">已禁用</span>
-                      </div>
-                      <div class="target-meta">
-                        <span>{{ target.model_name || '默认' }}</span>
-                        <span class="dot-sep">·</span>
-                        <span>重试 {{ target.max_retries }}</span>
-                        <span class="dot-sep">·</span>
-                        <span>T{{ tidx + 1 }}</span>
-                      </div>
-                      <div class="target-counters">
-                        命中 <span>{{ formatHits(target.hit_count) }}</span>
-                        <span style="margin: 0 3px;">·</span>
-                        失败 <span :class="{ 'fail-hi': target.failure_count > 0 }">{{ formatHits(target.failure_count) }}</span>
-                      </div>
+                      <span class="target-provider">{{ targetProviderName(target) }}</span>
+                      <span class="target-model">{{ target.model_name || '默认' }}</span>
+                      <span v-if="target.max_retries > 0" class="badge mono">重试 {{ target.max_retries }}</span>
+                      <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">已禁用</span>
                     </div>
-                    <div class="row" style="gap: 6px; margin-left: auto;">
-                      <label class="toggle toggle-target">
+                    <div class="target-counters">
+                      <span>命中 {{ formatHits(target.hit_count) }}</span>
+                      <span :class="{ 'fail-hi': target.failure_count > 0 }">失败 {{ formatHits(target.failure_count) }}</span>
+                      <span>T{{ tidx + 1 }}</span>
+                    </div>
+                    <div class="target-actions">
+                      <label class="toggle toggle-target" :aria-label="target.enabled ? '禁用目标' : '启用目标'">
                         <input
                           type="checkbox"
                           :checked="target.enabled"
@@ -620,20 +613,31 @@ onMounted(() => {
                         </template>
                       </DropdownMenu>
                     </div>
-                  </div>
-                  <div v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">无</div>
-                </div>
+                  </li>
+                  <li v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">无</li>
+                </ul>
               </div>
-              <div>
-                <div class="text-muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin-bottom: 6px;">{{ route.enabled ? '本月命中' : '状态' }}</div>
-                <template v-if="route.enabled">
-                  <div class="text-mono" style="font-size: 22px; font-weight: 600; letter-spacing: -0.02em;">{{ formatHits(route.monthly_hits) }}</div>
-                  <div class="text-muted text-mono" style="font-size: 11px; margin-top: 2px;" v-if="route.monthly_savings > 0">节省 {{ fmtCurrency(route.monthly_savings) }}</div>
-                  <div class="text-muted text-mono" style="font-size: 11px; margin-top: 2px;" v-else>占总请求 {{ route.monthly_hits ? '1.7%' : '0%' }}</div>
-                </template>
-                <template v-else>
-                  <div class="text-mono" style="font-size: 12px; color: var(--muted);">已禁用 · 创建于 <span :data-time="route.created_at">{{ format(route.created_at) }}</span></div>
-                </template>
+            </div>
+
+            <div class="route-footer">
+              <template v-if="route.enabled">
+                <div class="route-stats">
+                  <span class="route-stats-item">
+                    <span class="route-stats-label">本月命中</span>
+                    <span class="route-stats-value">{{ formatHits(route.monthly_hits) }}</span>
+                  </span>
+                  <span v-if="route.monthly_savings > 0" class="route-stats-item">
+                    <span class="route-stats-label">节省</span>
+                    <span class="route-stats-value">{{ fmtCurrency(route.monthly_savings) }}</span>
+                  </span>
+                  <span v-else class="route-stats-item">
+                    <span class="route-stats-label">占总请求</span>
+                    <span class="route-stats-value">{{ route.monthly_hits ? '1.7%' : '0%' }}</span>
+                  </span>
+                </div>
+              </template>
+              <div v-else class="route-created">
+                已禁用 · 创建于 <span :data-time="route.created_at">{{ format(route.created_at) }}</span>
               </div>
             </div>
           </article>
@@ -736,45 +740,284 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.target-row {
-  align-items: flex-start;
+.route-card {
+  --route-border: rgba(0, 0, 0, 0.05);
+  --route-border-subtle: rgba(0, 0, 0, 0.04);
+  --route-bg-tint: rgba(0, 0, 0, 0.015);
+  --route-bg-footer: rgba(0, 0, 0, 0.01);
+  --target-icon-size: 26px;
+  --target-row-gap: 12px;
+  padding: 0;
+  overflow: hidden;
+}
+.route-card.route-disabled {
+  opacity: 0.72;
+}
+
+.route-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--route-border);
+}
+.route-header-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+.route-header-actions {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+}
+
+.route-number {
+  font-size: 12px;
+  color: var(--muted);
+  width: 24px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.route-title {
+  min-width: 0;
+}
+.route-name {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.route-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.route-body {
+  display: grid;
+  grid-template-columns: 35% 65%;
+}
+.route-conditions {
+  padding: 16px 20px;
+  border-right: 1px solid var(--route-border);
+  background: var(--route-bg-tint);
+  min-width: 0;
+}
+.route-targets {
+  padding: 16px 20px;
+  min-width: 0;
+}
+
+.route-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.route-condition-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+.route-condition {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.route-condition-field {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg);
+}
+.route-condition-op {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 100px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+.route-condition-value {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg);
+}
+
+.route-target-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+}
+
+.target-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--route-border-subtle);
 }
 .target-row:last-child {
   border-bottom: none;
 }
+.target-row .target-icon {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
 .target-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
   min-width: 0;
+  flex-wrap: wrap;
 }
 .target-provider {
   font-size: 13px;
   font-weight: 500;
   color: var(--fg);
 }
+.target-model {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.target-counters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.target-counters .fail-hi {
+  color: var(--negative);
+  font-weight: 500;
+}
+.target-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .target-disabled .target-provider {
   color: var(--muted);
   text-decoration: line-through;
 }
-.target-meta {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 2px;
-  font-variant-numeric: tabular-nums;
-}
-.target-disabled .target-meta {
+.target-disabled .target-model,
+.target-disabled .target-counters {
   opacity: 0.7;
 }
-.target-disabled .list-icon {
+.target-disabled .target-icon {
   opacity: 0.5;
 }
-.dot-sep {
-  margin: 0 4px;
-  color: var(--border-strong);
+
+.route-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  background: var(--route-bg-footer);
 }
+.route-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.route-stats-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.route-stats-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.route-stats-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.route-created {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  margin-left: auto;
+}
+
+.fallback-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--accent-soft);
+  border: 1px solid rgba(0, 113, 227, 0.18);
+  color: var(--fg);
+}
+.fallback-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.fallback-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.fallback-body {
+  flex: 1;
+  min-width: 0;
+}
+.fallback-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.fallback-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.fallback-model {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
 .toggle-target {
   width: 32px;
   height: 18px;
@@ -789,7 +1032,61 @@ onMounted(() => {
   transform: translateX(14px);
 }
 
+@media (max-width: 800px) {
+  .route-body {
+    grid-template-columns: 1fr;
+  }
+  .route-conditions {
+    border-right: none;
+    border-bottom: 1px solid var(--route-border);
+  }
+  .route-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .route-created {
+    margin-left: 0;
+  }
+  .target-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .target-info {
+    flex: 1;
+  }
+  .target-counters {
+    order: 3;
+    width: 100%;
+    padding-left: calc(var(--target-icon-size) + var(--target-row-gap));
+  }
+  .target-actions {
+    margin-left: auto;
+  }
+}
+
+html[data-theme="dark"] .route-card {
+  --route-border: rgba(255, 255, 255, 0.05);
+  --route-border-subtle: rgba(255, 255, 255, 0.05);
+  --route-bg-tint: rgba(255, 255, 255, 0.02);
+  --route-bg-footer: rgba(255, 255, 255, 0.01);
+}
+html[data-theme="dark"] .route-header,
+html[data-theme="dark"] .route-conditions,
+html[data-theme="dark"] .route-footer {
+  border-color: var(--route-border);
+}
+html[data-theme="dark"] .route-conditions {
+  background: var(--route-bg-tint);
+}
+html[data-theme="dark"] .route-footer {
+  background: var(--route-bg-footer);
+}
 html[data-theme="dark"] .target-row {
-  border-bottom-color: rgba(255, 255, 255, 0.05);
+  border-bottom-color: var(--route-border-subtle);
+}
+html[data-theme="dark"] .fallback-banner {
+  background: var(--accent-soft);
+  border-color: rgba(10, 132, 255, 0.25);
 }
 </style>
