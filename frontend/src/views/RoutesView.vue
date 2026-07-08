@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
@@ -12,6 +13,7 @@ import DropdownMenu from '@/components/DropdownMenu.vue'
 import RouteTargetModal from '@/components/RouteTargetModal.vue'
 import { model } from '../../wailsjs/go/models'
 
+const { t } = useI18n()
 const { format } = useRelativeTime()
 const { color: providerColor, initial: providerLetter, textColor: providerTextColor } = useProviderStyle()
 const { currency: fmtCurrency } = useFormatters()
@@ -78,7 +80,7 @@ async function persistRuleOrder() {
     await api.reorderRoutes(ruleList.value.map((r) => r.id))
     await loadRoutes()
   } catch (e: any) {
-    toast.push('排序失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.reorderFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
     await loadRoutes() // revert to server truth
   }
 }
@@ -100,15 +102,9 @@ const fallbackProviderId = ref('')
 const fallbackModel = ref('')
 
 function operatorLabel(op: string): string {
-  const map: Record<string, string> = {
-    matches: 'matches',
-    equals: 'equals',
-    lt: 'lt',
-    gt: 'gt',
-    between: 'between',
-    in: 'in',
-  }
-  return map[op] || op
+  const key = `routes.operators.${op}`
+  const translated = t(key)
+  return translated === key ? op : translated
 }
 
 function targetIconStyle(providerId: string) {
@@ -120,7 +116,7 @@ function targetIconStyle(providerId: string) {
 }
 
 function targetProviderName(target: model.RouteTarget): string {
-  return providerNameMap.value[target.provider_id] || '未知'
+  return providerNameMap.value[target.provider_id] || t('common.unknown')
 }
 
 function formatHits(n: number): string {
@@ -187,9 +183,9 @@ async function saveRoute() {
     }
     modalOpen.value = false
     await loadRoutes()
-    toast.push('规则已保存', 'success')
+    toast.push(t('toast.routeSaved'), 'success')
   } catch (e: any) {
-    toast.push('保存失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   } finally {
     saving.value = false
   }
@@ -207,17 +203,17 @@ async function toggleRoute(route: model.Route) {
     })
     await api.updateRoute(route.id, input)
     await loadRoutes()
-    toast.push(full.enabled ? '规则已禁用' : '规则已启用', 'success')
+    toast.push(full.enabled ? t('toast.routeToggledDisabled') : t('toast.routeToggledEnabled'), 'success')
   } catch (e: any) {
-    toast.push('切换失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.toggleFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
 
 async function deleteRoute(id: string, name: string) {
   const ok = await confirm.open({
-    title: '删除规则',
-    message: `确定删除规则「${name}」？此操作不可撤销。`,
-    confirmText: '删除',
+    title: t('confirm.deleteRouteTitle'),
+    message: t('confirm.deleteRouteMessage', { name }),
+    confirmText: t('common.delete'),
     danger: true,
   })
   if (!ok) return
@@ -225,9 +221,9 @@ async function deleteRoute(id: string, name: string) {
   try {
     await api.deleteRoute(id)
     await loadRoutes()
-    toast.push('规则已删除', 'success')
+    toast.push(t('toast.routeDeleted'), 'success')
   } catch (e: any) {
-    toast.push('删除失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.deleteFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   } finally {
     deleting.value = false
   }
@@ -272,10 +268,10 @@ async function updateRouteTargets(route: model.Route, targets: model.RouteTarget
     })
     await api.updateRoute(route.id, input)
     await loadRoutes()
-    toast.push('目标已更新', 'success')
+    toast.push(t('toast.targetsUpdated'), 'success')
     return true
   } catch (e: any) {
-    toast.push('更新失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.targetsUpdateFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
     await loadRoutes()
     return false
   }
@@ -317,10 +313,11 @@ async function toggleTarget(route: model.Route, target: model.RouteTarget) {
 }
 
 async function deleteTarget(route: model.Route, target: model.RouteTarget) {
+  const targetLabel = `${targetProviderName(target)} · ${target.model_name || t('routes.targetDefault')}`
   const ok = await confirm.open({
-    title: '删除目标',
-    message: `确定删除目标「${targetProviderName(target)} · ${target.model_name || '默认'}」？此操作不可撤销。`,
-    confirmText: '删除',
+    title: t('confirm.deleteTargetTitle'),
+    message: t('confirm.deleteTargetMessage', { target: targetLabel }),
+    confirmText: t('common.delete'),
     danger: true,
   })
   if (!ok) return
@@ -353,7 +350,7 @@ async function saveDefaultFallback() {
   try {
     const s = settings.value ? new model.Settings(JSON.parse(JSON.stringify(settings.value))) : await api.getSettings()
     if (!s) {
-      toast.push('设置加载失败', 'error')
+      toast.push(t('toast.loadSettingsFailed'), 'error')
       return
     }
     s.routing.default_provider_id = fallbackProviderId.value
@@ -361,9 +358,9 @@ async function saveDefaultFallback() {
     await api.saveSettings(s)
     await loadSettings()
     fallbackModalOpen.value = false
-    toast.push('默认兜底已更新', 'success')
+    toast.push(t('toast.defaultUpdated'), 'success')
   } catch (e: any) {
-    toast.push('保存失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
 
@@ -379,11 +376,11 @@ function importJSON() {
       const parsed = JSON.parse(text)
       const inputs: model.RouteInput[] = []
       if (!Array.isArray(parsed)) {
-        throw new Error('JSON 应为规则数组')
+        throw new Error(t('toast.invalidJson'))
       }
       for (const item of parsed) {
         if (!item || typeof item.name !== 'string') {
-          throw new Error('规则对象缺少 name 字段')
+          throw new Error(t('toast.invalidItem'))
         }
         const conditions = Array.isArray(item.conditions) ? item.conditions : []
         const targets = Array.isArray(item.targets) ? item.targets : []
@@ -408,9 +405,9 @@ function importJSON() {
         await api.createRoute(input)
       }
       await loadRoutes()
-      toast.push(`已导入 ${inputs.length} 条规则`, 'success')
+      toast.push(t('toast.imported', { count: inputs.length }), 'success')
     } catch (e: any) {
-      toast.push('导入失败：' + (e?.message || String(e)), 'error')
+      toast.push(t('toast.importFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
     }
   }
   input.click()
@@ -425,7 +422,7 @@ function exportJSON() {
   a.download = `Autoapi-routes-${new Date().toISOString().slice(0, 10)}.json`
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 0)
-  toast.push('规则已导出', 'success')
+  toast.push(t('toast.exported'), 'success')
 }
 
 function closeModal() {
@@ -439,22 +436,22 @@ function closeFallbackModal() {
 onMounted(() => {
   loadRoutes()
   loadProviders()
-  loadSettings().catch((e: any) => toast.push('加载设置失败：' + (e?.message || String(e)), 'error'))
+  loadSettings().catch((e: any) => toast.push(t('toast.loadSettingsFailed') + ': ' + (e?.message || e?.toString() || ''), 'error'))
 })
 </script>
 
 <template>
   <header class="main-header">
     <div class="main-title-group">
-      <h1 class="main-title">路由规则</h1>
-      <span class="main-subtitle">{{ ruleList.length ?? 0 }} 条规则 · 拖动排序，越靠前优先级越高</span>
+      <h1 class="main-title">{{ t('routes.title') }}</h1>
+      <span class="main-subtitle">{{ t('routes.subtitle', { count: ruleList.length ?? 0 }) }}</span>
     </div>
     <div class="main-actions">
-      <button class="btn btn-secondary" @click="importJSON">导入 JSON</button>
-      <button class="btn btn-secondary" @click="exportJSON">导出 JSON</button>
+      <button class="btn btn-secondary" @click="importJSON">{{ t('routes.import') }}</button>
+      <button class="btn btn-secondary" @click="exportJSON">{{ t('routes.export') }}</button>
       <button class="btn btn-primary" @click="openCreate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-        新建规则
+        {{ t('routes.new') }}
       </button>
     </div>
   </header>
@@ -462,8 +459,8 @@ onMounted(() => {
   <div class="main-content">
     <div class="main-content-inner stack-loose">
       <!-- Loading / error -->
-      <div v-if="routesLoading && !routes" class="text-muted" style="padding: 40px 0; text-align: center;">加载中…</div>
-      <div v-else-if="routesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">加载失败：{{ routesError }}</div>
+      <div v-if="routesLoading && !routes" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('routes.loading') }}</div>
+      <div v-else-if="routesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('routes.loadFailed', { error: routesError }) }}</div>
       <template v-else>
         <!-- Default fallback banner -->
         <div class="card fallback-banner">
@@ -471,13 +468,12 @@ onMounted(() => {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           </div>
           <div class="fallback-body">
-            <div class="fallback-title">默认兜底</div>
+            <div class="fallback-title">{{ t('routes.fallbackTitle') }}</div>
             <div class="fallback-desc">
-              所有未匹配的请求将路由至
-              <span class="fallback-model">{{ defaultFallback.provider }} · {{ defaultFallback.model }}</span>
+              {{ t('routes.fallbackDesc', { target: `${defaultFallback.provider} · ${defaultFallback.model}` }) }}
             </div>
           </div>
-          <button class="btn btn-secondary" @click="editDefault">修改</button>
+          <button class="btn btn-secondary" @click="editDefault">{{ t('routes.fallbackEdit') }}</button>
         </div>
 
         <!-- Rule list (sortable container) -->
@@ -499,7 +495,7 @@ onMounted(() => {
           >
             <header class="route-header">
               <div class="route-header-main">
-                <svg class="drag-handle" viewBox="0 0 16 28" fill="currentColor" width="14" height="24" aria-label="拖拽排序">
+                <svg class="drag-handle" viewBox="0 0 16 28" fill="currentColor" width="14" height="24" :aria-label="t('common.drag')">
                   <circle cx="5" cy="5.5" r="1.4"/>
                   <circle cx="11" cy="5.5" r="1.4"/>
                   <circle cx="5" cy="14" r="1.5"/>
@@ -514,7 +510,7 @@ onMounted(() => {
                 </div>
               </div>
               <div class="route-header-actions">
-                <label class="toggle" :aria-label="route.enabled ? '禁用规则' : '启用规则'">
+                <label class="toggle" :aria-label="route.enabled ? t('routes.ruleToggleDisable') : t('routes.ruleToggleEnable')">
                   <input type="checkbox" :checked="route.enabled" @change="toggleRoute(route)">
                   <span class="toggle-slider blue"></span>
                 </label>
@@ -524,16 +520,16 @@ onMounted(() => {
                       class="btn btn-icon"
                       :aria-expanded="open"
                       aria-haspopup="menu"
-                      :aria-label="`更多操作：${route.name}`"
+                      :aria-label="t('routes.moreActions', { name: route.name })"
                       @click="toggle"
                     >
                       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                     </button>
                   </template>
                   <template #menu="{ close }">
-                    <button class="dropdown-item" role="menuitem" @click="openEdit(route); close()">编辑</button>
-                    <button class="dropdown-item" role="menuitem" @click="toggleRoute(route); close()">{{ route.enabled ? '禁用' : '启用' }}</button>
-                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteRoute(route.id, route.name); close()">删除</button>
+                    <button class="dropdown-item" role="menuitem" @click="openEdit(route); close()">{{ t('routes.edit') }}</button>
+                    <button class="dropdown-item" role="menuitem" @click="toggleRoute(route); close()">{{ route.enabled ? t('routes.disable') : t('routes.enable') }}</button>
+                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteRoute(route.id, route.name); close()">{{ t('routes.delete') }}</button>
                   </template>
                 </DropdownMenu>
               </div>
@@ -541,23 +537,23 @@ onMounted(() => {
 
             <div class="route-body">
               <div class="route-conditions">
-                <h3 class="route-section-label">条件（所有满足）</h3>
+                <h3 class="route-section-label">{{ t('routes.conditionsLabel') }}</h3>
                 <ul class="route-condition-list">
                   <li v-for="(c, cidx) in route.conditions" :key="cidx" class="route-condition">
                     <span class="route-condition-field">{{ c.field }}</span>
                     <span class="route-condition-op">{{ operatorLabel(c.operator) }}</span>
                     <span class="route-condition-value">{{ c.value }}</span>
                   </li>
-                  <li v-if="!route.conditions.length" class="text-muted" style="font-size: 12px;">无</li>
+                  <li v-if="!route.conditions.length" class="text-muted" style="font-size: 12px;">{{ t('routes.empty') }}</li>
                 </ul>
               </div>
               <div class="route-targets">
                 <h3 class="route-section-label">
-                  <span>目标</span>
+                  <span>{{ t('routes.targetsLabel') }}</span>
                   <button
                     class="btn btn-icon"
                     style="width: 22px; height: 22px;"
-                    aria-label="添加目标"
+                    :aria-label="t('routes.addTarget')"
                     @click="openAddTarget(route)"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -575,17 +571,17 @@ onMounted(() => {
                     </div>
                     <div class="target-info">
                       <span class="target-provider">{{ targetProviderName(target) }}</span>
-                      <span class="target-model">{{ target.model_name || '默认' }}</span>
-                      <span v-if="target.max_retries > 0" class="badge mono">重试 {{ target.max_retries }}</span>
-                      <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">已禁用</span>
+                      <span class="target-model">{{ target.model_name || t('routes.targetDefault') }}</span>
+                      <span v-if="target.max_retries > 0" class="badge mono">{{ t('routes.targetRetries', { count: target.max_retries }) }}</span>
+                      <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">{{ t('routes.targetDisabled') }}</span>
                     </div>
                     <div class="target-counters">
-                      <span>命中 {{ formatHits(target.hit_count) }}</span>
-                      <span :class="{ 'fail-hi': target.failure_count > 0 }">失败 {{ formatHits(target.failure_count) }}</span>
+                      <span>{{ t('routes.targetHits', { count: formatHits(target.hit_count) }) }}</span>
+                      <span :class="{ 'fail-hi': target.failure_count > 0 }">{{ t('routes.targetFailures', { count: formatHits(target.failure_count) }) }}</span>
                       <span>T{{ tidx + 1 }}</span>
                     </div>
                     <div class="target-actions">
-                      <label class="toggle toggle-target" :aria-label="target.enabled ? '禁用目标' : '启用目标'">
+                      <label class="toggle toggle-target" :aria-label="target.enabled ? t('routes.targetToggleDisable') : t('routes.targetToggleEnable')">
                         <input
                           type="checkbox"
                           :checked="target.enabled"
@@ -601,20 +597,20 @@ onMounted(() => {
                             style="width: 26px; height: 26px;"
                             :aria-expanded="open"
                             aria-haspopup="menu"
-                            aria-label="目标操作"
+                            :aria-label="t('routes.targetActions')"
                             @click="toggle"
                           >
                             <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                           </button>
                         </template>
                         <template #menu="{ close }">
-                          <button class="dropdown-item" role="menuitem" @click="openEditTarget(route, target); close()">编辑</button>
-                          <button class="dropdown-item danger" role="menuitem" @click="deleteTarget(route, target); close()">删除</button>
+                          <button class="dropdown-item" role="menuitem" @click="openEditTarget(route, target); close()">{{ t('routes.edit') }}</button>
+                          <button class="dropdown-item danger" role="menuitem" @click="deleteTarget(route, target); close()">{{ t('routes.delete') }}</button>
                         </template>
                       </DropdownMenu>
                     </div>
                   </li>
-                  <li v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">无</li>
+                  <li v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">{{ t('routes.empty') }}</li>
                 </ul>
               </div>
             </div>
@@ -623,21 +619,21 @@ onMounted(() => {
               <template v-if="route.enabled">
                 <div class="route-stats">
                   <span class="route-stats-item">
-                    <span class="route-stats-label">本月命中</span>
+                    <span class="route-stats-label">{{ t('routes.stats.monthlyHits') }}</span>
                     <span class="route-stats-value">{{ formatHits(route.monthly_hits) }}</span>
                   </span>
                   <span v-if="route.monthly_savings > 0" class="route-stats-item">
-                    <span class="route-stats-label">节省</span>
+                    <span class="route-stats-label">{{ t('routes.stats.savings') }}</span>
                     <span class="route-stats-value">{{ fmtCurrency(route.monthly_savings) }}</span>
                   </span>
                   <span v-else class="route-stats-item">
-                    <span class="route-stats-label">占总请求</span>
+                    <span class="route-stats-label">{{ t('routes.stats.share') }}</span>
                     <span class="route-stats-value">{{ route.monthly_hits ? '1.7%' : '0%' }}</span>
                   </span>
                 </div>
               </template>
               <div v-else class="route-created">
-                已禁用 · 创建于 <span :data-time="route.created_at">{{ format(route.created_at) }}</span>
+                {{ t('routes.disabledStatus') }} · {{ t('routes.disabledCreated', { time: format(route.created_at) }) }}
               </div>
             </div>
           </article>
@@ -650,18 +646,18 @@ onMounted(() => {
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
       <div class="modal-card wide modal-card-scroll">
-        <div class="modal-title">{{ editingId ? '编辑规则' : '新建规则' }}</div>
+        <div class="modal-title">{{ editingId ? t('routes.modal.edit') : t('routes.modal.create') }}</div>
         <div class="field">
-          <label class="field-label">名称</label>
-          <input v-model="form.name" class="input" placeholder="例如 成本优化">
+          <label class="field-label">{{ t('routes.modal.name') }}</label>
+          <input v-model="form.name" class="input" :placeholder="t('routes.modal.namePlaceholder')">
         </div>
         <div class="field">
-          <label class="field-label">描述</label>
-          <input v-model="form.description" class="input" placeholder="规则用途">
+          <label class="field-label">{{ t('routes.modal.description') }}</label>
+          <input v-model="form.description" class="input" :placeholder="t('routes.modal.descriptionPlaceholder')">
         </div>
         <div class="field">
           <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">启用规则</label>
+            <label class="field-label">{{ t('routes.modal.enabled') }}</label>
             <label class="toggle">
               <input v-model="form.enabled" type="checkbox">
               <span class="toggle-slider"></span>
@@ -670,7 +666,7 @@ onMounted(() => {
         </div>
 
         <div class="field" style="margin-bottom: 8px;">
-          <div class="field-label">条件</div>
+          <div class="field-label">{{ t('routes.modal.conditions') }}</div>
         </div>
         <div class="stack-tight" style="gap: 8px;">
           <div v-for="(cond, idx) in form.conditions" :key="idx" class="row" style="gap: 8px; align-items: flex-start;">
@@ -689,17 +685,17 @@ onMounted(() => {
               <option value="between">between</option>
               <option value="in">in</option>
             </select>
-            <input v-model="cond.value" class="input" style="flex: 1;" placeholder="值">
+            <input v-model="cond.value" class="input" style="flex: 1;" :placeholder="t('routes.modal.valuePlaceholder')">
             <button class="btn btn-icon" style="width: 28px; height: 28px;" @click="removeCondition(idx)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <button class="btn btn-secondary" style="align-self: flex-start;" @click="addCondition">添加条件</button>
+          <button class="btn btn-secondary" style="align-self: flex-start;" @click="addCondition">{{ t('routes.modal.addCondition') }}</button>
         </div>
 
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeModal">取消</button>
-          <button class="btn btn-primary" :disabled="saving" @click="saveRoute">{{ saving ? '保存中…' : '保存' }}</button>
+          <button class="btn btn-secondary" @click="closeModal">{{ t('routes.modal.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="saving" @click="saveRoute">{{ saving ? t('routes.modal.saving') : t('routes.modal.save') }}</button>
         </div>
       </div>
     </div>
@@ -719,20 +715,20 @@ onMounted(() => {
   <Teleport to="body">
     <div v-if="fallbackModalOpen" class="modal-overlay" @click.self="closeFallbackModal">
       <div class="modal-card">
-        <div class="modal-title">修改默认兜底</div>
+        <div class="modal-title">{{ t('routes.editFallbackTitle') }}</div>
         <div class="field">
-          <label class="field-label">Provider</label>
+          <label class="field-label">{{ t('routes.fallback.provider') }}</label>
           <select v-model="fallbackProviderId" class="select">
             <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
         <div class="field">
-          <label class="field-label">模型</label>
-          <input v-model="fallbackModel" class="input" placeholder="例如 gpt-4o-mini">
+          <label class="field-label">{{ t('routes.fallback.model') }}</label>
+          <input v-model="fallbackModel" class="input" :placeholder="t('routes.fallback.modelPlaceholder')">
         </div>
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeFallbackModal">取消</button>
-          <button class="btn btn-primary" @click="saveDefaultFallback">保存</button>
+          <button class="btn btn-secondary" @click="closeFallbackModal">{{ t('routes.modal.cancel') }}</button>
+          <button class="btn btn-primary" @click="saveDefaultFallback">{{ t('routes.modal.save') }}</button>
         </div>
       </div>
     </div>

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { model } from '../../wailsjs/go/models'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   open: boolean
@@ -89,25 +92,25 @@ function save() {
   <Teleport to="body">
     <div v-if="open" class="modal-overlay" @click.self="close">
       <div class="modal-card">
-        <div class="modal-title">{{ isEdit ? '编辑目标' : '添加目标' }}</div>
+        <div class="modal-title">{{ isEdit ? t('targets.edit') : t('targets.add') }}</div>
         <div class="field">
-          <label class="field-label">Provider</label>
+          <label class="field-label">{{ t('targets.provider') }}</label>
           <select v-model="form.provider_id" class="select" :disabled="saving">
-            <option value="" disabled>请选择 Provider</option>
+            <option value="" disabled>{{ t('targets.providerPlaceholder') }}</option>
             <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
         <div class="field">
-          <label class="field-label">模型</label>
-          <input v-model="form.model_name" class="input" placeholder="例如 gpt-4o-mini" :disabled="saving">
+          <label class="field-label">{{ t('targets.model') }}</label>
+          <input v-model="form.model_name" class="input" :placeholder="t('targets.modelPlaceholder')" :disabled="saving">
         </div>
         <div class="field">
-          <label class="field-label">最大重试</label>
+          <label class="field-label">{{ t('targets.maxRetries') }}</label>
           <input v-model.number="form.max_retries" type="number" class="input" min="0" step="1" :disabled="saving">
         </div>
         <div class="field">
           <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">启用</label>
+            <label class="field-label">{{ t('targets.enabled') }}</label>
             <label class="toggle">
               <input v-model="form.enabled" type="checkbox" :disabled="saving">
               <span class="toggle-slider"></span>
@@ -115,11 +118,11 @@ function save() {
           </div>
         </div>
         <div v-if="showValidation" class="text-muted" style="font-size: 12px; color: var(--negative); margin-top: -4px;">
-          请选择 Provider 并填写模型名称
+          {{ t('targets.validation') }}
         </div>
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" :disabled="saving" @click="close">取消</button>
-          <button class="btn btn-primary" :disabled="saving || !isValid" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+          <button class="btn btn-secondary" :disabled="saving" @click="close">{{ t('targets.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="saving || !isValid" @click="save">{{ saving ? t('targets.saving') : t('targets.save') }}</button>
         </div>
       </div>
     </div>

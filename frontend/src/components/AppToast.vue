@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 
 const { toasts, remove } = useToast()
+const { t } = useI18n()
 
 function iconFor(type: string) {
   if (type === 'success') return '✓'
@@ -26,7 +28,7 @@ function toastClass(type: string) {
       >
         <span class="toast-icon">{{ iconFor(toast.type) }}</span>
         <span class="toast-message">{{ toast.message }}</span>
-        <button class="toast-close" aria-label="关闭" @click="remove(toast.id)">×</button>
+        <button class="toast-close" :aria-label="t('common.close')" @click="remove(toast.id)">×</button>
       </div>
     </TransitionGroup>
   </div>

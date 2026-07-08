@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import i18n from '@/locales'
 
 export interface ConfirmOptions {
   title?: string
@@ -23,10 +24,10 @@ let nextId = 1
 const state = reactive<ConfirmState>({
   open: false,
   id: 0,
-  title: '确认',
+  title: '',
   message: '',
-  confirmText: '确认',
-  cancelText: '取消',
+  confirmText: '',
+  cancelText: '',
   danger: false,
   busy: false,
 })
@@ -42,6 +43,12 @@ let resolver: ((value: boolean) => void) | null = null
  * (registered in `App.vue`) so the dialog can render from anywhere.
  */
 export function useConfirm() {
+  // Read the current i18n instance each time we open a dialog so the
+  // latest locale is used. We re-read on every `open` call rather than
+  // caching the values so language switches take effect on the next
+  // confirm.
+  const t = (key: string) => i18n.global.t(key)
+
   function open(options: ConfirmOptions): Promise<boolean> {
     // If a previous prompt is still open, resolve it as cancelled so we
     // never deadlock awaiting two stacked dialogs.
@@ -53,10 +60,10 @@ export function useConfirm() {
       prev(false)
     }
     state.id = nextId++
-    state.title = options.title ?? '确认'
+    state.title = options.title ?? t('confirm.defaultTitle')
     state.message = options.message
-    state.confirmText = options.confirmText ?? '确认'
-    state.cancelText = options.cancelText ?? '取消'
+    state.confirmText = options.confirmText ?? t('confirm.defaultConfirm')
+    state.cancelText = options.cancelText ?? t('confirm.defaultCancel')
     state.danger = options.danger ?? false
     state.busy = false
     state.open = true
