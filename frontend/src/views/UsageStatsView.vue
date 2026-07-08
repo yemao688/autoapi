@@ -6,15 +6,17 @@ import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 
 useRelativeTime()
 const { download } = useExportDownload()
 const toast = useToast()
+const confirm = useConfirm()
 
 const { data: usageData, loading, execute: fetchUsage } = useApi(api.usageStats)
 
-const activePane = ref('tokens')
+const activePane = ref('logs')
 const liveSync = ref(false)
 let liveTimer: ReturnType<typeof setInterval> | null = null
 
@@ -181,7 +183,13 @@ async function clearFilters() {
 }
 
 async function purgeLogs() {
-  if (!confirm('确定清理 90 天前的请求日志？此操作不可撤销。')) return
+  const ok = await confirm.open({
+    title: '清理历史日志',
+    message: '确定清理 90 天前的请求日志？此操作不可撤销。',
+    confirmText: '清理',
+    danger: true,
+  })
+  if (!ok) return
   try {
     const deleted = await api.purgeLogs(90)
     toast.push(`已清理 ${deleted} 条日志`, 'success')
@@ -276,7 +284,7 @@ watch([providerFilter, statusFilter], () => {
   <header class="main-header">
     <div class="main-title-group">
       <h1 class="main-title">使用统计</h1>
-      <span class="main-subtitle">Token 用量与请求日志 · 单页切换</span>
+      <span class="main-subtitle">请求日志与 Token 用量 · 单页切换</span>
     </div>
     <div class="main-actions">
       <button class="btn btn-secondary" @click="exportLogs">
@@ -299,18 +307,6 @@ watch([providerFilter, statusFilter], () => {
   <div class="tabs-strip" role="tablist" aria-label="使用统计视图" id="usage-tab-strip" @keydown="handlePaneKeydown">
     <button
       class="tab"
-      :class="{ active: activePane === 'tokens' }"
-      role="tab"
-      id="usage-tab-tokens"
-      :aria-selected="activePane === 'tokens'"
-      aria-controls="usage-pane-tokens"
-      data-pane-id="tokens"
-      @click="switchPane('tokens')"
-    >
-      Token 用量<span class="tab-meta" aria-hidden="true">{{ totalTokenValue }}</span>
-    </button>
-    <button
-      class="tab"
       :class="{ active: activePane === 'logs' }"
       role="tab"
       id="usage-tab-logs"
@@ -320,6 +316,18 @@ watch([providerFilter, statusFilter], () => {
       @click="switchPane('logs')"
     >
       请求日志<span class="tab-meta" aria-hidden="true">{{ logTotalValue.toLocaleString() }}</span>
+    </button>
+    <button
+      class="tab"
+      :class="{ active: activePane === 'tokens' }"
+      role="tab"
+      id="usage-tab-tokens"
+      :aria-selected="activePane === 'tokens'"
+      aria-controls="usage-pane-tokens"
+      data-pane-id="tokens"
+      @click="switchPane('tokens')"
+    >
+      Token 用量<span class="tab-meta" aria-hidden="true">{{ totalTokenValue }}</span>
     </button>
   </div>
 
