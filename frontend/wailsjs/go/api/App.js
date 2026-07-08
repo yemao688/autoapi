@@ -66,6 +66,10 @@ export function GetUsageTrends(arg1) {
   return window['go']['api']['App']['GetUsageTrends'](arg1);
 }
 
+export function HideWindow() {
+  return window['go']['api']['App']['HideWindow']();
+}
+
 export function ListAPIKeys() {
   return window['go']['api']['App']['ListAPIKeys']();
 }
@@ -86,6 +90,10 @@ export function ListRoutes() {
   return window['go']['api']['App']['ListRoutes']();
 }
 
+export function NavigateTo(arg1) {
+  return window['go']['api']['App']['NavigateTo'](arg1);
+}
+
 export function OpenStorageFolder() {
   return window['go']['api']['App']['OpenStorageFolder']();
 }
@@ -98,8 +106,16 @@ export function QueryLogs(arg1) {
   return window['go']['api']['App']['QueryLogs'](arg1);
 }
 
+export function Quit() {
+  return window['go']['api']['App']['Quit']();
+}
+
 export function ReorderRoutes(arg1) {
   return window['go']['api']['App']['ReorderRoutes'](arg1);
+}
+
+export function RestartProxy() {
+  return window['go']['api']['App']['RestartProxy']();
 }
 
 export function SaveSettings(arg1) {
@@ -108,6 +124,10 @@ export function SaveSettings(arg1) {
 
 export function SetModelsActive(arg1, arg2, arg3) {
   return window['go']['api']['App']['SetModelsActive'](arg1, arg2, arg3);
+}
+
+export function ShowWindow() {
+  return window['go']['api']['App']['ShowWindow']();
 }
 
 export function TestAllProviders() {

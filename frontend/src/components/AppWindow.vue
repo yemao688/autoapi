@@ -1,15 +1,27 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { onMounted, onUnmounted } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 import SidebarNav from './SidebarNav.vue'
 import StatusBar from './StatusBar.vue'
 import DropdownMenu from './DropdownMenu.vue'
 import { useTheme } from '@/composables/useTheme'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 
 const { loadFromSettings, activeTheme, saveTheme } = useTheme()
+const router = useRouter()
 
 onMounted(() => {
   void loadFromSettings()
+  // The Go side (internal/api/app.go, App.NavigateTo) emits an
+  // "app:navigate" Wails event when the user picks an item from the
+  // application menu / future tray menu. Forward the path to vue-router
+  // so the view actually changes.
+  const off = EventsOn('app:navigate', (path: string) => {
+    void router.replace(path)
+  })
+  onUnmounted(() => {
+    off()
+  })
 })
 </script>
 
