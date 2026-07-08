@@ -108,6 +108,7 @@ export namespace model {
 	    websocket_count: number;
 	    http_count: number;
 	    proxy_url: string;
+	    api_address: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ServiceHealth(source);
@@ -123,6 +124,7 @@ export namespace model {
 	        this.websocket_count = source["websocket_count"];
 	        this.http_count = source["http_count"];
 	        this.proxy_url = source["proxy_url"];
+	        this.api_address = source["api_address"];
 	    }
 	}
 	export class RequestLog {

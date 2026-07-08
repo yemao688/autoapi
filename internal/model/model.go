@@ -210,7 +210,8 @@ type ServiceHealth struct {
 	ActiveConnections int     `json:"active_connections"`
 	WebSocketCount    int     `json:"websocket_count"`
 	HTTPCount         int     `json:"http_count"`
-	ProxyURL          string  `json:"proxy_url"` // e.g. "http://0.0.0.0:8344"
+	ProxyURL          string  `json:"proxy_url"`  // e.g. "http://0.0.0.0:8344" — bind URL reported by the proxy
+	APIAddress        string  `json:"api_address"` // e.g. "http://192.168.1.5:8344" — host-reachable URL with the local IPv4; empty when proxy is not running
 }
 
 // UsageStats aggregates the usage-stats page data (token view + log view).

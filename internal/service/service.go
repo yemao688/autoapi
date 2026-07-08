@@ -12,10 +12,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"autoapi/internal/model"
@@ -110,6 +113,119 @@ func cpuPercent() float64 {
 	return percent
 }
 
+// preferredInterfaceNames lists interface name substrings (case-insensitive)
+// we prefer when picking a local IPv4 address to advertise. Order matters:
+// earlier entries are scanned first within the same priority tier (en0, Wi-Fi,
+// Ethernet cover macOS; eth0 / wlan0 cover Linux). We do a single pass that
+// keeps a best-match and a fallback so the caller gets a deterministic address
+// even on multi-homed machines.
+var preferredInterfaceNames = []string{
+	"en0", "wi-fi", "wifi", "ethernet", "eth0", "wlan0", "en1", "en2",
+}
+
+// localIPv4 returns the first usable non-loopback, non-link-local IPv4 address
+// on this host, preferring common physical interface names. If no suitable
+// address is found (e.g. an IPv6-only host, or no networking at all), it
+// returns "127.0.0.1" so callers can always build a valid http://host:port URL.
+func localIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "127.0.0.1"
+	}
+
+	prefLow := make([]string, len(preferredInterfaceNames))
+	for i, p := range preferredInterfaceNames {
+		prefLow[i] = strings.ToLower(p)
+	}
+
+	// First pass: collect any IPv4 from a preferred interface.
+	for _, pref := range prefLow {
+		for _, iface := range ifaces {
+			if !isCandidateInterface(iface) {
+				continue
+			}
+			if !strings.Contains(strings.ToLower(iface.Name), pref) {
+				continue
+			}
+			if addr := firstUsableV4(iface); addr != "" {
+				return addr
+			}
+		}
+	}
+
+	// Second pass: any non-loopback, non-link-local, non-point-to-point IPv4.
+	for _, iface := range ifaces {
+		if !isCandidateInterface(iface) {
+			continue
+		}
+		if iface.Flags&net.FlagPointToPoint != 0 {
+			continue
+		}
+		if addr := firstUsableV4(iface); addr != "" {
+			return addr
+		}
+	}
+
+	return "127.0.0.1"
+}
+
+func isCandidateInterface(iface net.Interface) bool {
+	return iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
+}
+
+func firstUsableV4(iface net.Interface) string {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip4 := ipnet.IP.To4()
+		if ip4 == nil {
+			continue
+		}
+		if ip4.IsLoopback() || ipnet.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		return ip4.String()
+	}
+	return ""
+}
+
+// resolveAPIAddress builds a client-reachable URL from the proxy's reported
+// bind URL and this host's first usable IPv4. If the proxy is not running or
+// the URL cannot be parsed, it returns an empty string.
+func resolveAPIAddress(proxyURL string) string {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return ""
+	}
+
+	raw := proxyURL
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+
+	scheme := u.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+
+	_, port, err := net.SplitHostPort(u.Host)
+	if err != nil || port == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("%s://%s:%s", scheme, localIPv4(), port)
+}
+
 // GetSystemHealth returns live runtime + proxy metrics for the dashboard.
 func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
 	var ms runtime.MemStats
@@ -126,6 +242,11 @@ func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
 		activeConns = s.proxy.ActiveConnections()
 	}
 
+	apiAddr := ""
+	if status == "running" {
+		apiAddr = resolveAPIAddress(proxyURL)
+	}
+
 	return &model.ServiceHealth{
 		Status:            status,
 		UptimeSeconds:     int64(time.Since(s.startedAt).Seconds()),
@@ -135,6 +256,7 @@ func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
 		WebSocketCount:    0, // v1 does not expose WebSocket endpoints; hide this field in UI if desired
 		HTTPCount:         activeConns,
 		ProxyURL:          proxyURL,
+		APIAddress:        apiAddr,
 	}, nil
 }
 
