@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { ref, shallowRef, watch, computed, onMounted } from 'vue'
-import { useSortable } from '@vueuse/integrations/useSortable'
+import { ref, watch, computed, onMounted } from 'vue'
+import { VueDraggable } from 'vue-draggable-plus'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderMeta } from '../composables/useProviderMeta'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 import { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
 const { color: providerColor, letter: providerLetter } = useProviderMeta()
 const { currency: fmtCurrency } = useFormatters()
 const toast = useToast()
+const confirm = useConfirm()
 
 const {
   data: routes,
@@ -31,7 +33,7 @@ const editingId = ref('')
 const saving = ref(false)
 const openMenuId = ref('')
 
-// Form state — targets live separately so useSortable can rebind cleanly.
+// Form state — targets live separately so vue-draggable-plus can rebind cleanly.
 const form = ref<{
   name: string
   description: string
@@ -46,49 +48,29 @@ const form = ref<{
 const formTargets = ref<model.RouteTarget[]>([])
 
 // ---- Rule list drag (live-persist on reorder) ----
-const ruleList = shallowRef<model.Route[]>([])
-const ruleListEl = ref<HTMLElement | null>(null)
+// `vue-draggable-plus` mutates the bound array via splice, so a regular
+// `ref` triggers Vue reactivity on every reorder. That fixes the old
+// `useSortable` bug where `shallowRef` + DOM mutations left the array
+// stale when `onEnd` read it back.
+const ruleList = ref<model.Route[]>([])
 
-watch(routes, (val) => {
-  ruleList.value = val || []
-}, { immediate: true })
-
-useSortable(ruleListEl, ruleList, {
-  handle: '.drag-handle',
-  animation: 150,
-  ghostClass: 'sortable-ghost',
-  chosenClass: 'sortable-chosen',
-  dragClass: 'sortable-drag',
-  onEnd: async () => {
-    try {
-      await api.reorderRoutes(ruleList.value.map((r) => r.id))
-      await loadRoutes()
-    } catch (e: any) {
-      toast.push('排序失败：' + (e?.message || String(e)), 'error')
-      await loadRoutes() // revert to server truth
-    }
+watch(
+  routes,
+  (val) => {
+    ruleList.value = val ? [...val] : []
   },
-})
+  { immediate: true }
+)
 
-// ---- Target list drag (in-memory, persist on save) ----
-// The modal is v-if-toggled, so the element doesn't exist at onMounted and
-// useSortable's internal tryOnMounted(start) bails on null. Capture the handle
-// and (re)bind whenever the element ref becomes non-null (modal opens).
-const targetListEl = ref<HTMLElement | null>(null)
-const targetSortable = useSortable(targetListEl, formTargets, {
-  handle: '.drag-handle',
-  animation: 150,
-  ghostClass: 'sortable-ghost',
-  chosenClass: 'sortable-chosen',
-  dragClass: 'sortable-drag',
-})
-
-watch(targetListEl, (el) => {
-  if (el) {
-    targetSortable.stop()
-    targetSortable.start()
+async function persistRuleOrder() {
+  try {
+    await api.reorderRoutes(ruleList.value.map((r) => r.id))
+    await loadRoutes()
+  } catch (e: any) {
+    toast.push('排序失败：' + (e?.message || String(e)), 'error')
+    await loadRoutes() // revert to server truth
   }
-})
+}
 
 // Stable v-for key for form targets (new ones lack a backend id).
 let _targetSeq = 0
@@ -227,16 +209,25 @@ async function toggleRoute(route: model.Route) {
   }
 }
 
-async function deleteRoute(id: string) {
-  if (!confirm('确认删除？')) return
+async function deleteRoute(id: string, name: string) {
+  openMenuId.value = ''
+  const ok = await confirm.open({
+    title: '删除规则',
+    message: `确定删除规则「${name}」？此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  saving.value = true
   try {
     await api.deleteRoute(id)
     await loadRoutes()
     toast.push('规则已删除', 'success')
   } catch (e: any) {
     toast.push('删除失败：' + (e?.message || String(e)), 'error')
+  } finally {
+    saving.value = false
   }
-  openMenuId.value = ''
 }
 
 function editDefault() {
@@ -291,7 +282,16 @@ onMounted(() => {
         </div>
 
         <!-- Rule list (sortable container) -->
-        <div ref="ruleListEl" class="stack-loose">
+        <VueDraggable
+          v-model="ruleList"
+          handle=".drag-handle"
+          :animation="150"
+          ghost-class="sortable-ghost"
+          chosen-class="sortable-chosen"
+          drag-class="sortable-drag"
+          class="stack-loose"
+          @end="persistRuleOrder"
+        >
           <article v-for="(route, idx) in ruleList" :key="route.id" class="card" :style="{ opacity: route.enabled ? 1 : 0.6 }">
             <div class="row-between" style="margin-bottom: 14px;">
               <div class="row" style="gap: 12px;">
@@ -322,7 +322,7 @@ onMounted(() => {
                   <div v-if="openMenuId === route.id" class="dropdown-menu">
                     <button class="dropdown-item" @click="openEdit(route); openMenuId = ''">编辑</button>
                     <button class="dropdown-item" @click="toggleRoute(route); openMenuId = ''">{{ route.enabled ? '禁用' : '启用' }}</button>
-                    <button class="dropdown-item danger" @click="deleteRoute(route.id)">删除</button>
+                    <button class="dropdown-item danger" @click="deleteRoute(route.id, route.name)">删除</button>
                   </div>
                 </div>
               </div>
@@ -370,7 +370,7 @@ onMounted(() => {
               </div>
             </div>
           </article>
-        </div>
+        </VueDraggable>
       </template>
     </div>
   </div>
@@ -429,7 +429,16 @@ onMounted(() => {
         <div class="field" style="margin-bottom: 8px;">
           <div class="field-label">目标 <span class="text-muted" style="font-weight: 400; text-transform: none; letter-spacing: 0;">· 拖动排序</span></div>
         </div>
-        <div ref="targetListEl" class="stack-tight" style="gap: 8px;">
+        <VueDraggable
+          v-model="formTargets"
+          handle=".drag-handle"
+          :animation="150"
+          ghost-class="sortable-ghost"
+          chosen-class="sortable-chosen"
+          drag-class="sortable-drag"
+          class="stack-tight"
+          style="gap: 8px;"
+        >
           <div v-for="(target, idx) in formTargets" :key="targetKey(target, idx)" class="row" style="gap: 8px; align-items: flex-start;">
             <!-- Target drag handle -->
             <svg class="drag-handle" viewBox="0 0 16 28" fill="currentColor" width="14" height="22" aria-label="拖拽排序" style="margin-top: 6px;">
@@ -449,8 +458,8 @@ onMounted(() => {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <button class="btn btn-secondary" style="align-self: flex-start;" @click="addTarget">添加目标</button>
-        </div>
+        </VueDraggable>
+        <button class="btn btn-secondary" style="align-self: flex-start;" @click="addTarget">添加目标</button>
 
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">取消</button>

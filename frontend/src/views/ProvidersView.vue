@@ -6,12 +6,14 @@ import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderMeta } from '../composables/useProviderMeta'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 import type { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
 const { color: providerColor, letter: providerLetter } = useProviderMeta()
 const { tokens: fmtTokens, latency: fmtLatency } = useFormatters()
 const toast = useToast()
+const confirm = useConfirm()
 
 const {
   data: providers,
@@ -226,16 +228,25 @@ function closeModal() {
   fetchingModels.value = false
 }
 
-async function deleteProvider(id: string) {
-  if (!confirm('确认删除该 Provider？')) return
+async function deleteProvider(id: string, name: string) {
+  openMenuId.value = ''
+  const ok = await confirm.open({
+    title: '删除 Provider',
+    message: `确定删除 Provider「${name}」？该 Provider 下的所有模型与路由引用都将被清理，此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  saving.value = true
   try {
     await api.deleteProvider(id)
     await refresh()
     toast.push('Provider 已删除', 'success')
   } catch (e: any) {
     toast.push('删除失败：' + (e?.message || String(e)), 'error')
+  } finally {
+    saving.value = false
   }
-  openMenuId.value = ''
 }
 
 function handleTabKeydown(e: KeyboardEvent) {
@@ -379,7 +390,7 @@ onMounted(() => {
                   </button>
                   <div v-if="openMenuId === provider.id" class="dropdown-menu">
                     <button class="dropdown-item" @click="openEdit(provider); openMenuId = ''">编辑</button>
-                    <button class="dropdown-item danger" @click="deleteProvider(provider.id)">删除</button>
+                    <button class="dropdown-item danger" @click="deleteProvider(provider.id, provider.name)">删除</button>
                   </div>
                 </div>
               </div>
