@@ -8,6 +8,7 @@ import { useProviderStyle } from '../composables/useProviderStyle'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
+import DropdownMenu from '@/components/DropdownMenu.vue'
 import { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
@@ -33,7 +34,7 @@ const { data: settings, execute: loadSettings } = useApi(api.getSettings)
 const modalOpen = ref(false)
 const editingId = ref('')
 const saving = ref(false)
-const openMenuId = ref('')
+const deleting = ref(false)
 
 // Form state — targets live separately so vue-draggable-plus can rebind cleanly.
 const form = ref<{
@@ -220,7 +221,6 @@ async function toggleRoute(route: model.Route) {
 }
 
 async function deleteRoute(id: string, name: string) {
-  openMenuId.value = ''
   const ok = await confirm.open({
     title: '删除规则',
     message: `确定删除规则「${name}」？此操作不可撤销。`,
@@ -228,7 +228,7 @@ async function deleteRoute(id: string, name: string) {
     danger: true,
   })
   if (!ok) return
-  saving.value = true
+  deleting.value = true
   try {
     await api.deleteRoute(id)
     await loadRoutes()
@@ -236,7 +236,7 @@ async function deleteRoute(id: string, name: string) {
   } catch (e: any) {
     toast.push('删除失败：' + (e?.message || String(e)), 'error')
   } finally {
-    saving.value = false
+    deleting.value = false
   }
 }
 
@@ -407,16 +407,24 @@ onMounted(() => {
                   <input type="checkbox" :checked="route.enabled" @change="toggleRoute(route)">
                   <span class="toggle-slider blue"></span>
                 </label>
-                <div style="position: relative;">
-                  <button class="btn btn-icon" @click="openMenuId = openMenuId === route.id ? '' : route.id">
-                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-                  </button>
-                  <div v-if="openMenuId === route.id" class="dropdown-menu">
-                    <button class="dropdown-item" @click="openEdit(route); openMenuId = ''">编辑</button>
-                    <button class="dropdown-item" @click="toggleRoute(route); openMenuId = ''">{{ route.enabled ? '禁用' : '启用' }}</button>
-                    <button class="dropdown-item danger" @click="deleteRoute(route.id, route.name)">删除</button>
-                  </div>
-                </div>
+                <DropdownMenu :menu-id="route.id">
+                  <template #trigger="{ toggle, open }">
+                    <button
+                      class="btn btn-icon"
+                      :aria-expanded="open"
+                      aria-haspopup="menu"
+                      :aria-label="`更多操作：${route.name}`"
+                      @click="toggle"
+                    >
+                      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                    </button>
+                  </template>
+                  <template #menu="{ close }">
+                    <button class="dropdown-item" role="menuitem" @click="openEdit(route); close()">编辑</button>
+                    <button class="dropdown-item" role="menuitem" @click="toggleRoute(route); close()">{{ route.enabled ? '禁用' : '启用' }}</button>
+                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteRoute(route.id, route.name); close()">删除</button>
+                  </template>
+                </DropdownMenu>
               </div>
             </div>
             <div class="col-3" style="gap: 0;">
