@@ -2,16 +2,15 @@ package store
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"autoapi/internal/model"
 )
 
-// GetChartAggregates returns pre-aggregated time-series and breakdown data for
-// the dashboard charts. It uses the same filter semantics as QueryLogs so that
-// chart numbers always match the filtered request log table.
-func (s *Store) GetChartAggregates(q model.ChartQuery) (*model.ChartAggregates, error) {
+// GetUsageTrends returns pre-aggregated usage-trend buckets for the
+// usage-stats chart. It uses the same filter semantics as QueryLogs so chart
+// numbers always match the filtered request log table.
+func (s *Store) GetUsageTrends(q model.UsageTrendsQuery) (*model.UsageTrends, error) {
 	bucketExpr, bucketSize := chartBucketExpr(q.StartDate, q.EndDate)
 	where, args := buildChartFilter(q)
 
@@ -20,22 +19,10 @@ func (s *Store) GetChartAggregates(q model.ChartQuery) (*model.ChartAggregates, 
 		return nil, fmt.Errorf("store: chart buckets: %w", err)
 	}
 
-	breakdown, err := s.chartStatusBreakdown(where, args)
-	if err != nil {
-		return nil, fmt.Errorf("store: chart status breakdown: %w", err)
-	}
-
-	shares, err := s.chartProviderShares(where, args)
-	if err != nil {
-		return nil, fmt.Errorf("store: chart provider shares: %w", err)
-	}
-
-	return &model.ChartAggregates{
-		Range:           chartRangeLabel(q.StartDate, q.EndDate),
-		BucketSize:      bucketSize,
-		Buckets:         buckets,
-		StatusBreakdown: breakdown,
-		ProviderShares:  shares,
+	return &model.UsageTrends{
+		Range:      chartRangeLabel(q.StartDate, q.EndDate),
+		BucketSize: bucketSize,
+		Buckets:    buckets,
 	}, nil
 }
 
@@ -58,7 +45,7 @@ func chartRangeLabel(startDate, endDate int64) string {
 	return fmt.Sprintf("%s..%s", format(startDate), format(endDate))
 }
 
-func buildChartFilter(q model.ChartQuery) (where string, args []interface{}) {
+func buildChartFilter(q model.UsageTrendsQuery) (where string, args []interface{}) {
 	where = "WHERE 1=1"
 	args = []interface{}{}
 	if q.StartDate > 0 {
@@ -89,18 +76,15 @@ func buildChartFilter(q model.ChartQuery) (where string, args []interface{}) {
 	return where, args
 }
 
-func (s *Store) chartBuckets(bucketExpr, where string, args []interface{}) ([]model.TimeBucket, error) {
+func (s *Store) chartBuckets(bucketExpr, where string, args []interface{}) ([]model.UsageTrendBucket, error) {
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS bucket,
-			SUM(CASE WHEN status_code BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS success,
-			SUM(CASE WHEN status_code = 429 THEN 1 ELSE 0 END) AS rate_limited,
-			SUM(CASE WHEN (status_code >= 400 AND status_code != 429) OR error != '' THEN 1 ELSE 0 END) AS errors,
-			SUM(input_tokens) AS input_tokens,
-			SUM(output_tokens) AS output_tokens,
 			SUM(cost) AS cost,
-			AVG(latency_ms) AS avg_latency_ms,
-			AVG(CASE WHEN is_stream = 1 AND first_token_ms > 0 THEN first_token_ms END) AS avg_ttft_ms
+			SUM(cache_creation) AS cache_creation,
+			SUM(cache_hit) AS cache_hit,
+			SUM(input_tokens) AS input_tokens,
+			SUM(output_tokens) AS output_tokens
 		FROM request_logs %s
 		GROUP BY bucket
 		ORDER BY bucket ASC`, bucketExpr, where)
@@ -111,144 +95,26 @@ func (s *Store) chartBuckets(bucketExpr, where string, args []interface{}) ([]mo
 	}
 	defer rows.Close()
 
-	var buckets []model.TimeBucket
+	var buckets []model.UsageTrendBucket
 	for rows.Next() {
-		var b model.TimeBucket
-		var avgLatency sqlNullFloat64
-		var avgTTFT sqlNullFloat64
+		var b model.UsageTrendBucket
 		if err := rows.Scan(
 			&b.Bucket,
-			&b.Success,
-			&b.RateLimited,
-			&b.Error,
-			&b.InputTokens,
-			&b.OutputTokens,
 			&b.Cost,
-			&avgLatency,
-			&avgTTFT,
+			&b.CacheCreation,
+			&b.CacheHit,
+			&b.Input,
+			&b.Output,
 		); err != nil {
 			return nil, err
 		}
-		b.AvgLatencyMs = int64(math.Round(avgLatency.Float64))
-		b.AvgTTFTMs = int64(math.Round(avgTTFT.Float64))
 		buckets = append(buckets, b)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	if buckets == nil {
-		buckets = []model.TimeBucket{}
+		buckets = []model.UsageTrendBucket{}
 	}
 	return buckets, nil
-}
-
-type sqlNullFloat64 struct {
-	Float64 float64
-	Valid   bool
-}
-
-func (n *sqlNullFloat64) Scan(value interface{}) error {
-	if value == nil {
-		n.Float64, n.Valid = 0, false
-		return nil
-	}
-	n.Valid = true
-	switch v := value.(type) {
-	case float64:
-		n.Float64 = v
-	case int64:
-		n.Float64 = float64(v)
-	case int:
-		n.Float64 = float64(v)
-	default:
-		return fmt.Errorf("unsupported sqlNullFloat64 type: %T", value)
-	}
-	return nil
-}
-
-func (s *Store) chartStatusBreakdown(where string, args []interface{}) ([]model.StatusBreakdown, error) {
-	query := fmt.Sprintf(`
-		SELECT
-			COALESCE(SUM(CASE WHEN status_code BETWEEN 200 AND 299 THEN 1 ELSE 0 END), 0) AS success,
-			COALESCE(SUM(CASE WHEN status_code = 429 THEN 1 ELSE 0 END), 0) AS rate_limited,
-			COALESCE(SUM(CASE WHEN (status_code >= 400 AND status_code != 429) OR error != '' THEN 1 ELSE 0 END), 0) AS errors,
-			COALESCE(SUM(CASE WHEN status_code NOT BETWEEN 200 AND 299 AND status_code != 429 AND (status_code < 400 OR status_code = 0) AND error = '' THEN 1 ELSE 0 END), 0) AS other,
-			COUNT(*) AS total
-		FROM request_logs %s`, where)
-
-	var success, rateLimited, errors, other, total int64
-	row := s.db.QueryRow(query, args...)
-	if err := row.Scan(&success, &rateLimited, &errors, &other, &total); err != nil {
-		return nil, err
-	}
-	if total == 0 {
-		return []model.StatusBreakdown{}, nil
-	}
-
-	parts := []struct {
-		label string
-		count int64
-	}{
-		{"2xx", success},
-		{"429", rateLimited},
-		{"错误", errors},
-		{"其他", other},
-	}
-	var breakdown []model.StatusBreakdown
-	for _, p := range parts {
-		if p.count == 0 {
-			continue
-		}
-		breakdown = append(breakdown, model.StatusBreakdown{
-			Label:   p.label,
-			Count:   p.count,
-			Percent: round2(float64(p.count) / float64(total) * 100),
-		})
-	}
-	return breakdown, nil
-}
-
-func (s *Store) chartProviderShares(where string, args []interface{}) ([]model.ProviderShare, error) {
-	query := fmt.Sprintf(`
-		SELECT provider_name, provider_id,
-			   SUM(input_tokens) + SUM(output_tokens) AS tokens,
-			   SUM(cost) AS cost,
-			   COUNT(*) AS requests
-		FROM request_logs %s
-		GROUP BY provider_id, provider_name
-		ORDER BY tokens DESC`, where)
-
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var shares []model.ProviderShare
-	var totalTokens int64
-	for rows.Next() {
-		var p model.ProviderShare
-		var requests int64
-		if err := rows.Scan(&p.ProviderName, &p.ProviderID, &p.Tokens, &p.Cost, &requests); err != nil {
-			return nil, err
-		}
-		totalTokens += p.Tokens
-		shares = append(shares, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if totalTokens > 0 {
-		for i := range shares {
-			shares[i].Percent = round2(float64(shares[i].Tokens) / float64(totalTokens) * 100)
-		}
-	}
-	if shares == nil {
-		shares = []model.ProviderShare{}
-	}
-	return shares, nil
-}
-
-func round2(v float64) float64 {
-	return math.Round(v*100) / 100
 }

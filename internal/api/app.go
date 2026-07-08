@@ -72,7 +72,7 @@ type StoreService interface {
 	QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error)
 	Dashboard() (*model.DashboardData, error)
 	UsageStats() (*model.UsageStats, error)
-	GetChartAggregates(q model.ChartQuery) (*model.ChartAggregates, error)
+	GetUsageTrends(q model.UsageTrendsQuery) (*model.UsageTrends, error)
 	PurgeLogs(olderThanDays int) (int, error)
 
 	// Settings
@@ -405,15 +405,16 @@ func (a *App) QueryLogs(q model.LogQuery) (*model.LogQueryResult, error) {
 	return &model.LogQueryResult{Logs: logs, Total: total}, nil
 }
 
-// GetChartAggregates returns pre-aggregated chart data (time series + status
-// + provider breakdowns) for the dashboard. The store picks hourly vs daily
-// bucket size based on the date range; the frontend does not need to know the
-// underlying resolution, just read ChartAggregates.BucketSize.
-func (a *App) GetChartAggregates(q model.ChartQuery) (*model.ChartAggregates, error) {
+// GetUsageTrends returns pre-aggregated usage-trend data (input / output /
+// cache-creation / cache-hit tokens + cost, bucketed over the filtered range)
+// for the usage-stats chart. The store picks hourly vs daily bucket size
+// based on the date range; the frontend does not need to know the underlying
+// resolution, just read UsageTrends.BucketSize.
+func (a *App) GetUsageTrends(q model.UsageTrendsQuery) (*model.UsageTrends, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.GetChartAggregates(q)
+	return a.deps.Store.GetUsageTrends(q)
 }
 
 // ----- Settings -----

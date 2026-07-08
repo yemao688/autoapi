@@ -1,14 +1,27 @@
 <script setup lang="ts">
 import type { model } from '../../../wailsjs/go/models'
-import TokenTrendChart from './TokenTrendChart.vue'
-import ProviderShareChart from './ProviderShareChart.vue'
+import UsageTrendChart from './UsageTrendChart.vue'
 
 interface Props {
   tokenStats: model.Stat[]
   modelRanking: model.ModelRanking[]
-  chartData: model.ChartAggregates
+  providerShares: model.ProviderShare[]
+  chartData: model.UsageTrends
 }
 defineProps<Props>()
+
+const providerColors: Record<string, string> = {
+  openai: '#10a37f',
+  anthropic: '#d97757',
+  deepseek: '#272729',
+  moonshot: '#0071e3',
+  '智谱 glm': '#2563eb',
+  glm: '#2563eb',
+}
+
+function providerColor(name: string): string {
+  return providerColors[name.toLowerCase()] || '#6e6e73'
+}
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M'
@@ -34,17 +47,28 @@ function formatNumber(n: number): string {
     <section class="card" style="padding: 24px;">
       <div class="row-between" style="margin-bottom: 20px;">
         <div>
-          <div class="card-title" style="margin: 0;">Token 用量趋势</div>
-          <div class="text-muted" style="font-size: 12px; margin-top: 4px;">按时间聚合 · 输入 / 输出 / 成本</div>
+          <div class="card-title" style="margin: 0;">使用趋势</div>
+          <div class="text-muted" style="font-size: 12px; margin-top: 4px;">输入 / 输出 / 缓存 / 成本 · 按时间聚合</div>
         </div>
       </div>
-      <TokenTrendChart :data="chartData" />
+      <UsageTrendChart :data="chartData" />
     </section>
 
     <section class="col-2">
       <div class="card">
-        <div class="card-title"><span>Provider 占比</span></div>
-        <ProviderShareChart :data="chartData" />
+        <div class="card-title"><span>Provider 占比</span><span class="card-title-link" style="text-transform:none;">本月</span></div>
+        <div class="stack-tight" style="padding-top: 4px;">
+          <div v-for="p in providerShares" :key="p.provider_id" class="list-row" style="padding: 8px 0;">
+            <div class="row" style="gap: 8px; align-items: center; min-width: 0;">
+              <span class="chart-legend-swatch" :style="{ background: providerColor(p.provider_name) }"></span>
+              <span style="font-size: 13px;">{{ p.provider_name }}</span>
+            </div>
+            <div class="text-mono" style="font-size: 13px; font-weight: 500; text-align: right;">
+              <div>{{ p.percent }}%</div>
+              <div class="text-muted" style="font-size: 11px; font-weight: 400;">{{ formatNumber(p.tokens) }} tokens · ${{ p.cost.toFixed(2) }}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="card">

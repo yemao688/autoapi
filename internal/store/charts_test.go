@@ -7,25 +7,19 @@ import (
 	"autoapi/internal/model"
 )
 
-func TestChartAggregates_Empty(t *testing.T) {
+func TestUsageTrends_Empty(t *testing.T) {
 	st := newTestStore(t)
 
-	agg, err := st.GetChartAggregates(model.ChartQuery{})
+	agg, err := st.GetUsageTrends(model.UsageTrendsQuery{})
 	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
+		t.Fatalf("GetUsageTrends failed: %v", err)
 	}
 	if len(agg.Buckets) != 0 {
 		t.Errorf("expected 0 buckets, got %d", len(agg.Buckets))
 	}
-	if len(agg.StatusBreakdown) != 0 {
-		t.Errorf("expected 0 status breakdown, got %d", len(agg.StatusBreakdown))
-	}
-	if len(agg.ProviderShares) != 0 {
-		t.Errorf("expected 0 provider shares, got %d", len(agg.ProviderShares))
-	}
 }
 
-func TestChartAggregates_BucketsAndBreakdown(t *testing.T) {
+func TestUsageTrends_BucketShape(t *testing.T) {
 	st := newTestStore(t)
 	now := time.Now().Truncate(time.Hour).UnixMilli()
 
@@ -42,9 +36,9 @@ func TestChartAggregates_BucketsAndBreakdown(t *testing.T) {
 	// Intra-day range should use hourly buckets.
 	start := now - 3*time.Hour.Milliseconds()
 	end := now + time.Hour.Milliseconds()
-	agg, err := st.GetChartAggregates(model.ChartQuery{StartDate: start, EndDate: end})
+	agg, err := st.GetUsageTrends(model.UsageTrendsQuery{StartDate: start, EndDate: end})
 	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
+		t.Fatalf("GetUsageTrends failed: %v", err)
 	}
 	if agg.BucketSize != "hour" {
 		t.Errorf("expected hourly buckets, got %s", agg.BucketSize)
@@ -55,9 +49,9 @@ func TestChartAggregates_BucketsAndBreakdown(t *testing.T) {
 
 	// Daily range should use daily buckets.
 	start = now - 48 * time.Hour.Milliseconds()
-	agg, err = st.GetChartAggregates(model.ChartQuery{StartDate: start, EndDate: end})
+	agg, err = st.GetUsageTrends(model.UsageTrendsQuery{StartDate: start, EndDate: end})
 	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
+		t.Fatalf("GetUsageTrends failed: %v", err)
 	}
 	if agg.BucketSize != "day" {
 		t.Errorf("expected daily buckets, got %s", agg.BucketSize)
@@ -65,32 +59,46 @@ func TestChartAggregates_BucketsAndBreakdown(t *testing.T) {
 	if len(agg.Buckets) != 2 {
 		t.Errorf("expected 2 daily buckets, got %d", len(agg.Buckets))
 	}
+}
 
-	// Status breakdown should sum to ~100 across the filtered range.
-	var totalPct float64
-	var totalCount int64
-	for _, b := range agg.StatusBreakdown {
-		totalPct += b.Percent
-		totalCount += b.Count
+func TestUsageTrends_AggregationFields(t *testing.T) {
+	st := newTestStore(t)
+	now := time.Now().Truncate(time.Hour).UnixMilli()
+
+	logs := []model.RequestLog{
+		{ID: "l1", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, CacheCreation: 5, CacheHit: 7, RouteID: "r1", RouteLabel: "default"},
+		{ID: "l2", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 200, OutputTokens: 80, Cost: 0.011, CacheCreation: 2, CacheHit: 3, RouteID: "r1", RouteLabel: "default"},
 	}
-	if totalCount != 4 {
-		t.Errorf("expected 4 total requests, got %d", totalCount)
-	}
-	if totalPct < 99.9 || totalPct > 100.1 {
-		t.Errorf("expected status breakdown ~100%%, got %.2f", totalPct)
+	if err := st.InsertRequestLogsBatch(logs); err != nil {
+		t.Fatalf("seed logs failed: %v", err)
 	}
 
-	// Provider shares should sum to 100.
-	var tokenPct float64
-	for _, s := range agg.ProviderShares {
-		tokenPct += s.Percent
+	agg, err := st.GetUsageTrends(model.UsageTrendsQuery{StartDate: now - time.Hour.Milliseconds(), EndDate: now + time.Hour.Milliseconds()})
+	if err != nil {
+		t.Fatalf("GetUsageTrends failed: %v", err)
 	}
-	if tokenPct < 99.9 || tokenPct > 100.1 {
-		t.Errorf("expected provider shares ~100%%, got %.2f", tokenPct)
+	if len(agg.Buckets) != 1 {
+		t.Fatalf("expected 1 bucket, got %d", len(agg.Buckets))
+	}
+	b := agg.Buckets[0]
+	if b.Input != 300 {
+		t.Errorf("expected input 300, got %d", b.Input)
+	}
+	if b.Output != 130 {
+		t.Errorf("expected output 130, got %d", b.Output)
+	}
+	if b.Cost < 0.015 || b.Cost > 0.017 {
+		t.Errorf("expected cost ~0.016, got %.4f", b.Cost)
+	}
+	if b.CacheCreation != 7 {
+		t.Errorf("expected cache_creation 7, got %d", b.CacheCreation)
+	}
+	if b.CacheHit != 10 {
+		t.Errorf("expected cache_hit 10, got %d", b.CacheHit)
 	}
 }
 
-func TestChartAggregates_Filters(t *testing.T) {
+func TestUsageTrends_Filters(t *testing.T) {
 	st := newTestStore(t)
 	now := time.Now().Truncate(time.Hour).UnixMilli()
 
@@ -106,132 +114,35 @@ func TestChartAggregates_Filters(t *testing.T) {
 	end := now + time.Hour.Milliseconds()
 
 	cases := []struct {
-		name  string
-		q     model.ChartQuery
-		want  int64
+		name    string
+		q       model.UsageTrendsQuery
+		wantTot int64
 	}{
-		{"provider", model.ChartQuery{StartDate: start, EndDate: end, Provider: "p1"}, 1},
-		{"route", model.ChartQuery{StartDate: start, EndDate: end, RouteID: "r2"}, 1},
-		{"model", model.ChartQuery{StartDate: start, EndDate: end, Model: "gpt-4o"}, 1},
-		{"search model", model.ChartQuery{StartDate: start, EndDate: end, Search: "claude"}, 1},
-		{"search route label", model.ChartQuery{StartDate: start, EndDate: end, Search: "backup"}, 1},
+		{"provider", model.UsageTrendsQuery{StartDate: start, EndDate: end, Provider: "p1"}, 150},
+		{"route", model.UsageTrendsQuery{StartDate: start, EndDate: end, RouteID: "r2"}, 300},
+		{"model", model.UsageTrendsQuery{StartDate: start, EndDate: end, Model: "gpt-4o"}, 150},
+		{"search model", model.UsageTrendsQuery{StartDate: start, EndDate: end, Search: "claude"}, 300},
+		{"search route label", model.UsageTrendsQuery{StartDate: start, EndDate: end, Search: "backup"}, 300},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			agg, err := st.GetChartAggregates(tc.q)
+			agg, err := st.GetUsageTrends(tc.q)
 			if err != nil {
-				t.Fatalf("GetChartAggregates failed: %v", err)
+				t.Fatalf("GetUsageTrends failed: %v", err)
 			}
 			var total int64
 			for _, b := range agg.Buckets {
-				total += b.Success + b.RateLimited + b.Error
+				total += b.Input + b.Output
 			}
-			if total != tc.want {
-				t.Errorf("expected %d requests, got %d", tc.want, total)
+			if total != tc.wantTot {
+				t.Errorf("expected %d tokens, got %d", tc.wantTot, total)
 			}
 		})
 	}
 }
 
-func TestChartAggregates_StatusZeroWithErrorIsError(t *testing.T) {
-	st := newTestStore(t)
-	now := time.Now().Truncate(time.Hour).UnixMilli()
-
-	logs := []model.RequestLog{
-		{ID: "l1", Timestamp: now, StatusCode: 0, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, RouteID: "r1", RouteLabel: "default", Error: "client disconnect"},
-		{ID: "l2", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 10, OutputTokens: 0, Cost: 0, LatencyMs: 200, RouteID: "r1", RouteLabel: "default"},
-	}
-	if err := st.InsertRequestLogsBatch(logs); err != nil {
-		t.Fatalf("seed logs failed: %v", err)
-	}
-
-	agg, err := st.GetChartAggregates(model.ChartQuery{})
-	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
-	}
-	if len(agg.StatusBreakdown) != 2 {
-		t.Fatalf("expected 2 status classes, got %d", len(agg.StatusBreakdown))
-	}
-
-	var errorCount, totalCount int64
-	for _, b := range agg.StatusBreakdown {
-		totalCount += b.Count
-		if b.Label == "错误" {
-			errorCount = b.Count
-		}
-	}
-	if totalCount != 2 {
-		t.Errorf("expected total 2, got %d", totalCount)
-	}
-	if errorCount != 1 {
-		t.Errorf("expected 1 error (status 0 with error message), got %d", errorCount)
-	}
-}
-
-func TestChartAggregates_StatusZeroWithoutErrorIsOther(t *testing.T) {
-	st := newTestStore(t)
-	now := time.Now().Truncate(time.Hour).UnixMilli()
-
-	logs := []model.RequestLog{
-		{ID: "l1", Timestamp: now, StatusCode: 0, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, RouteID: "r1", RouteLabel: "default"},
-		{ID: "l2", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 10, OutputTokens: 0, Cost: 0, LatencyMs: 200, RouteID: "r1", RouteLabel: "default"},
-	}
-	if err := st.InsertRequestLogsBatch(logs); err != nil {
-		t.Fatalf("seed logs failed: %v", err)
-	}
-
-	agg, err := st.GetChartAggregates(model.ChartQuery{})
-	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
-	}
-	if len(agg.StatusBreakdown) != 2 {
-		t.Fatalf("expected 2 status classes (2xx + other), got %d", len(agg.StatusBreakdown))
-	}
-
-	var found2xx, foundOther bool
-	for _, b := range agg.StatusBreakdown {
-		if b.Label == "2xx" && b.Count == 1 {
-			found2xx = true
-		}
-		if b.Label == "其他" && b.Count == 1 {
-			foundOther = true
-		}
-	}
-	if !found2xx {
-		t.Errorf("expected 1 request in 2xx class")
-	}
-	if !foundOther {
-		t.Errorf("expected 1 request in 其他 class")
-	}
-}
-
-func TestChartAggregates_TTFTAveraging(t *testing.T) {
-	st := newTestStore(t)
-	now := time.Now().Truncate(time.Hour).UnixMilli()
-
-	logs := []model.RequestLog{
-		{ID: "l1", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, FirstTokenMs: 100, IsStream: true, RouteID: "r1", RouteLabel: "default"},
-		{ID: "l2", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, FirstTokenMs: 300, IsStream: true, RouteID: "r1", RouteLabel: "default"},
-		{ID: "l3", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, FirstTokenMs: 0, IsStream: false, RouteID: "r1", RouteLabel: "default"},
-	}
-	if err := st.InsertRequestLogsBatch(logs); err != nil {
-		t.Fatalf("seed logs failed: %v", err)
-	}
-
-	agg, err := st.GetChartAggregates(model.ChartQuery{})
-	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
-	}
-	if len(agg.Buckets) != 1 {
-		t.Fatalf("expected 1 bucket, got %d", len(agg.Buckets))
-	}
-	if agg.Buckets[0].AvgTTFTMs != 200 {
-		t.Errorf("expected avg TTFT 200ms, got %d", agg.Buckets[0].AvgTTFTMs)
-	}
-}
-
-func TestChartAggregates_SearchNoSQLInjection(t *testing.T) {
+func TestUsageTrends_SearchNoSQLInjection(t *testing.T) {
 	st := newTestStore(t)
 	now := time.Now().Truncate(time.Hour).UnixMilli()
 
@@ -243,7 +154,7 @@ func TestChartAggregates_SearchNoSQLInjection(t *testing.T) {
 	}
 
 	malicious := "' OR 1=1 --"
-	agg, err := st.GetChartAggregates(model.ChartQuery{Search: malicious})
+	agg, err := st.GetUsageTrends(model.UsageTrendsQuery{Search: malicious})
 	if err != nil {
 		t.Fatalf("search with malicious input should not error: %v", err)
 	}
@@ -252,55 +163,27 @@ func TestChartAggregates_SearchNoSQLInjection(t *testing.T) {
 	}
 }
 
-func TestChartAggregates_ProviderShareOrdering(t *testing.T) {
+func TestUsageTrends_NoStatusOrProviderBreakdown(t *testing.T) {
+	// The single-trend chart surface no longer needs status or provider
+	// breakdowns; the response should carry only Range, BucketSize, Buckets.
 	st := newTestStore(t)
 	now := time.Now().Truncate(time.Hour).UnixMilli()
-
-	logs := []model.RequestLog{
-		{ID: "l1", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 1000, OutputTokens: 500, Cost: 0.05, LatencyMs: 500, RouteID: "r1", RouteLabel: "default"},
-		{ID: "l2", Timestamp: now, StatusCode: 200, ProviderID: "p2", ProviderName: "Anthropic", Model: "claude-3", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, RouteID: "r2", RouteLabel: "backup"},
-	}
-	if err := st.InsertRequestLogsBatch(logs); err != nil {
+	if err := st.InsertRequestLogsBatch([]model.RequestLog{
+		{ID: "l1", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 1, OutputTokens: 1, Cost: 0, RouteID: "r1", RouteLabel: "default"},
+	}); err != nil {
 		t.Fatalf("seed logs failed: %v", err)
 	}
-
-	agg, err := st.GetChartAggregates(model.ChartQuery{})
+	agg, err := st.GetUsageTrends(model.UsageTrendsQuery{})
 	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
+		t.Fatalf("GetUsageTrends failed: %v", err)
 	}
-	if len(agg.ProviderShares) != 2 {
-		t.Fatalf("expected 2 provider shares, got %d", len(agg.ProviderShares))
+	if agg.Range == "" {
+		t.Errorf("expected range label to be populated")
 	}
-	if agg.ProviderShares[0].ProviderName != "OpenAI" {
-		t.Errorf("expected first provider OpenAI, got %s", agg.ProviderShares[0].ProviderName)
-	}
-	if agg.ProviderShares[0].Percent < 90 {
-		t.Errorf("expected OpenAI share > 90%%, got %.2f", agg.ProviderShares[0].Percent)
-	}
-}
-
-func TestChartAggregates_EmptyBucketAvgs(t *testing.T) {
-	st := newTestStore(t)
-	now := time.Now().Truncate(time.Hour).UnixMilli()
-
-	logs := []model.RequestLog{
-		{ID: "l1", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, FirstTokenMs: 120, IsStream: true, RouteID: "r1", RouteLabel: "default"},
-	}
-	if err := st.InsertRequestLogsBatch(logs); err != nil {
-		t.Fatalf("seed logs failed: %v", err)
-	}
-
-	agg, err := st.GetChartAggregates(model.ChartQuery{})
-	if err != nil {
-		t.Fatalf("GetChartAggregates failed: %v", err)
+	if agg.BucketSize != "day" {
+		t.Errorf("expected default daily buckets, got %s", agg.BucketSize)
 	}
 	if len(agg.Buckets) != 1 {
 		t.Fatalf("expected 1 bucket, got %d", len(agg.Buckets))
-	}
-	if agg.Buckets[0].AvgLatencyMs != 500 {
-		t.Errorf("expected avg latency 500, got %d", agg.Buckets[0].AvgLatencyMs)
-	}
-	if agg.Buckets[0].AvgTTFTMs != 120 {
-		t.Errorf("expected avg TTFT 120, got %d", agg.Buckets[0].AvgTTFTMs)
 	}
 }

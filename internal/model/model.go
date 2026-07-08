@@ -50,8 +50,8 @@ type Provider struct {
 	Name          string         `json:"name"`
 	BaseURL       string         `json:"base_url"`
 	Status        ProviderStatus `json:"status"`
-	KeyCiphertext []byte         `json:"-"` // encrypted upstream provider key
-	KeyNonce      []byte         `json:"-"` // AES-GCM nonce for the key
+	KeyCiphertext []byte         `json:"-"`          // encrypted upstream provider key
+	KeyNonce      []byte         `json:"-"`          // AES-GCM nonce for the key
 	KeyMasked     string         `json:"key_masked"` // display-only, e.g. "sk-****abcd"
 	ModelsCount   int            `json:"models_count"`
 	MonthlyTokens int64          `json:"monthly_tokens"`
@@ -78,8 +78,8 @@ type Model struct {
 
 // ModelTestResult is returned by the per-model latency test.
 type ModelTestResult struct {
-	OK        bool  `json:"ok"`
-	LatencyMs int   `json:"latency_ms"`
+	OK        bool   `json:"ok"`
+	LatencyMs int    `json:"latency_ms"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -102,7 +102,7 @@ type Route struct {
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
 	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64 `json:"updated_at"`
+	UpdatedAt   int64  `json:"updated_at"`
 
 	Conditions []RouteCondition `json:"conditions"`
 	Targets    []RouteTarget    `json:"targets"`
@@ -116,9 +116,9 @@ type Route struct {
 type RouteCondition struct {
 	ID       string            `json:"id"`
 	RouteID  string            `json:"route_id"`
-	Field    string            `json:"field"`    // e.g. "model", "header.x-priority", "estimated_tokens", "task", "time.hour"
+	Field    string            `json:"field"` // e.g. "model", "header.x-priority", "estimated_tokens", "task", "time.hour"
 	Operator ConditionOperator `json:"operator"`
-	Value    string            `json:"value"`    // semantics depend on operator
+	Value    string            `json:"value"` // semantics depend on operator
 }
 
 // RouteTarget is what happens when a route matches.
@@ -134,40 +134,42 @@ type RouteTarget struct {
 
 // RequestLog is one proxied request through the gateway.
 type RequestLog struct {
-	ID           string  `json:"id"`
-	Timestamp    int64   `json:"timestamp"` // ms
-	StatusCode   int     `json:"status_code"`
-	ProviderID   string  `json:"provider_id"`
-	ProviderName string  `json:"provider_name"`
-	Model        string  `json:"model"`
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	Cost         float64 `json:"cost"` // estimated USD
-	LatencyMs    int     `json:"latency_ms"`
-	FirstTokenMs int     `json:"first_token_ms"` // TTFT for streaming; 0 for non-streaming
-	IsStream     bool    `json:"is_stream"`      // true if the request was streaming
-	RouteID      string  `json:"route_id"` // empty = default route
-	RouteLabel   string  `json:"route_label"`
-	APIKeyID     string  `json:"api_key_id"`
-	Error        string  `json:"error,omitempty"`
+	ID            string  `json:"id"`
+	Timestamp     int64   `json:"timestamp"` // ms
+	StatusCode    int     `json:"status_code"`
+	ProviderID    string  `json:"provider_id"`
+	ProviderName  string  `json:"provider_name"`
+	Model         string  `json:"model"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
+	CacheCreation int64   `json:"cache_creation"` // prompt-cache creation tokens; 0 until upstream support lands
+	CacheHit      int64   `json:"cache_hit"`      // prompt-cache hit tokens; 0 until upstream support lands
+	Cost          float64 `json:"cost"`           // estimated USD
+	LatencyMs     int     `json:"latency_ms"`
+	FirstTokenMs  int     `json:"first_token_ms"` // TTFT for streaming; 0 for non-streaming
+	IsStream      bool    `json:"is_stream"`      // true if the request was streaming
+	RouteID       string  `json:"route_id"`       // empty = default route
+	RouteLabel    string  `json:"route_label"`
+	APIKeyID      string  `json:"api_key_id"`
+	Error         string  `json:"error,omitempty"`
 }
 
 // ----- Aggregation DTOs (dashboard / usage-stats) -----
 
 // Stat is a single KPI card value with delta context.
 type Stat struct {
-	Label string  `json:"label"`
-	Value string  `json:"value"` // pre-formatted ("245,832", "¥458.76")
-	Delta string  `json:"delta"` // "+12.4%", "-3.2%"
-	Trend string  `json:"trend"`  // "up" | "down" | "flat"
-	Note  string  `json:"note,omitempty"`
+	Label string `json:"label"`
+	Value string `json:"value"` // pre-formatted ("245,832", "¥458.76")
+	Delta string `json:"delta"` // "+12.4%", "-3.2%"
+	Trend string `json:"trend"` // "up" | "down" | "flat"
+	Note  string `json:"note,omitempty"`
 }
 
 // TokenTrendPoint is one bucket of a token-usage time series.
 type TokenTrendPoint struct {
-	Date         string `json:"date"` // YYYY-MM-DD
-	InputTokens  int64  `json:"input_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
+	Date         string  `json:"date"` // YYYY-MM-DD
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
 	Cost         float64 `json:"cost"`
 }
 
@@ -191,35 +193,35 @@ type ModelRanking struct {
 
 // DashboardData aggregates everything the dashboard page needs in one call.
 type DashboardData struct {
-	Stats           []Stat             `json:"stats"`
-	TokenTrend      []TokenTrendPoint  `json:"token_trend"`     // last 7 days
-	Providers       []Provider         `json:"providers"`
-	RecentActivity  []RequestLog       `json:"recent_activity"` // last 10
-	ServiceHealth   ServiceHealth      `json:"service_health"`
+	Stats          []Stat            `json:"stats"`
+	TokenTrend     []TokenTrendPoint `json:"token_trend"` // last 7 days
+	Providers      []Provider        `json:"providers"`
+	RecentActivity []RequestLog      `json:"recent_activity"` // last 10
+	ServiceHealth  ServiceHealth     `json:"service_health"`
 }
 
 // ServiceHealth is the live system telemetry shown on the dashboard.
 type ServiceHealth struct {
-	Status            string `json:"status"` // "running" | "paused" | "error"
-	UptimeSeconds     int64  `json:"uptime_seconds"`
+	Status            string  `json:"status"` // "running" | "paused" | "error"
+	UptimeSeconds     int64   `json:"uptime_seconds"`
 	CPUPercent        float64 `json:"cpu_percent"`
-	MemoryMB          int    `json:"memory_mb"`
-	ActiveConnections int    `json:"active_connections"`
-	WebSocketCount    int    `json:"websocket_count"`
-	HTTPCount         int    `json:"http_count"`
-	ProxyURL          string `json:"proxy_url"` // e.g. "http://0.0.0.0:8344"
+	MemoryMB          int     `json:"memory_mb"`
+	ActiveConnections int     `json:"active_connections"`
+	WebSocketCount    int     `json:"websocket_count"`
+	HTTPCount         int     `json:"http_count"`
+	ProxyURL          string  `json:"proxy_url"` // e.g. "http://0.0.0.0:8344"
 }
 
 // UsageStats aggregates the usage-stats page data (token view + log view).
 type UsageStats struct {
-	TokenStats   []Stat             `json:"token_stats"`
-	TokenTrend30 []TokenTrendPoint  `json:"token_trend_30"` // last 30 days
-	Providers    []ProviderShare    `json:"providers"`
-	ModelRanking []ModelRanking     `json:"model_ranking"`
+	TokenStats   []Stat            `json:"token_stats"`
+	TokenTrend30 []TokenTrendPoint `json:"token_trend_30"` // last 30 days
+	Providers    []ProviderShare   `json:"providers"`
+	ModelRanking []ModelRanking    `json:"model_ranking"`
 
-	LogStats []Stat        `json:"log_stats"`
-	Logs     []RequestLog  `json:"logs"`
-	LogTotal int64         `json:"log_total"`
+	LogStats []Stat       `json:"log_stats"`
+	Logs     []RequestLog `json:"logs"`
+	LogTotal int64        `json:"log_total"`
 }
 
 // ----- Settings -----
@@ -238,10 +240,10 @@ type Settings struct {
 }
 
 type GeneralSettings struct {
-	LaunchAtLogin    bool   `json:"launch_at_login"`
-	StartupAction    string `json:"startup_action"` // "show" | "hide"
-	MenuBarItem      bool   `json:"menu_bar_item"`
-	CloseAction      string `json:"close_action"`   // "background" | "quit"
+	LaunchAtLogin bool   `json:"launch_at_login"`
+	StartupAction string `json:"startup_action"` // "show" | "hide"
+	MenuBarItem   bool   `json:"menu_bar_item"`
+	CloseAction   string `json:"close_action"` // "background" | "quit"
 }
 
 type AppearanceSettings struct {
@@ -270,9 +272,9 @@ type DataSettings struct {
 }
 
 type AdvancedSettings struct {
-	DebugMode         bool   `json:"debug_mode"`
-	Experimental      bool   `json:"experimental"`
-	HTTPProxy         string `json:"http_proxy"` // "system" | "none" | url
+	DebugMode    bool   `json:"debug_mode"`
+	Experimental bool   `json:"experimental"`
+	HTTPProxy    string `json:"http_proxy"` // "system" | "none" | url
 }
 
 // Endpoint describes one proxy URL shown on the settings → server page.
@@ -295,10 +297,10 @@ type ApiKeyInput struct {
 
 // ProviderTestResult is returned by the "Test" button on a provider card.
 type ProviderTestResult struct {
-	OK         bool     `json:"ok"`
-	LatencyMs  int      `json:"latency_ms"`
-	Error      string   `json:"error,omitempty"`
-	Models     []string `json:"models"` // model names discovered via /v1/models
+	OK        bool     `json:"ok"`
+	LatencyMs int      `json:"latency_ms"`
+	Error     string   `json:"error,omitempty"`
+	Models    []string `json:"models"` // model names discovered via /v1/models
 }
 
 // ----- Request payloads -----
@@ -311,11 +313,11 @@ type ProviderInput struct {
 }
 
 type RouteInput struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Enabled     bool              `json:"enabled"`
-	Conditions  []RouteCondition  `json:"conditions"`
-	Targets     []RouteTarget     `json:"targets"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Enabled     bool             `json:"enabled"`
+	Conditions  []RouteCondition `json:"conditions"`
+	Targets     []RouteTarget    `json:"targets"`
 }
 
 // LogQuery is the filter for the usage-stats → logs view.
@@ -343,48 +345,36 @@ type LogQueryResult struct {
 	Total int64        `json:"total"`
 }
 
-// ----- Chart aggregation DTOs (Phase 4 — request-log charts) -----
+// ----- Chart aggregation DTOs (single usage-trend chart) -----
 
-// TimeBucket is one slice of the time-series chart. The Bucket label is a
-// locale-neutral ISO string that the frontend can format as needed: "YYYY-MM-DD"
-// for daily, "YYYY-MM-DD HH:00" for hourly.
-type TimeBucket struct {
-	Bucket       string  `json:"bucket"`         // "YYYY-MM-DD" or "YYYY-MM-DD HH:00"
-	Success      int64   `json:"success"`        // status 2xx with no error
-	RateLimited  int64   `json:"rate_limited"`   // status == 429
-	Error        int64   `json:"error"`          // status >= 400 (excluding 429) or error != ''
-	InputTokens  int64   `json:"input_tokens"`   // sum
-	OutputTokens int64   `json:"output_tokens"`  // sum
-	Cost         float64 `json:"cost"`           // sum
-	AvgLatencyMs int64   `json:"avg_latency_ms"` // AVG(latency_ms)
-	AvgTTFTMs    int64   `json:"avg_ttft_ms"`    // AVG(first_token_ms) over streamed rows
+// UsageTrendBucket is one slice of the usage-trend line/area chart. The Bucket
+// label is a locale-neutral ISO string the frontend can format as needed:
+// "YYYY-MM-DD" for daily, "YYYY-MM-DD HH:00" for hourly. Token counts are
+// aggregated per bucket; Cost is the sum of the per-row USD cost.
+type UsageTrendBucket struct {
+	Bucket        string  `json:"bucket"`         // "YYYY-MM-DD" or "YYYY-MM-DD HH:00"
+	Cost          float64 `json:"cost"`           // sum
+	CacheCreation int64   `json:"cache_creation"` // sum
+	CacheHit      int64   `json:"cache_hit"`      // sum
+	Input         int64   `json:"input"`          // SUM(input_tokens)
+	Output        int64   `json:"output"`         // SUM(output_tokens)
 }
 
-// StatusBreakdown is one slice of the status-code donut chart. Percent is
-// rounded to 2 decimal places out of 100. Labels are "2xx", "429", "错误",
-// or "其他" for statuses that do not fit the above classes.
-type StatusBreakdown struct {
-	Label   string  `json:"label"`   // "2xx" | "4xx" | "5xx" | "429"
-	Count   int64   `json:"count"`   // request count in this class
-	Percent float64 `json:"percent"` // share of the filtered set, 0..100
+// UsageTrends is the response for a single chart-data fetch. Range is a
+// free-form description (e.g. "2024-01-01..2024-01-31") so the frontend can
+// show a label without re-formatting start/end itself; BucketSize is the
+// resolution used ("hour" or "day").
+type UsageTrends struct {
+	Range      string             `json:"range"`       // e.g. "2024-01-01..2024-01-31"
+	BucketSize string             `json:"bucket_size"` // "hour" | "day"
+	Buckets    []UsageTrendBucket `json:"buckets"`     // time series, ordered ascending
 }
 
-// ChartAggregates is the response for a single chart-data fetch. Range is a
-// free-form description (e.g. "last_24h") so the frontend can show a label
-// without re-formatting start/end itself; BucketSize is the resolution used.
-type ChartAggregates struct {
-	Range           string           `json:"range"`            // e.g. "2024-01-01..2024-01-31"
-	BucketSize      string           `json:"bucket_size"`      // "hour" | "day"
-	Buckets         []TimeBucket     `json:"buckets"`          // time series, ordered ascending
-	StatusBreakdown []StatusBreakdown `json:"status_breakdown"` // status-code donut
-	ProviderShares  []ProviderShare   `json:"provider_shares"`  // reused pie series
-}
-
-// ChartQuery is the filter for GetChartAggregates. Same semantics as LogQuery
-// but without pagination — chart data always includes the full filtered range.
-// Status, Page, and PageSize are intentionally omitted because the chart
-// surface does not need them.
-type ChartQuery struct {
+// UsageTrendsQuery is the filter for GetUsageTrends. Same semantics as
+// LogQuery but without pagination or status — chart data always spans the
+// full filtered range. Status, Page, and PageSize are intentionally omitted
+// because the chart surface does not need them.
+type UsageTrendsQuery struct {
 	StartDate int64  `json:"start_date"` // ms; 0 = no lower bound
 	EndDate   int64  `json:"end_date"`   // ms; 0 = no upper bound
 	Provider  string `json:"provider"`   // exact match on provider_id; "" = all
@@ -397,8 +387,8 @@ type ChartQuery struct {
 type ExportFormat string
 
 const (
-	ExportAllJSON    ExportFormat = "all_json"
+	ExportAllJSON      ExportFormat = "all_json"
 	ExportSettingsJSON ExportFormat = "settings_json"
-	ExportTokensCSV  ExportFormat = "tokens_csv"
-	ExportLogsCSV    ExportFormat = "logs_csv"
+	ExportTokensCSV    ExportFormat = "tokens_csv"
+	ExportLogsCSV      ExportFormat = "logs_csv"
 )

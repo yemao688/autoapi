@@ -46,12 +46,10 @@ const logs = ref<model.RequestLog[]>([])
 const logPage = ref(1)
 const logPageSize = ref(50)
 const logTotal = ref(0)
-const chartData = ref<model.ChartAggregates>(new model.ChartAggregates({
+const chartData = ref<model.UsageTrends>(new model.UsageTrends({
   range: '',
   bucket_size: 'day',
   buckets: [],
-  status_breakdown: [],
-  provider_shares: [],
 }))
 
 const providerOptions = computed<ProviderOption[]>(() => {
@@ -69,12 +67,19 @@ const tokenStats = computed(() => (usageData.value?.token_stats || []).slice(0, 
 const logStats = computed(() => (usageData.value?.log_stats || []).slice(0, 4))
 const providerShares = computed(() => usageData.value?.providers || [])
 const modelRanking = computed(() => (usageData.value?.model_ranking || []).slice(0, 5))
-const totalTokens = computed(() =>
-  providerShares.value.reduce((sum, p) => sum + p.tokens, 0)
-)
+// Badge on the "Token 用量" tab: show the total token count rather than the
+// cost stat (token_stats[2] is "Estimated Cost" since the backend reordered
+// the KPI cards to Total Requests / Total Tokens / Estimated Cost).
 const totalTokenValue = computed(() => {
-  const stat = tokenStats.value.find((s) => s.label.includes('本月'))
-  return stat?.value || usageData.value?.token_stats?.[2]?.value || '—'
+  const stat = tokenStats.value.find((s) => s.label === 'Total Tokens')
+  if (stat?.value) return stat.value
+  // Fallback: derive from provider shares if the stat isn't present yet
+  // (e.g. before the first refresh completes).
+  if (providerShares.value.length > 0) {
+    const total = providerShares.value.reduce((sum, p) => sum + p.tokens, 0)
+    return total > 0 ? total.toLocaleString() : '—'
+  }
+  return '—'
 })
 const logTotalValue = computed(() => usageData.value?.log_total || 0)
 
@@ -167,7 +172,7 @@ async function loadCharts() {
   const modelName = modelFilter.value.trim()
   const search = searchText.value.trim()
   try {
-    const result = await api.chartAggregates({
+    const result = await api.usageTrends({
       start_date,
       end_date,
       provider,
@@ -175,12 +180,10 @@ async function loadCharts() {
       model: modelName,
       search,
     })
-    chartData.value = result || new model.ChartAggregates({
+    chartData.value = result || new model.UsageTrends({
       range: '',
       bucket_size: 'day',
       buckets: [],
-      status_breakdown: [],
-      provider_shares: [],
     })
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
@@ -429,6 +432,7 @@ watch([modelFilter, searchText], () => {
         v-show="activePane === 'tokens'"
         :tokenStats="tokenStats"
         :modelRanking="modelRanking"
+        :providerShares="providerShares"
         :chartData="chartData"
       />
 

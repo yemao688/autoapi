@@ -3,23 +3,30 @@ import App from './App.vue'
 import router from './router'
 import './styles.css'
 
-import { use } from 'echarts/core'
-import { LineChart, PieChart } from 'echarts/charts'
+// Chart.js: register only what UsageTrendChart consumes (line/area, dual-axis,
+// tooltips, legend). Tree-shaking is handled by importing from 'chart.js/auto'
+// here; component-level imports are used inside UsageTrendChart.vue.
 import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-} from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
-import VChart from 'vue-echarts'
+  Chart as ChartJS,
+  LineController,
+  LineElement,
+  PointElement,
+  LinearScale,
+  CategoryScale,
+  Filler,
+  Tooltip,
+  Legend,
+} from 'chart.js'
 
-use([
-  LineChart,
-  PieChart,
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  CanvasRenderer,
-])
+ChartJS.register(
+  LineController,
+  LineElement,
+  PointElement,
+  LinearScale,
+  CategoryScale,
+  Filler,
+  Tooltip,
+  Legend,
+)
 
-createApp(App).use(router).component('VChart', VChart).mount('#app')
+createApp(App).use(router).mount('#app')

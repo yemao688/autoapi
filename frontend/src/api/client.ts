@@ -116,9 +116,9 @@ export const api = {
     ensureWails()
     return wails.QueryLogs(query) as Promise<model.LogQueryResult>
   },
-  chartAggregates: (query: model.ChartQuery): Promise<model.ChartAggregates> => {
+  usageTrends: (query: model.UsageTrendsQuery): Promise<model.UsageTrends> => {
     ensureWails()
-    return wails.GetChartAggregates(query) as Promise<model.ChartAggregates>
+    return wails.GetUsageTrends(query) as Promise<model.UsageTrends>
   },
   purgeLogs: (days: number): Promise<number> => {
     ensureWails()

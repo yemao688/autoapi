@@ -17,13 +17,12 @@ export function formatNumber(n: number): string {
   return n.toLocaleString()
 }
 
+// Palette for the trend chart. Token streams use cool/blue-green tones, the
+// cost series is a warm red so it stands apart on the secondary axis.
 export const chartColors = {
   input: '#3b82f6',
   output: '#22c55e',
+  cacheCreation: '#a855f7',
+  cacheHit: '#06b6d4',
   cost: '#f43f5e',
-  success: '#0071e3',
-  rateLimited: '#f5a623',
-  error: '#d93025',
-  latency: '#8b5cf6',
-  ttft: '#06b6d4',
 }

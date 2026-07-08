@@ -36,7 +36,11 @@ type modelItem struct {
 
 func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	logEntry := &model.RequestLog{Timestamp: start.UnixMilli()}
+	logEntry := &model.RequestLog{
+		Timestamp:     start.UnixMilli(),
+		CacheCreation: 0,
+		CacheHit:      0,
+	}
 	defer p.logRequestEntry(logEntry)
 
 	apiKeyID, ok, err := p.authenticate(r)
@@ -95,7 +99,11 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	logEntry := &model.RequestLog{Timestamp: start.UnixMilli()}
+	logEntry := &model.RequestLog{
+		Timestamp:     start.UnixMilli(),
+		CacheCreation: 0,
+		CacheHit:      0,
+	}
 	defer p.logRequestEntry(logEntry)
 
 	apiKeyID, ok, err := p.authenticate(r)
@@ -163,7 +171,11 @@ type genericOpenAIRequest struct {
 // handler so that SSE can be delivered in real time.
 func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	logEntry := &model.RequestLog{Timestamp: start.UnixMilli()}
+	logEntry := &model.RequestLog{
+		Timestamp:     start.UnixMilli(),
+		CacheCreation: 0,
+		CacheHit:      0,
+	}
 	defer p.logRequestEntry(logEntry)
 
 	apiKeyID, ok, err := p.authenticate(r)
