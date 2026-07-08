@@ -389,12 +389,15 @@ func (a *App) GetUsageStats() (*model.UsageStats, error) {
 	return a.deps.Store.UsageStats()
 }
 
-func (a *App) QueryLogs(q model.LogQuery) ([]model.RequestLog, error) {
+func (a *App) QueryLogs(q model.LogQuery) (*model.LogQueryResult, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	logs, _, err := a.deps.Store.QueryLogs(q)
-	return logs, err
+	logs, total, err := a.deps.Store.QueryLogs(q)
+	if err != nil {
+		return nil, err
+	}
+	return &model.LogQueryResult{Logs: logs, Total: total}, nil
 }
 
 // ----- Settings -----

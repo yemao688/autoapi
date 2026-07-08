@@ -13,8 +13,11 @@ interface Props {
 defineProps<Props>()
 
 const emit = defineEmits<{
+  (e: 'first'): void
   (e: 'prev'): void
+  (e: 'goto', page: number): void
   (e: 'next'): void
+  (e: 'last'): void
   (e: 'clearFilters'): void
 }>()
 </script>
@@ -105,8 +108,11 @@ const emit = defineEmits<{
         :pageSize="logPageSize"
         :total="logTotal"
         :count="logs.length"
+        @first="emit('first')"
         @prev="emit('prev')"
+        @goto="(p) => emit('goto', p)"
         @next="emit('next')"
+        @last="emit('last')"
       />
     </section>
   </div>

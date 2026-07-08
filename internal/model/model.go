@@ -319,13 +319,28 @@ type RouteInput struct {
 }
 
 // LogQuery is the filter for the usage-stats → logs view.
+//
+// All filter fields are optional (empty/zero means "no filter for this field").
+// Status accepts: "" (all), "success", "failed", "rate_limited".
 type LogQuery struct {
-	StartDate int64    `json:"start_date"` // ms; 0 = no lower bound
-	EndDate   int64    `json:"end_date"`
-	Provider  string   `json:"provider"`   // "" = all
-	Status    string   `json:"status"`     // "" | "success" | "failed" | "rate_limited"
-	Page      int      `json:"page"`
-	PageSize  int      `json:"page_size"`
+	StartDate int64  `json:"start_date"` // ms; 0 = no lower bound
+	EndDate   int64  `json:"end_date"`   // ms; 0 = no upper bound
+	Provider  string `json:"provider"`   // exact match on provider_id; "" = all
+	RouteID   string `json:"route_id"`   // exact match on route_id; "" = all
+	Model     string `json:"model"`      // exact match on model; "" = all
+	Status    string `json:"status"`     // "" | "success" | "failed" | "rate_limited"
+	Search    string `json:"search"`     // LIKE %term% across model/route_label/error
+	Page      int    `json:"page"`       // 1-indexed; <=0 normalised to 1
+	PageSize  int    `json:"page_size"`  // <=0 or >1000 normalised to 50
+}
+
+// LogQueryResult is the paged response for the logs view. Total reflects the
+// number of rows that match the filter (ignoring page/page_size); logs is the
+// current page slice (possibly empty). This mirrors the ExportResult pattern
+// so the Wails bridge returns a single object instead of two separate values.
+type LogQueryResult struct {
+	Logs  []RequestLog `json:"logs"`
+	Total int64        `json:"total"`
 }
 
 // ExportFormat selects the export payload type.
