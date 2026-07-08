@@ -34,10 +34,11 @@ type candidate struct {
 
 // selectCandidates picks the highest-priority enabled route (callers must
 // supply `rules` sorted highest-priority first — see selectRoute), collects
-// all of its forwarding targets in slice order, filters out providers whose
-// circuit breaker is open, and falls back to the default provider when every
-// routed target is open. The getProvider closure resolves provider IDs to
-// full provider records.
+// all of its forwarding targets in slice order, filters out targets that are
+// disabled or whose provider's circuit breaker is open, and falls back to the
+// default provider when every routed target is filtered out. The getProvider
+// closure resolves provider IDs to full provider records. Disabled targets are
+// skipped without disturbing the relative tier ordering of the survivors.
 func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderID string, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
 	route, matched := selectRoute(req, rules)
 	if !matched {
@@ -56,6 +57,12 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 
 	var out []candidate
 	for _, t := range route.Targets {
+		// Disabled targets are skipped during candidate selection. The slice
+		// order (tier) is the source of truth for failover ordering, so this
+		// `continue` preserves the relative order of the remaining targets.
+		if !t.Enabled {
+			continue
+		}
 		if isOpen(t.ProviderID, breakers) {
 			continue
 		}

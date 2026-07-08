@@ -506,6 +506,146 @@ func TestRouteClampsNegativeMaxRetries(t *testing.T) {
 	}
 }
 
+// TestRouteTarget_EnabledDefaultsToTrueOnInsert verifies the Phase-3 spec
+// "default to true when a target is created without an explicit value":
+// a target constructed without setting `Enabled` must be stored as enabled.
+// This guards the assumption that a brand-new target is usable immediately
+// without the frontend having to opt in.
+func TestRouteTarget_EnabledDefaultsToTrueOnInsert(t *testing.T) {
+	s := newTestStore(t)
+
+	// CreateRoute path.
+	r, err := s.CreateRoute(model.RouteInput{
+		Name:    "Default-enabled",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ProviderID: "p01", ModelName: "m1"}, // Enabled unset (zero value)
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRoute: %v", err)
+	}
+	if !r.Targets[0].Enabled {
+		t.Fatalf("CreateRoute: expected Enabled default-true, got false")
+	}
+
+	// Round-trip through the store to confirm persistence, not just an in-memory echo.
+	got, err := s.GetRoute(r.ID)
+	if err != nil {
+		t.Fatalf("GetRoute: %v", err)
+	}
+	if !got.Targets[0].Enabled {
+		t.Fatalf("GetRoute: expected persisted Enabled=true, got false")
+	}
+
+	// UpdateRoute path: adding a new target (empty ID) to an existing route
+	// must also default-true.
+	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+		Name:    "Default-enabled",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ID: r.Targets[0].ID, ProviderID: "p01", ModelName: "m1", Enabled: true},
+			{ProviderID: "p02", ModelName: "m2"}, // new target, Enabled unset
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoute: %v", err)
+	}
+	if !updated.Targets[1].Enabled {
+		t.Fatalf("UpdateRoute (new target): expected Enabled default-true, got false")
+	}
+}
+
+// TestRouteTarget_EnabledToggleRoundTrip verifies the per-target enable/disable
+// toggle flows through CreateRoute, UpdateRoute, and the read path without
+// disturbing other fields or the per-target counters.
+func TestRouteTarget_EnabledToggleRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+
+	r, err := s.CreateRoute(model.RouteInput{
+		Name:    "Toggle",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ProviderID: "p01", ModelName: "m1", Enabled: true},
+			{ProviderID: "p02", ModelName: "m2", Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRoute: %v", err)
+	}
+	t0, t1 := r.Targets[0], r.Targets[1]
+
+	// Bump counters so we can prove the UPDATE doesn't reset them.
+	if err := s.IncrementTargetStats(t0.ID, 1, 0); err != nil {
+		t.Fatalf("IncrementTargetStats: %v", err)
+	}
+
+	// Flip t0 off, t1 stays on.
+	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+		Name:    "Toggle",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ID: t0.ID, ProviderID: "p01", ModelName: "m1", Enabled: false},
+			{ID: t1.ID, ProviderID: "p02", ModelName: "m2", Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoute: %v", err)
+	}
+
+	var got0, got1 model.RouteTarget
+	for _, tg := range updated.Targets {
+		switch tg.ID {
+		case t0.ID:
+			got0 = tg
+		case t1.ID:
+			got1 = tg
+		}
+	}
+	if got0.ID == "" || got1.ID == "" {
+		t.Fatalf("expected both targets to round-trip, got %+v", updated.Targets)
+	}
+	if got0.Enabled {
+		t.Fatalf("t0: expected Enabled=false after toggle off, got true")
+	}
+	if !got1.Enabled {
+		t.Fatalf("t1: expected Enabled=true (unchanged), got false")
+	}
+	if got0.HitCount != 1 {
+		t.Fatalf("t0: expected HitCount=1 (counters preserved across toggle), got %d", got0.HitCount)
+	}
+
+	// Re-read to confirm the change is persisted, not just echoed.
+	reread, err := s.GetRoute(r.ID)
+	if err != nil {
+		t.Fatalf("GetRoute: %v", err)
+	}
+	for _, tg := range reread.Targets {
+		if tg.ID == t0.ID && tg.Enabled {
+			t.Fatalf("persisted t0 should be disabled, got Enabled=true")
+		}
+		if tg.ID == t1.ID && !tg.Enabled {
+			t.Fatalf("persisted t1 should remain enabled, got Enabled=false")
+		}
+	}
+
+	// Flip t0 back on.
+	reEnabled, err := s.UpdateRoute(r.ID, model.RouteInput{
+		Name:    "Toggle",
+		Enabled: true,
+		Targets: []model.RouteTarget{
+			{ID: t0.ID, ProviderID: "p01", ModelName: "m1", Enabled: true},
+			{ID: t1.ID, ProviderID: "p02", ModelName: "m2", Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoute (re-enable): %v", err)
+	}
+	if !reEnabled.Targets[0].Enabled {
+		t.Fatalf("t0: expected Enabled=true after re-enable, got false")
+	}
+}
+
 // ---------------------------------------------------------------------------
 //  Settings
 // ---------------------------------------------------------------------------
@@ -679,5 +819,82 @@ func TestProviderTestHelpers(t *testing.T) {
 	}
 	if got.ModelsCount != 3 {
 		t.Fatalf("expected models_count 3, got %d", got.ModelsCount)
+	}
+}
+
+// TestRouteTarget_MigrationRenameIdempotency covers the Phase-3 oracle fix:
+// the per-target `enabled` column was originally added under migration
+// "009_route_target_enabled" and is now "010_route_target_enabled". A
+// pre-existing DB will have the column AND a _migrations row with the old
+// ID, so the renamed entry must:
+//   - not crash with "duplicate column name", and
+//   - be recorded under its new ID in _migrations.
+func TestRouteTarget_MigrationRenameIdempotency(t *testing.T) {
+	dir, err := os.MkdirTemp("", "autoapi-mig-rename-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Open the DB and apply the full migration list as it stands today
+	// (which includes the renamed 010_ entry, not 009_). The fresh DB will
+	// pick up the 010_ migration cleanly.
+	s, err := New(context.Background(), StoreDeps{DSN: dir + "/fresh.db"})
+	if err != nil {
+		t.Fatalf("New (fresh): %v", err)
+	}
+	s.Close()
+
+	// Reopen — the 010_ entry is already in _migrations so the loop should
+	// just continue past it.
+	s2, err := New(context.Background(), StoreDeps{DSN: dir + "/fresh.db"})
+	if err != nil {
+		t.Fatalf("New (reopen): %v", err)
+	}
+	s2.Close()
+
+	// On a DB where the column was created under the OLD 009_ ID, the rename
+	// to 010_ should be detected as a no-op and the new ID recorded without
+	// the duplicate-column crash. Simulate that by:
+	//   1. creating a fresh DB,
+	//   2. manually rewriting the 010_ tracking row to 009_ to mimic the
+	//      pre-rename world,
+	//   3. reopening it through New() so the renamed migration runs again.
+	dir2, err := os.MkdirTemp("", "autoapi-mig-rename-old-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir2)
+
+	s3, err := New(context.Background(), StoreDeps{DSN: dir2 + "/old.db"})
+	if err != nil {
+		t.Fatalf("New (old-bootstrap): %v", err)
+	}
+	if _, err := s3.db.Exec(`UPDATE _migrations SET id = '009_route_target_enabled' WHERE id = '010_route_target_enabled'`); err != nil {
+		t.Fatalf("simulate pre-rename: rewrite 010->009: %v", err)
+	}
+	s3.Close()
+
+	// Reopen — the 010_ entry will look pending, the SkipIfRedundant
+	// predicate will detect the column is already present, and the migration
+	// runner will record the 010_ ID without re-running the SQL.
+	s4, err := New(context.Background(), StoreDeps{DSN: dir2 + "/old.db"})
+	if err != nil {
+		t.Fatalf("New (reopen with old ID): %v", err)
+	}
+	defer s4.Close()
+
+	var seen009, seen010 int
+	if err := s4.db.QueryRow(`SELECT COUNT(*) FROM _migrations WHERE id = '009_route_target_enabled'`).Scan(&seen009); err != nil {
+		t.Fatalf("count 009: %v", err)
+	}
+	if err := s4.db.QueryRow(`SELECT COUNT(*) FROM _migrations WHERE id = '010_route_target_enabled'`).Scan(&seen010); err != nil {
+		t.Fatalf("count 010: %v", err)
+	}
+	if seen009 != 1 {
+		t.Fatalf("expected legacy 009_ row to still be present, got %d", seen009)
+	}
+	if seen010 != 1 {
+		t.Fatalf("expected new 010_ row to be recorded after rename, got %d", seen010)
 	}
 }

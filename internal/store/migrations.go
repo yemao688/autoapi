@@ -8,8 +8,9 @@ import (
 
 // migration defines a single schema migration.
 type migration struct {
-	ID  string // unique identifier, e.g. "001_init"
-	SQL string // DDL / DML to apply
+	ID              string                                    // unique identifier, e.g. "001_init"
+	SQL             string                                    // DDL / DML to apply
+	SkipIfRedundant func(tx *sql.Tx) (alreadyApplied bool, err error) // optional: if non-nil and returns (true, nil), treat the SQL as a no-op (e.g. the schema change was already made under a different migration ID in an older build). The migration is still recorded as applied.
 }
 
 // migrations is the ordered list of all schema changes.
@@ -212,6 +213,31 @@ ALTER TABLE request_logs ADD COLUMN cache_creation INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE request_logs ADD COLUMN cache_hit INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		// Per-target enable/disable toggle (Phase 3 of the uiux-route-targets
+		// worktree). Defaults to 1 so existing rows are treated as enabled;
+		// the proxy's selectCandidates skips rows where enabled=0 while
+		// preserving the existing tier ordering.
+		//
+		// Numbered 010 (not 009) to leave room for Phase 2's
+		// 009_request_log_cache that lives on other branches — applying both
+		// with the same ID would short-circuit the second one via the
+		// _migrations tracking table.
+		//
+		// Safety: this migration is idempotent against pre-existing DBs where
+		// an earlier `009_route_target_enabled` was applied under the old
+		// naming. Such DBs already have the `enabled` column but the
+		// _migrations row says "009", so the new "010" entry will be picked
+		// up as pending. `routeTargetsHasEnabled` below checks for the
+		// column and treats the SQL as a no-op when it's already present,
+		// then records the migration as applied. This means the rename is
+		// safe to ship and existing users with the old ID won't be broken.
+		ID:             "010_route_target_enabled",
+		SkipIfRedundant: routeTargetsHasEnabled,
+		SQL: `
+ALTER TABLE route_targets ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have
@@ -244,6 +270,34 @@ func (s *Store) backfillCost() {
 	}
 }
 
+// routeTargetsHasEnabled reports whether the `enabled` column already exists
+// on the `route_targets` table. Used as a SkipIfRedundant predicate so the
+// 010_route_target_enabled migration is safe to ship on DBs that already
+// picked up the same schema change under the old `009_route_target_enabled`
+// ID (the migration row in _migrations still says 009, so the renamed entry
+// would otherwise be applied on top of the existing column and fail with
+// "duplicate column name").
+func routeTargetsHasEnabled(tx *sql.Tx) (bool, error) {
+	rows, err := tx.Query(`PRAGMA table_info(route_targets)`)
+	if err != nil {
+		return false, fmt.Errorf("store: pragma table_info: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return false, fmt.Errorf("store: scan pragma table_info: %w", err)
+		}
+		if name == "enabled" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 // migrate applies all pending migrations in a single transaction.
 func migrate(db *sql.DB) error {
 	// Ensure the migrations tracking table exists first.
@@ -267,6 +321,23 @@ func migrate(db *sql.DB) error {
 		}
 		if count > 0 {
 			continue
+		}
+
+		// Optional "already applied under an older ID" predicate. When this
+		// returns true we skip the SQL (it's a no-op against the existing
+		// schema) but still record the new ID in _migrations so subsequent
+		// boots treat it as applied.
+		if m.SkipIfRedundant != nil {
+			already, err := m.SkipIfRedundant(tx)
+			if err != nil {
+				return fmt.Errorf("store: skip-if-redundant %q: %w", m.ID, err)
+			}
+			if already {
+				if _, err := tx.Exec(`INSERT INTO _migrations (id, applied_at) VALUES (?, ?)`, m.ID, now); err != nil {
+					return fmt.Errorf("store: record migration %q (redundant skip): %w", m.ID, err)
+				}
+				continue
+			}
 		}
 
 		if _, err := tx.Exec(m.SQL); err != nil {

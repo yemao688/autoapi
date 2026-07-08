@@ -1,5 +1,6 @@
 .omo
 .slim/deepwork/
+.slim/worktree/
 
 # build outputs
 build/bin/

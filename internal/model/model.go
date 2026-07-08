@@ -130,6 +130,7 @@ type RouteTarget struct {
 	MaxRetries   int    `json:"max_retries"`   // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
 	HitCount     int64  `json:"hit_count"`     // incremented once on successful dispatch
 	FailureCount int64  `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
+	Enabled      bool   `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
 }
 
 // RequestLog is one proxied request through the gateway.
@@ -319,6 +320,14 @@ type RouteInput struct {
 	Conditions  []RouteCondition `json:"conditions"`
 	Targets     []RouteTarget    `json:"targets"`
 }
+
+// Note on `RouteTarget.Enabled` in this input: a target with an empty ID is
+// treated as a NEW target by the store, and the store coerces `Enabled` to
+// true on insert when the caller leaves it at the Go/JSON zero value
+// (`false`). Targets with a non-empty ID are UPDATEs and their `Enabled`
+// value is written through verbatim — that is the supported path for the
+// frontend's per-target toggle. See internal/store/routes.go
+// (insertTargets / upsertTargets) for the implementation.
 
 // LogQuery is the filter for the usage-stats → logs view.
 //
