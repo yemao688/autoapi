@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	stdruntime "runtime"
 	"time"
 
+	"autoapi/internal/logger"
 	"autoapi/internal/model"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -60,13 +62,14 @@ type StoreService interface {
 	GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error)
 	UpdateProviderKeyCiphertext(providerID string, ciphertext, nonce []byte, masked string) error
 
-	// Routes
-	ListRoutes() ([]model.Route, error)
-	GetRoute(id string) (*model.Route, error)
-	CreateRoute(in model.RouteInput) (*model.Route, error)
-	UpdateRoute(id string, in model.RouteInput) (*model.Route, error)
-	DeleteRoute(id string) error
-	ReorderRoutes(orderedIDs []string) error
+	// Model rules (formerly "routes" — the rule's Name is the model name
+	// exposed to clients via /v1/models).
+	ListModelRules() ([]model.ModelRule, error)
+	GetModelRule(id string) (*model.ModelRule, error)
+	CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, error)
+	UpdateModelRule(id string, in model.ModelRuleInput) (*model.ModelRule, error)
+	DeleteModelRule(id string) error
+	ReorderModelRules(orderedIDs []string) error // no-op kept for API compatibility
 
 	// Logs & stats
 	QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error)
@@ -392,48 +395,52 @@ func (a *App) DeleteAPIKey(id string) error {
 	return a.deps.Store.DeleteAPIKey(id)
 }
 
-// ----- Routes -----
+// ----- Model rules -----
 
-func (a *App) ListRoutes() ([]model.Route, error) {
+func (a *App) ListModelRules() ([]model.ModelRule, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.ListRoutes()
+	return a.deps.Store.ListModelRules()
 }
 
-func (a *App) GetRoute(id string) (*model.Route, error) {
+func (a *App) GetModelRule(id string) (*model.ModelRule, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.GetRoute(id)
+	return a.deps.Store.GetModelRule(id)
 }
 
-func (a *App) CreateRoute(in model.RouteInput) (*model.Route, error) {
+func (a *App) CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.CreateRoute(in)
+	return a.deps.Store.CreateModelRule(in)
 }
 
-func (a *App) UpdateRoute(id string, in model.RouteInput) (*model.Route, error) {
+func (a *App) UpdateModelRule(id string, in model.ModelRuleInput) (*model.ModelRule, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.UpdateRoute(id, in)
+	return a.deps.Store.UpdateModelRule(id, in)
 }
 
-func (a *App) DeleteRoute(id string) error {
+func (a *App) DeleteModelRule(id string) error {
 	if a.deps.Store == nil {
 		return errNotImpl
 	}
-	return a.deps.Store.DeleteRoute(id)
+	return a.deps.Store.DeleteModelRule(id)
 }
 
-func (a *App) ReorderRoutes(orderedIDs []string) error {
+// ReorderModelRules is kept as a no-op for API compatibility. Drag-reorder
+// was removed when route rules became model rules because model rules are
+// keyed by a unique Name (the client-facing model name) and there is no
+// meaningful order to preserve.
+func (a *App) ReorderModelRules(orderedIDs []string) error {
 	if a.deps.Store == nil {
 		return errNotImpl
 	}
-	return a.deps.Store.ReorderRoutes(orderedIDs)
+	return a.deps.Store.ReorderModelRules(orderedIDs)
 }
 
 // ----- Dashboard / usage -----
@@ -500,6 +507,28 @@ func (a *App) SaveSettings(s model.Settings) error {
 	if err := a.deps.Store.SaveSettings(s); err != nil {
 		return err
 	}
+
+	// Re-apply the persistent logger whenever settings are saved. This
+	// is a cheap re-init and is safe to call unconditionally: if the
+	// logging section did not change the resulting sink is identical.
+	// The path is rebuilt from the store's storage directory so the
+	// log file stays next to the SQLite database.
+	logDir := a.deps.Store.StorageDir()
+	logPath := filepath.Join(logDir, "logs", "autoapi.log")
+	_ = logger.Update(logger.Config{
+		Enabled:    s.Logging.Enabled,
+		Level:      s.Logging.Level,
+		MaxSizeMB:  s.Logging.MaxSizeMB,
+		MaxAgeDays: s.Logging.MaxAgeDays,
+		MaxBackups: s.Logging.MaxBackups,
+		Path:       logPath,
+	})
+	// Note: logger.Update only returns an error when it had to fall back
+	// to stderr because the file could not be opened. Init/Update has
+	// already installed a working logger in that case, so there is
+	// nothing for the UI to display — silently swallowing the error is
+	// the correct UX.
+
 	// Port/bind changed → restart proxy so it picks up the new listener.
 	if a.deps.Proxy != nil {
 		return a.deps.Proxy.Restart()

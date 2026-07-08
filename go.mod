@@ -6,6 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/shirou/gopsutil/v4 v4.26.6
 	github.com/wailsapp/wails/v2 v2.12.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	modernc.org/sqlite v1.53.0
 )
 

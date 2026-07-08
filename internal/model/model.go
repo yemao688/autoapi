@@ -28,19 +28,6 @@ const (
 	ProviderStatusUnknown   ProviderStatus = "unknown"
 )
 
-// ConditionOperator is the comparison operator for a route condition.
-// Mirrors the operators shown in the prototype routes.html.
-type ConditionOperator string
-
-const (
-	OpMatches ConditionOperator = "matches" // glob on a string field
-	OpEquals  ConditionOperator = "equals"
-	OpLT      ConditionOperator = "lt"
-	OpGT      ConditionOperator = "gt"
-	OpBetween ConditionOperator = "between" // value is "lo,hi"
-	OpIn      ConditionOperator = "in"      // value is comma list
-)
-
 // ----- Domain entities -----
 
 // Provider is an upstream LLM gateway (OpenAI / Anthropic / DeepSeek / Moonshot / GLM / custom).
@@ -93,38 +80,29 @@ type ApiKey struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-// Route is an ordered routing rule. The list order from the store is the
-// evaluation order (top = highest priority); see internal/store/routes.go
-// (ListRoutes ORDER BY priority, ReorderRoutes writes from slice index).
-type Route struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Enabled     bool   `json:"enabled"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+// ModelRule is the client-facing model definition. A rule's Name is the model
+// name exposed to clients; the Targets inside a rule are the upstream
+// provider/model pairs the request may be forwarded to. The list order from
+// the store is the user-defined order; ordering is preserved for stable
+// listing (ORDER BY created_at DESC).
+type ModelRule struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Enabled   bool   `json:"enabled"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 
-	Conditions []RouteCondition `json:"conditions"`
-	Targets    []RouteTarget    `json:"targets"`
+	Targets []ModelRuleTarget `json:"targets"`
 
 	// Aggregated stats for display
 	MonthlyHits    int64   `json:"monthly_hits"`
 	MonthlySavings float64 `json:"monthly_savings"`
 }
 
-// RouteCondition is a single match clause within a route.
-type RouteCondition struct {
-	ID       string            `json:"id"`
-	RouteID  string            `json:"route_id"`
-	Field    string            `json:"field"` // e.g. "model", "header.x-priority", "estimated_tokens", "task", "time.hour"
-	Operator ConditionOperator `json:"operator"`
-	Value    string            `json:"value"` // semantics depend on operator
-}
-
-// RouteTarget is what happens when a route matches.
-type RouteTarget struct {
+// ModelRuleTarget is what happens when a rule is selected.
+type ModelRuleTarget struct {
 	ID           string `json:"id"`
-	RouteID      string `json:"route_id"`
+	RuleID       string `json:"rule_id"`
 	ProviderID   string `json:"provider_id"`
 	ModelName    string `json:"model_name"`
 	MaxRetries   int    `json:"max_retries"`   // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
@@ -239,6 +217,7 @@ type Settings struct {
 	Server     ServerSettings     `json:"server"`
 	Data       DataSettings       `json:"data"`
 	Advanced   AdvancedSettings   `json:"advanced"`
+	Logging    LoggingSettings    `json:"logging"`
 }
 
 type GeneralSettings struct {
@@ -279,6 +258,22 @@ type AdvancedSettings struct {
 	HTTPProxy    string `json:"http_proxy"` // "system" | "none" | url
 }
 
+// LoggingSettings configures the application diagnostic logger. The fields
+// are persisted as a single section in the settings table and surfaced to
+// the user via the settings panel; the Go side reads them at startup
+// (and on every SaveSettings) to (re-)initialise the slog handler that
+// tees output to stderr and a rotating file under the user-configurable
+// path. Storage path is left to the Go composition root (see
+// app.go) so that the directory can be derived from the resolved
+// storage location rather than typed into the UI.
+type LoggingSettings struct {
+	Enabled    bool   `json:"enabled"`
+	Level      string `json:"level"`        // "error" | "warn" | "info" | "debug" | "trace"
+	MaxSizeMB  int    `json:"max_size_mb"`  // per-file size cap in MB before rotation
+	MaxAgeDays int    `json:"max_age_days"` // days to retain old log files
+	MaxBackups int    `json:"max_backups"`  // max number of rotated files to keep
+}
+
 // Endpoint describes one proxy URL shown on the settings → server page.
 type Endpoint struct {
 	Method string `json:"method"` // "POST" | "GET" | "WS"
@@ -314,17 +309,15 @@ type ProviderInput struct {
 	IsCustom    bool   `json:"is_custom"`
 }
 
-type RouteInput struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Enabled     bool             `json:"enabled"`
-	Conditions  []RouteCondition `json:"conditions"`
-	Targets     []RouteTarget    `json:"targets"`
+type ModelRuleInput struct {
+	Name    string           `json:"name"`
+	Enabled bool             `json:"enabled"`
+	Targets []ModelRuleTarget `json:"targets"`
 }
 
-// Note on `RouteTarget.Enabled` in this input: a target with an empty ID is
-// treated as a NEW target by the store, and the store coerces `Enabled` to
-// true on insert when the caller leaves it at the Go/JSON zero value
+// Note on `ModelRuleTarget.Enabled` in this input: a target with an empty ID
+// is treated as a NEW target by the store, and the store coerces `Enabled`
+// to true on insert when the caller leaves it at the Go/JSON zero value
 // (`false`). Targets with a non-empty ID are UPDATEs and their `Enabled`
 // value is written through verbatim — that is the supported path for the
 // frontend's per-target toggle. See internal/store/routes.go

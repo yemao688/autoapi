@@ -7,17 +7,17 @@ const { t } = useI18n()
 
 const props = defineProps<{
   open: boolean
-  target: model.RouteTarget | null
+  target: model.ModelRuleTarget | null
   providers: model.Provider[]
   saving?: boolean
 }>()
 
 const emit = defineEmits<{
-  (e: 'save', target: model.RouteTarget): void
+  (e: 'save', target: model.ModelRuleTarget): void
   (e: 'close'): void
 }>()
 
-const form = ref<model.RouteTarget>(new model.RouteTarget({
+const form = ref<model.ModelRuleTarget>(new model.ModelRuleTarget({
   provider_id: '',
   model_name: '',
   max_retries: 0,
@@ -25,7 +25,7 @@ const form = ref<model.RouteTarget>(new model.RouteTarget({
 }))
 
 function reset() {
-  form.value = new model.RouteTarget({
+  form.value = new model.ModelRuleTarget({
     provider_id: '',
     model_name: '',
     max_retries: 0,
@@ -35,9 +35,9 @@ function reset() {
 
 watch(() => props.target, (t) => {
   if (t) {
-    form.value = new model.RouteTarget({
+    form.value = new model.ModelRuleTarget({
       id: t.id,
-      route_id: t.route_id,
+      rule_id: t.rule_id,
       provider_id: t.provider_id,
       model_name: t.model_name,
       max_retries: t.max_retries,
@@ -75,9 +75,9 @@ function save() {
   // Trim model_name before emitting so the persisted value never carries
   // accidental leading/trailing whitespace. provider_id comes from a <select>
   // and is already canonical.
-  emit('save', new model.RouteTarget({
+  emit('save', new model.ModelRuleTarget({
     id: form.value.id,
-    route_id: form.value.route_id,
+    rule_id: form.value.rule_id,
     provider_id: form.value.provider_id,
     model_name: trimmedModelName.value,
     max_retries: form.value.max_retries,
@@ -92,25 +92,25 @@ function save() {
   <Teleport to="body">
     <div v-if="open" class="modal-overlay" @click.self="close">
       <div class="modal-card">
-        <div class="modal-title">{{ isEdit ? t('targets.edit') : t('targets.add') }}</div>
+        <div class="modal-title">{{ isEdit ? t('modelRules.targets.edit') : t('modelRules.targets.add') }}</div>
         <div class="field">
-          <label class="field-label">{{ t('targets.provider') }}</label>
+          <label class="field-label">{{ t('modelRules.targets.provider') }}</label>
           <select v-model="form.provider_id" class="select" :disabled="saving">
-            <option value="" disabled>{{ t('targets.providerPlaceholder') }}</option>
+            <option value="" disabled>{{ t('modelRules.targets.providerPlaceholder') }}</option>
             <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
         <div class="field">
-          <label class="field-label">{{ t('targets.model') }}</label>
-          <input v-model="form.model_name" class="input" :placeholder="t('targets.modelPlaceholder')" :disabled="saving">
+          <label class="field-label">{{ t('modelRules.targets.model') }}</label>
+          <input v-model="form.model_name" class="input" :placeholder="t('modelRules.targets.modelPlaceholder')" :disabled="saving">
         </div>
         <div class="field">
-          <label class="field-label">{{ t('targets.maxRetries') }}</label>
+          <label class="field-label">{{ t('modelRules.targets.maxRetries') }}</label>
           <input v-model.number="form.max_retries" type="number" class="input" min="0" step="1" :disabled="saving">
         </div>
         <div class="field">
           <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">{{ t('targets.enabled') }}</label>
+            <label class="field-label">{{ t('modelRules.targets.enabled') }}</label>
             <label class="toggle">
               <input v-model="form.enabled" type="checkbox" :disabled="saving">
               <span class="toggle-slider"></span>
@@ -118,11 +118,11 @@ function save() {
           </div>
         </div>
         <div v-if="showValidation" class="text-muted" style="font-size: 12px; color: var(--negative); margin-top: -4px;">
-          {{ t('targets.validation') }}
+          {{ t('modelRules.targets.validation') }}
         </div>
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" :disabled="saving" @click="close">{{ t('targets.cancel') }}</button>
-          <button class="btn btn-primary" :disabled="saving || !isValid" @click="save">{{ saving ? t('targets.saving') : t('targets.save') }}</button>
+          <button class="btn btn-secondary" :disabled="saving" @click="close">{{ t('modelRules.targets.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="saving || !isValid" @click="save">{{ saving ? t('modelRules.targets.saving') : t('modelRules.targets.save') }}</button>
         </div>
       </div>
     </div>

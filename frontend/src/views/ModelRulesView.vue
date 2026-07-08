@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { VueDraggable } from 'vue-draggable-plus'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
@@ -10,7 +9,7 @@ import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
-import RouteTargetModal from '@/components/RouteTargetModal.vue'
+import ModelRuleTargetModal from '@/components/ModelRuleTargetModal.vue'
 import { model } from '../../wailsjs/go/models'
 
 const { t } = useI18n()
@@ -21,11 +20,11 @@ const toast = useToast()
 const confirm = useConfirm()
 
 const {
-  data: routes,
-  loading: routesLoading,
-  error: routesError,
-  execute: loadRoutes,
-} = useApi(() => api.routes())
+  data: rules,
+  loading: rulesLoading,
+  error: rulesError,
+  execute: loadRules,
+} = useApi(() => api.modelRules())
 
 const {
   data: providers,
@@ -39,51 +38,34 @@ const editingId = ref('')
 const saving = ref(false)
 const deleting = ref(false)
 
-// Form state — only route-level fields are edited in the modal now.
-// Targets are managed inline on the rule card.
+// Form state — only rule-level fields are edited in the modal. Targets are
+// managed inline on the rule card.
 const form = ref<{
   name: string
-  description: string
   enabled: boolean
-  conditions: model.RouteCondition[]
 }>({
   name: '',
-  description: '',
   enabled: true,
-  conditions: [],
 })
-const formTargets = ref<model.RouteTarget[]>([])
+const formTargets = ref<model.ModelRuleTarget[]>([])
 
 // ---- Target inline management ----
 const targetModalOpen = ref(false)
-const targetModalRoute = ref<model.Route | null>(null)
-const targetModalTarget = ref<model.RouteTarget | null>(null)
+const targetModalRule = ref<model.ModelRule | null>(null)
+const targetModalTarget = ref<model.ModelRuleTarget | null>(null)
 const targetSaving = ref(false)
 
-// ---- Rule list drag (live-persist on reorder) ----
-// `vue-draggable-plus` mutates the bound array via splice, so a regular
-// `ref` triggers Vue reactivity on every reorder. That fixes the old
-// `useSortable` bug where `shallowRef` + DOM mutations left the array
-// stale when `onEnd` read it back.
-const ruleList = ref<model.Route[]>([])
+// The view is a static list — model rules are no longer drag-reorderable
+// because their Name is the unique, client-facing model identifier.
+const ruleList = ref<model.ModelRule[]>([])
 
 watch(
-  routes,
+  rules,
   (val) => {
     ruleList.value = val ? [...val] : []
   },
   { immediate: true }
 )
-
-async function persistRuleOrder() {
-  try {
-    await api.reorderRoutes(ruleList.value.map((r) => r.id))
-    await loadRoutes()
-  } catch (e: any) {
-    toast.push(t('toast.reorderFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
-    await loadRoutes() // revert to server truth
-  }
-}
 
 const providerNameMap = computed(() => {
   const map: Record<string, string> = {}
@@ -101,12 +83,6 @@ const fallbackModalOpen = ref(false)
 const fallbackProviderId = ref('')
 const fallbackModel = ref('')
 
-function operatorLabel(op: string): string {
-  const key = `routes.operators.${op}`
-  const translated = t(key)
-  return translated === key ? op : translated
-}
-
 function targetIconStyle(providerId: string) {
   const name = providerNameMap.value[providerId] || ''
   return {
@@ -115,7 +91,7 @@ function targetIconStyle(providerId: string) {
   }
 }
 
-function targetProviderName(target: model.RouteTarget): string {
+function targetProviderName(target: model.ModelRuleTarget): string {
   return providerNameMap.value[target.provider_id] || t('common.unknown')
 }
 
@@ -123,39 +99,27 @@ function formatHits(n: number): string {
   return n.toLocaleString()
 }
 
-function addCondition() {
-  form.value.conditions.push(new model.RouteCondition({ field: 'model', operator: 'matches', value: '' }))
-}
-
-function removeCondition(idx: number) {
-  form.value.conditions.splice(idx, 1)
-}
-
 function openCreate() {
   editingId.value = ''
   form.value = {
     name: '',
-    description: '',
     enabled: true,
-    conditions: [new model.RouteCondition({ field: 'model', operator: 'matches', value: '' })],
   }
-  // New routes still need at least one default target; it is managed inline afterward.
-  formTargets.value = [new model.RouteTarget({ provider_id: '', model_name: '', max_retries: 0, enabled: true })]
+  // New rules still need at least one default target; it is managed inline afterward.
+  formTargets.value = [new model.ModelRuleTarget({ provider_id: '', model_name: '', max_retries: 0, enabled: true })]
   modalOpen.value = true
 }
 
-function openEdit(route: model.Route) {
-  editingId.value = route.id
+function openEdit(rule: model.ModelRule) {
+  editingId.value = rule.id
   form.value = {
-    name: route.name,
-    description: route.description,
-    enabled: route.enabled,
-    conditions: route.conditions.map((c) => new model.RouteCondition({ field: c.field, operator: c.operator, value: c.value })),
+    name: rule.name,
+    enabled: rule.enabled,
   }
   // Preserve existing targets even though they are edited outside the modal.
-  formTargets.value = route.targets.map((t) => new model.RouteTarget({
+  formTargets.value = rule.targets.map((t) => new model.ModelRuleTarget({
     id: t.id,
-    route_id: t.route_id,
+    rule_id: t.rule_id,
     provider_id: t.provider_id,
     model_name: t.model_name,
     max_retries: t.max_retries,
@@ -166,24 +130,22 @@ function openEdit(route: model.Route) {
   modalOpen.value = true
 }
 
-async function saveRoute() {
+async function saveRule() {
   saving.value = true
   try {
-    const input = new model.RouteInput({
+    const input = new model.ModelRuleInput({
       name: form.value.name,
-      description: form.value.description,
       enabled: form.value.enabled,
-      conditions: form.value.conditions,
       targets: formTargets.value,
     })
     if (editingId.value) {
-      await api.updateRoute(editingId.value, input)
+      await api.updateModelRule(editingId.value, input)
     } else {
-      await api.createRoute(input)
+      await api.createModelRule(input)
     }
     modalOpen.value = false
-    await loadRoutes()
-    toast.push(t('toast.routeSaved'), 'success')
+    await loadRules()
+    toast.push(t('toast.modelRuleSaved'), 'success')
   } catch (e: any) {
     toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   } finally {
@@ -191,37 +153,35 @@ async function saveRoute() {
   }
 }
 
-async function toggleRoute(route: model.Route) {
+async function toggleRule(rule: model.ModelRule) {
   try {
-    const full = await api.getRoute(route.id)
-    const input = new model.RouteInput({
+    const full = await api.getModelRule(rule.id)
+    const input = new model.ModelRuleInput({
       name: full.name,
-      description: full.description,
       enabled: !full.enabled,
-      conditions: full.conditions,
       targets: full.targets,
     })
-    await api.updateRoute(route.id, input)
-    await loadRoutes()
-    toast.push(full.enabled ? t('toast.routeToggledDisabled') : t('toast.routeToggledEnabled'), 'success')
+    await api.updateModelRule(rule.id, input)
+    await loadRules()
+    toast.push(full.enabled ? t('toast.modelRuleToggledDisabled') : t('toast.modelRuleToggledEnabled'), 'success')
   } catch (e: any) {
     toast.push(t('toast.toggleFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
 
-async function deleteRoute(id: string, name: string) {
+async function deleteRule(id: string, name: string) {
   const ok = await confirm.open({
-    title: t('confirm.deleteRouteTitle'),
-    message: t('confirm.deleteRouteMessage', { name }),
+    title: t('confirm.deleteModelRuleTitle'),
+    message: t('confirm.deleteModelRuleMessage', { name }),
     confirmText: t('common.delete'),
     danger: true,
   })
   if (!ok) return
   deleting.value = true
   try {
-    await api.deleteRoute(id)
-    await loadRoutes()
-    toast.push(t('toast.routeDeleted'), 'success')
+    await api.deleteModelRule(id)
+    await loadRules()
+    toast.push(t('toast.modelRuleDeleted'), 'success')
   } catch (e: any) {
     toast.push(t('toast.deleteFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   } finally {
@@ -230,17 +190,17 @@ async function deleteRoute(id: string, name: string) {
 }
 
 // ---- Inline target management ----
-function openAddTarget(route: model.Route) {
-  targetModalRoute.value = route
+function openAddTarget(rule: model.ModelRule) {
+  targetModalRule.value = rule
   targetModalTarget.value = null
   targetModalOpen.value = true
 }
 
-function openEditTarget(route: model.Route, target: model.RouteTarget) {
-  targetModalRoute.value = route
-  targetModalTarget.value = new model.RouteTarget({
+function openEditTarget(rule: model.ModelRule, target: model.ModelRuleTarget) {
+  targetModalRule.value = rule
+  targetModalTarget.value = new model.ModelRuleTarget({
     id: target.id,
-    route_id: target.route_id,
+    rule_id: target.rule_id,
     provider_id: target.provider_id,
     model_name: target.model_name,
     max_retries: target.max_retries,
@@ -253,26 +213,24 @@ function openEditTarget(route: model.Route, target: model.RouteTarget) {
 
 function closeTargetModal() {
   targetModalOpen.value = false
-  targetModalRoute.value = null
+  targetModalRule.value = null
   targetModalTarget.value = null
 }
 
-async function updateRouteTargets(route: model.Route, targets: model.RouteTarget[]): Promise<boolean> {
+async function updateRuleTargets(rule: model.ModelRule, targets: model.ModelRuleTarget[]): Promise<boolean> {
   try {
-    const input = new model.RouteInput({
-      name: route.name,
-      description: route.description,
-      enabled: route.enabled,
-      conditions: route.conditions,
+    const input = new model.ModelRuleInput({
+      name: rule.name,
+      enabled: rule.enabled,
       targets,
     })
-    await api.updateRoute(route.id, input)
-    await loadRoutes()
+    await api.updateModelRule(rule.id, input)
+    await loadRules()
     toast.push(t('toast.targetsUpdated'), 'success')
     return true
   } catch (e: any) {
     toast.push(t('toast.targetsUpdateFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
-    await loadRoutes()
+    await loadRules()
     return false
   }
 }
@@ -280,15 +238,15 @@ async function updateRouteTargets(route: model.Route, targets: model.RouteTarget
 // Set of target IDs currently mid-toggle. Used to disable the toggle UI
 // while a request is in flight so rapid clicks don't race the in-progress
 // update (e.g. user mashes the toggle before the first PATCH lands, which
-// could otherwise leave the server in the wrong state because the route's
-// targets list is read once at the start of `updateRouteTargets`).
+// could otherwise leave the server in the wrong state because the rule's
+// targets list is read once at the start of `updateRuleTargets`).
 const togglingTargets = ref<Set<string>>(new Set())
 
 function isTogglingTarget(id: string): boolean {
   return togglingTargets.value.has(id)
 }
 
-async function toggleTarget(route: model.Route, target: model.RouteTarget) {
+async function toggleTarget(rule: model.ModelRule, target: model.ModelRuleTarget) {
   // Guard against re-entry on the same target. A new target (no id) is
   // treated as never-in-flight so the guard is a no-op for it.
   if (target.id && togglingTargets.value.has(target.id)) return
@@ -298,12 +256,12 @@ async function toggleTarget(route: model.Route, target: model.RouteTarget) {
     togglingTargets.value = new Set(togglingTargets.value)
   }
   try {
-    const newTargets = route.targets.map((t) =>
+    const newTargets = rule.targets.map((t) =>
       t.id === target.id
-        ? new model.RouteTarget({ ...t, enabled: !t.enabled })
+        ? new model.ModelRuleTarget({ ...t, enabled: !t.enabled })
         : t
     )
-    await updateRouteTargets(route, newTargets)
+    await updateRuleTargets(rule, newTargets)
   } finally {
     if (target.id) {
       togglingTargets.value.delete(target.id)
@@ -312,8 +270,8 @@ async function toggleTarget(route: model.Route, target: model.RouteTarget) {
   }
 }
 
-async function deleteTarget(route: model.Route, target: model.RouteTarget) {
-  const targetLabel = `${targetProviderName(target)} · ${target.model_name || t('routes.targetDefault')}`
+async function deleteTarget(rule: model.ModelRule, target: model.ModelRuleTarget) {
+  const targetLabel = `${targetProviderName(target)} · ${target.model_name || t('modelRules.targetDefault')}`
   const ok = await confirm.open({
     title: t('confirm.deleteTargetTitle'),
     message: t('confirm.deleteTargetMessage', { target: targetLabel }),
@@ -321,19 +279,19 @@ async function deleteTarget(route: model.Route, target: model.RouteTarget) {
     danger: true,
   })
   if (!ok) return
-  const newTargets = route.targets.filter((t) => t.id !== target.id)
-  await updateRouteTargets(route, newTargets)
+  const newTargets = rule.targets.filter((t) => t.id !== target.id)
+  await updateRuleTargets(rule, newTargets)
 }
 
-async function onTargetModalSave(target: model.RouteTarget) {
-  const route = targetModalRoute.value
-  if (!route) return
+async function onTargetModalSave(target: model.ModelRuleTarget) {
+  const rule = targetModalRule.value
+  if (!rule) return
   targetSaving.value = true
   try {
     const newTargets = target.id
-      ? route.targets.map((t) => (t.id === target.id ? target : t))
-      : [...route.targets, target]
-    const ok = await updateRouteTargets(route, newTargets)
+      ? rule.targets.map((t) => (t.id === target.id ? target : t))
+      : [...rule.targets, target]
+    const ok = await updateRuleTargets(rule, newTargets)
     if (ok) closeTargetModal()
   } finally {
     targetSaving.value = false
@@ -374,7 +332,7 @@ function importJSON() {
     try {
       const text = await file.text()
       const parsed = JSON.parse(text)
-      const inputs: model.RouteInput[] = []
+      const inputs: model.ModelRuleInput[] = []
       if (!Array.isArray(parsed)) {
         throw new Error(t('toast.invalidJson'))
       }
@@ -382,18 +340,11 @@ function importJSON() {
         if (!item || typeof item.name !== 'string') {
           throw new Error(t('toast.invalidItem'))
         }
-        const conditions = Array.isArray(item.conditions) ? item.conditions : []
         const targets = Array.isArray(item.targets) ? item.targets : []
-        inputs.push(new model.RouteInput({
+        inputs.push(new model.ModelRuleInput({
           name: item.name || '',
-          description: item.description || '',
           enabled: item.enabled !== false,
-          conditions: conditions.map((c: any) => new model.RouteCondition({
-            field: c.field || 'model',
-            operator: c.operator || 'matches',
-            value: c.value || '',
-          })),
-          targets: targets.map((t: any) => new model.RouteTarget({
+          targets: targets.map((t: any) => new model.ModelRuleTarget({
             provider_id: t.provider_id || '',
             model_name: t.model_name || '',
             max_retries: typeof t.max_retries === 'number' ? t.max_retries : 0,
@@ -402,9 +353,9 @@ function importJSON() {
         }))
       }
       for (const input of inputs) {
-        await api.createRoute(input)
+        await api.createModelRule(input)
       }
-      await loadRoutes()
+      await loadRules()
       toast.push(t('toast.imported', { count: inputs.length }), 'success')
     } catch (e: any) {
       toast.push(t('toast.importFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
@@ -414,12 +365,12 @@ function importJSON() {
 }
 
 function exportJSON() {
-  const data = routes.value || []
+  const data = rules.value || []
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `Autoapi-routes-${new Date().toISOString().slice(0, 10)}.json`
+  a.download = `Autoapi-model-rules-${new Date().toISOString().slice(0, 10)}.json`
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 0)
   toast.push(t('toast.exported'), 'success')
@@ -434,7 +385,7 @@ function closeFallbackModal() {
 }
 
 onMounted(() => {
-  loadRoutes()
+  loadRules()
   loadProviders()
   loadSettings().catch((e: any) => toast.push(t('toast.loadSettingsFailed') + ': ' + (e?.message || e?.toString() || ''), 'error'))
 })
@@ -443,15 +394,15 @@ onMounted(() => {
 <template>
   <header class="main-header">
     <div class="main-title-group">
-      <h1 class="main-title">{{ t('routes.title') }}</h1>
-      <span class="main-subtitle">{{ t('routes.subtitle', { count: ruleList.length ?? 0 }) }}</span>
+      <h1 class="main-title">{{ t('modelRules.title') }}</h1>
+      <span class="main-subtitle">{{ t('modelRules.subtitle', { count: ruleList.length ?? 0 }) }}</span>
     </div>
     <div class="main-actions">
-      <button class="btn btn-secondary" @click="importJSON">{{ t('routes.import') }}</button>
-      <button class="btn btn-secondary" @click="exportJSON">{{ t('routes.export') }}</button>
+      <button class="btn btn-secondary" @click="importJSON">{{ t('modelRules.import') }}</button>
+      <button class="btn btn-secondary" @click="exportJSON">{{ t('modelRules.export') }}</button>
       <button class="btn btn-primary" @click="openCreate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-        {{ t('routes.new') }}
+        {{ t('modelRules.new') }}
       </button>
     </div>
   </header>
@@ -459,8 +410,8 @@ onMounted(() => {
   <div class="main-content">
     <div class="main-content-inner stack-loose">
       <!-- Loading / error -->
-      <div v-if="routesLoading && !routes" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('routes.loading') }}</div>
-      <div v-else-if="routesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('routes.loadFailed', { error: routesError }) }}</div>
+      <div v-if="rulesLoading && !rules" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('modelRules.loading') }}</div>
+      <div v-else-if="rulesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('modelRules.loadFailed', { error: rulesError }) }}</div>
       <template v-else>
         <!-- Default fallback banner -->
         <div class="card fallback-banner">
@@ -468,100 +419,71 @@ onMounted(() => {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           </div>
           <div class="fallback-body">
-            <div class="fallback-title">{{ t('routes.fallbackTitle') }}</div>
+            <div class="fallback-title">{{ t('modelRules.fallbackTitle') }}</div>
             <div class="fallback-desc">
-              {{ t('routes.fallbackDesc', { target: `${defaultFallback.provider} · ${defaultFallback.model}` }) }}
+              {{ t('modelRules.fallbackDesc', { target: `${defaultFallback.provider} · ${defaultFallback.model}` }) }}
             </div>
           </div>
-          <button class="btn btn-secondary" @click="editDefault">{{ t('routes.fallbackEdit') }}</button>
+          <button class="btn btn-secondary" @click="editDefault">{{ t('modelRules.fallbackEdit') }}</button>
         </div>
 
-        <!-- Rule list (sortable container) -->
-        <VueDraggable
-          v-model="ruleList"
-          handle=".drag-handle"
-          :animation="150"
-          ghost-class="sortable-ghost"
-          chosen-class="sortable-chosen"
-          drag-class="sortable-drag"
-          class="stack-loose"
-          @end="persistRuleOrder"
-        >
+        <!-- Rule list (no drag — model names are unique) -->
+        <div class="stack-loose">
           <article
-            v-for="(route, idx) in ruleList"
-            :key="route.id"
-            class="card route-card"
-            :class="{ 'route-disabled': !route.enabled }"
+            v-for="rule in ruleList"
+            :key="rule.id"
+            class="card rule-card"
+            :class="{ 'rule-disabled': !rule.enabled }"
           >
-            <header class="route-header">
-              <div class="route-header-main">
-                <svg class="drag-handle" viewBox="0 0 16 28" fill="currentColor" width="14" height="24" :aria-label="t('common.drag')">
-                  <circle cx="5" cy="5.5" r="1.4"/>
-                  <circle cx="11" cy="5.5" r="1.4"/>
-                  <circle cx="5" cy="14" r="1.5"/>
-                  <circle cx="11" cy="14" r="1.5"/>
-                  <circle cx="5" cy="22.5" r="1.5"/>
-                  <circle cx="11" cy="22.5" r="1.5"/>
-                </svg>
-                <div class="route-number text-mono">{{ String(idx + 1).padStart(2, '0') }}</div>
-                <div class="route-title">
-                  <div class="route-name">{{ route.name }}</div>
-                  <div class="route-desc">{{ route.description }}</div>
+            <header class="rule-header">
+              <div class="rule-header-main">
+                <div class="rule-title">
+                  <div class="rule-name">{{ rule.name }}</div>
+                  <div class="rule-subtitle">{{ t('modelRules.clientModelName') }}</div>
                 </div>
               </div>
-              <div class="route-header-actions">
-                <label class="toggle" :aria-label="route.enabled ? t('routes.ruleToggleDisable') : t('routes.ruleToggleEnable')">
-                  <input type="checkbox" :checked="route.enabled" @change="toggleRoute(route)">
+              <div class="rule-header-actions">
+                <label class="toggle" :aria-label="rule.enabled ? t('modelRules.ruleToggleDisable') : t('modelRules.ruleToggleEnable')">
+                  <input type="checkbox" :checked="rule.enabled" @change="toggleRule(rule)">
                   <span class="toggle-slider blue"></span>
                 </label>
-                <DropdownMenu :menu-id="route.id">
+                <DropdownMenu :menu-id="rule.id">
                   <template #trigger="{ toggle, open }">
                     <button
                       class="btn btn-icon"
                       :aria-expanded="open"
                       aria-haspopup="menu"
-                      :aria-label="t('routes.moreActions', { name: route.name })"
+                      :aria-label="t('modelRules.moreActions', { name: rule.name })"
                       @click="toggle"
                     >
                       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                     </button>
                   </template>
                   <template #menu="{ close }">
-                    <button class="dropdown-item" role="menuitem" @click="openEdit(route); close()">{{ t('routes.edit') }}</button>
-                    <button class="dropdown-item" role="menuitem" @click="toggleRoute(route); close()">{{ route.enabled ? t('routes.disable') : t('routes.enable') }}</button>
-                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteRoute(route.id, route.name); close()">{{ t('routes.delete') }}</button>
+                    <button class="dropdown-item" role="menuitem" @click="openEdit(rule); close()">{{ t('modelRules.edit') }}</button>
+                    <button class="dropdown-item" role="menuitem" @click="toggleRule(rule); close()">{{ rule.enabled ? t('modelRules.disable') : t('modelRules.enable') }}</button>
+                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteRule(rule.id, rule.name); close()">{{ t('modelRules.delete') }}</button>
                   </template>
                 </DropdownMenu>
               </div>
             </header>
 
-            <div class="route-body">
-              <div class="route-conditions">
-                <h3 class="route-section-label">{{ t('routes.conditionsLabel') }}</h3>
-                <ul class="route-condition-list">
-                  <li v-for="(c, cidx) in route.conditions" :key="cidx" class="route-condition">
-                    <span class="route-condition-field">{{ c.field }}</span>
-                    <span class="route-condition-op">{{ operatorLabel(c.operator) }}</span>
-                    <span class="route-condition-value">{{ c.value }}</span>
-                  </li>
-                  <li v-if="!route.conditions.length" class="text-muted" style="font-size: 12px;">{{ t('routes.empty') }}</li>
-                </ul>
-              </div>
-              <div class="route-targets">
-                <h3 class="route-section-label">
-                  <span>{{ t('routes.targetsLabel') }}</span>
+            <div class="rule-body">
+              <div class="rule-targets">
+                <h3 class="rule-section-label">
+                  <span>{{ t('modelRules.targetsLabel') }}</span>
                   <button
                     class="btn btn-icon"
                     style="width: 22px; height: 22px;"
-                    :aria-label="t('routes.addTarget')"
-                    @click="openAddTarget(route)"
+                    :aria-label="t('modelRules.addTarget')"
+                    @click="openAddTarget(rule)"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
                   </button>
                 </h3>
-                <ul class="route-target-list">
+                <ul class="rule-target-list">
                   <li
-                    v-for="(target, tidx) in route.targets"
+                    v-for="(target, tidx) in rule.targets"
                     :key="target.id || tidx"
                     class="target-row"
                     :class="{ 'target-disabled': !target.enabled }"
@@ -571,93 +493,90 @@ onMounted(() => {
                     </div>
                     <div class="target-info">
                       <span class="target-provider">{{ targetProviderName(target) }}</span>
-                      <span class="target-model">{{ target.model_name || t('routes.targetDefault') }}</span>
-                      <span v-if="target.max_retries > 0" class="badge mono">{{ t('routes.targetRetries', { count: target.max_retries }) }}</span>
-                      <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">{{ t('routes.targetDisabled') }}</span>
+                      <span class="target-model">{{ target.model_name || t('modelRules.targetDefault') }}</span>
+                      <span v-if="target.max_retries > 0" class="badge mono">{{ t('modelRules.targetRetries', { count: target.max_retries }) }}</span>
+                      <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">{{ t('modelRules.targetDisabled') }}</span>
                     </div>
                     <div class="target-counters">
-                      <span>{{ t('routes.targetHits', { count: formatHits(target.hit_count) }) }}</span>
-                      <span :class="{ 'fail-hi': target.failure_count > 0 }">{{ t('routes.targetFailures', { count: formatHits(target.failure_count) }) }}</span>
+                      <span>{{ t('modelRules.targetHits', { count: formatHits(target.hit_count) }) }}</span>
+                      <span :class="{ 'fail-hi': target.failure_count > 0 }">{{ t('modelRules.targetFailures', { count: formatHits(target.failure_count) }) }}</span>
                       <span>T{{ tidx + 1 }}</span>
                     </div>
                     <div class="target-actions">
-                      <label class="toggle toggle-target" :aria-label="target.enabled ? t('routes.targetToggleDisable') : t('routes.targetToggleEnable')">
+                      <label class="toggle toggle-target" :aria-label="target.enabled ? t('modelRules.targetToggleDisable') : t('modelRules.targetToggleEnable')">
                         <input
                           type="checkbox"
                           :checked="target.enabled"
                           :disabled="isTogglingTarget(target.id || '')"
-                          @change="toggleTarget(route, target)"
+                          @change="toggleTarget(rule, target)"
                         >
                         <span class="toggle-slider"></span>
                       </label>
-                      <DropdownMenu :menu-id="`${route.id}-target-${target.id || tidx}`">
+                      <DropdownMenu :menu-id="`${rule.id}-target-${target.id || tidx}`">
                         <template #trigger="{ toggle, open }">
                           <button
                             class="btn btn-icon"
                             style="width: 26px; height: 26px;"
                             :aria-expanded="open"
                             aria-haspopup="menu"
-                            :aria-label="t('routes.targetActions')"
+                            :aria-label="t('modelRules.targetActions')"
                             @click="toggle"
                           >
                             <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                           </button>
                         </template>
                         <template #menu="{ close }">
-                          <button class="dropdown-item" role="menuitem" @click="openEditTarget(route, target); close()">{{ t('routes.edit') }}</button>
-                          <button class="dropdown-item danger" role="menuitem" @click="deleteTarget(route, target); close()">{{ t('routes.delete') }}</button>
+                          <button class="dropdown-item" role="menuitem" @click="openEditTarget(rule, target); close()">{{ t('modelRules.edit') }}</button>
+                          <button class="dropdown-item danger" role="menuitem" @click="deleteTarget(rule, target); close()">{{ t('modelRules.delete') }}</button>
                         </template>
                       </DropdownMenu>
                     </div>
                   </li>
-                  <li v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">{{ t('routes.empty') }}</li>
+                  <li v-if="!rule.targets.length" class="text-muted" style="font-size: 12px;">{{ t('modelRules.empty') }}</li>
                 </ul>
               </div>
             </div>
 
-            <div class="route-footer">
-              <template v-if="route.enabled">
-                <div class="route-stats">
-                  <span class="route-stats-item">
-                    <span class="route-stats-label">{{ t('routes.stats.monthlyHits') }}</span>
-                    <span class="route-stats-value">{{ formatHits(route.monthly_hits) }}</span>
+            <div class="rule-footer">
+              <template v-if="rule.enabled">
+                <div class="rule-stats">
+                  <span class="rule-stats-item">
+                    <span class="rule-stats-label">{{ t('modelRules.stats.monthlyHits') }}</span>
+                    <span class="rule-stats-value">{{ formatHits(rule.monthly_hits) }}</span>
                   </span>
-                  <span v-if="route.monthly_savings > 0" class="route-stats-item">
-                    <span class="route-stats-label">{{ t('routes.stats.savings') }}</span>
-                    <span class="route-stats-value">{{ fmtCurrency(route.monthly_savings) }}</span>
+                  <span v-if="rule.monthly_savings > 0" class="rule-stats-item">
+                    <span class="rule-stats-label">{{ t('modelRules.stats.savings') }}</span>
+                    <span class="rule-stats-value">{{ fmtCurrency(rule.monthly_savings) }}</span>
                   </span>
-                  <span v-else class="route-stats-item">
-                    <span class="route-stats-label">{{ t('routes.stats.share') }}</span>
-                    <span class="route-stats-value">{{ route.monthly_hits ? '1.7%' : '0%' }}</span>
+                  <span v-else class="rule-stats-item">
+                    <span class="rule-stats-label">{{ t('modelRules.stats.share') }}</span>
+                    <span class="rule-stats-value">{{ rule.monthly_hits ? '1.7%' : '0%' }}</span>
                   </span>
                 </div>
               </template>
-              <div v-else class="route-created">
-                {{ t('routes.disabledStatus') }} · {{ t('routes.disabledCreated', { time: format(route.created_at) }) }}
+              <div v-else class="rule-created">
+                {{ t('modelRules.disabledStatus') }} · {{ t('modelRules.disabledCreated', { time: format(rule.created_at) }) }}
               </div>
             </div>
           </article>
-        </VueDraggable>
+        </div>
       </template>
     </div>
   </div>
 
-  <!-- Route modal -->
+  <!-- Model rule modal (model name + enabled + targets) -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
       <div class="modal-card wide modal-card-scroll">
-        <div class="modal-title">{{ editingId ? t('routes.modal.edit') : t('routes.modal.create') }}</div>
+        <div class="modal-title">{{ editingId ? t('modelRules.modal.edit') : t('modelRules.modal.create') }}</div>
         <div class="field">
-          <label class="field-label">{{ t('routes.modal.name') }}</label>
-          <input v-model="form.name" class="input" :placeholder="t('routes.modal.namePlaceholder')">
-        </div>
-        <div class="field">
-          <label class="field-label">{{ t('routes.modal.description') }}</label>
-          <input v-model="form.description" class="input" :placeholder="t('routes.modal.descriptionPlaceholder')">
+          <label class="field-label">{{ t('modelRules.modal.name') }}</label>
+          <input v-model="form.name" class="input" :placeholder="t('modelRules.modal.namePlaceholder')">
+          <div class="text-muted" style="font-size: 11px; margin-top: 4px;">{{ t('modelRules.modal.nameHelp') }}</div>
         </div>
         <div class="field">
           <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">{{ t('routes.modal.enabled') }}</label>
+            <label class="field-label">{{ t('modelRules.modal.enabled') }}</label>
             <label class="toggle">
               <input v-model="form.enabled" type="checkbox">
               <span class="toggle-slider"></span>
@@ -665,44 +584,16 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="field" style="margin-bottom: 8px;">
-          <div class="field-label">{{ t('routes.modal.conditions') }}</div>
-        </div>
-        <div class="stack-tight" style="gap: 8px;">
-          <div v-for="(cond, idx) in form.conditions" :key="idx" class="row" style="gap: 8px; align-items: flex-start;">
-            <select v-model="cond.field" class="select" style="flex: 1;">
-              <option value="model">model</option>
-              <option value="header.x-priority">header.x-priority</option>
-              <option value="estimated_tokens">estimated_tokens</option>
-              <option value="task">task</option>
-              <option value="time.hour">time.hour</option>
-            </select>
-            <select v-model="cond.operator" class="select" style="width: 120px;">
-              <option value="matches">matches</option>
-              <option value="equals">equals</option>
-              <option value="lt">lt</option>
-              <option value="gt">gt</option>
-              <option value="between">between</option>
-              <option value="in">in</option>
-            </select>
-            <input v-model="cond.value" class="input" style="flex: 1;" :placeholder="t('routes.modal.valuePlaceholder')">
-            <button class="btn btn-icon" style="width: 28px; height: 28px;" @click="removeCondition(idx)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-          <button class="btn btn-secondary" style="align-self: flex-start;" @click="addCondition">{{ t('routes.modal.addCondition') }}</button>
-        </div>
-
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeModal">{{ t('routes.modal.cancel') }}</button>
-          <button class="btn btn-primary" :disabled="saving" @click="saveRoute">{{ saving ? t('routes.modal.saving') : t('routes.modal.save') }}</button>
+          <button class="btn btn-secondary" @click="closeModal">{{ t('modelRules.modal.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="saving" @click="saveRule">{{ saving ? t('modelRules.modal.saving') : t('modelRules.modal.save') }}</button>
         </div>
       </div>
     </div>
   </Teleport>
 
   <!-- Target add/edit modal -->
-  <RouteTargetModal
+  <ModelRuleTargetModal
     :open="targetModalOpen"
     :target="targetModalTarget"
     :providers="providers || []"
@@ -715,20 +606,20 @@ onMounted(() => {
   <Teleport to="body">
     <div v-if="fallbackModalOpen" class="modal-overlay" @click.self="closeFallbackModal">
       <div class="modal-card">
-        <div class="modal-title">{{ t('routes.editFallbackTitle') }}</div>
+        <div class="modal-title">{{ t('modelRules.editFallbackTitle') }}</div>
         <div class="field">
-          <label class="field-label">{{ t('routes.fallback.provider') }}</label>
+          <label class="field-label">{{ t('modelRules.fallback.provider') }}</label>
           <select v-model="fallbackProviderId" class="select">
             <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
         <div class="field">
-          <label class="field-label">{{ t('routes.fallback.model') }}</label>
-          <input v-model="fallbackModel" class="input" :placeholder="t('routes.fallback.modelPlaceholder')">
+          <label class="field-label">{{ t('modelRules.fallback.model') }}</label>
+          <input v-model="fallbackModel" class="input" :placeholder="t('modelRules.fallback.modelPlaceholder')">
         </div>
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeFallbackModal">{{ t('routes.modal.cancel') }}</button>
-          <button class="btn btn-primary" @click="saveDefaultFallback">{{ t('routes.modal.save') }}</button>
+          <button class="btn btn-secondary" @click="closeFallbackModal">{{ t('modelRules.modal.cancel') }}</button>
+          <button class="btn btn-primary" @click="saveDefaultFallback">{{ t('modelRules.modal.save') }}</button>
         </div>
       </div>
     </div>
@@ -736,80 +627,67 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.route-card {
-  --route-border: rgba(0, 0, 0, 0.05);
-  --route-border-subtle: rgba(0, 0, 0, 0.04);
-  --route-bg-tint: rgba(0, 0, 0, 0.015);
-  --route-bg-footer: rgba(0, 0, 0, 0.01);
+.rule-card {
+  --rule-border: rgba(0, 0, 0, 0.05);
+  --rule-border-subtle: rgba(0, 0, 0, 0.04);
+  --rule-bg-tint: rgba(0, 0, 0, 0.015);
+  --rule-bg-footer: rgba(0, 0, 0, 0.01);
   --target-icon-size: 26px;
   --target-row-gap: 12px;
   padding: 0;
   overflow: hidden;
 }
-.route-card.route-disabled {
+.rule-card.rule-disabled {
   opacity: 0.72;
 }
 
-.route-header {
+.rule-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--route-border);
+  border-bottom: 1px solid var(--rule-border);
 }
-.route-header-main {
+.rule-header-main {
   display: flex;
   align-items: center;
   gap: 12px;
   min-width: 0;
   flex: 1;
 }
-.route-header-actions {
+.rule-header-actions {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
 }
 
-.route-number {
-  font-size: 12px;
-  color: var(--muted);
-  width: 24px;
-  text-align: right;
-  flex-shrink: 0;
-}
-.route-title {
+.rule-title {
   min-width: 0;
 }
-.route-name {
+.rule-name {
+  font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 600;
   line-height: 1.3;
 }
-.route-desc {
+.rule-subtitle {
   font-size: 12px;
   color: var(--muted);
   margin-top: 2px;
   line-height: 1.35;
 }
 
-.route-body {
-  display: grid;
-  grid-template-columns: 35% 65%;
+.rule-body {
+  display: block;
 }
-.route-conditions {
-  padding: 16px 20px;
-  border-right: 1px solid var(--route-border);
-  background: var(--route-bg-tint);
-  min-width: 0;
-}
-.route-targets {
+.rule-targets {
   padding: 16px 20px;
   min-width: 0;
 }
 
-.route-section-label {
+.rule-section-label {
   font-size: 11px;
   font-weight: 600;
   color: var(--muted);
@@ -822,39 +700,7 @@ onMounted(() => {
   gap: 8px;
 }
 
-.route-condition-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  list-style: none;
-}
-.route-condition {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.route-condition-field {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--fg);
-}
-.route-condition-op {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 100px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-family: var(--font-mono);
-}
-.route-condition-value {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--fg);
-}
-
-.route-target-list {
+.rule-target-list {
   display: flex;
   flex-direction: column;
   list-style: none;
@@ -865,7 +711,7 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--route-border-subtle);
+  border-bottom: 1px solid var(--rule-border-subtle);
 }
 .target-row:last-child {
   border-bottom: none;
@@ -930,38 +776,38 @@ onMounted(() => {
   opacity: 0.5;
 }
 
-.route-footer {
+.rule-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 10px 20px;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
-  background: var(--route-bg-footer);
+  background: var(--rule-bg-footer);
 }
-.route-stats {
+.rule-stats {
   display: flex;
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
 }
-.route-stats-item {
+.rule-stats-item {
   display: flex;
   align-items: baseline;
   gap: 6px;
 }
-.route-stats-label {
+.rule-stats-label {
   font-size: 11px;
   color: var(--muted);
 }
-.route-stats-value {
+.rule-stats-value {
   font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 600;
   color: var(--fg);
   font-variant-numeric: tabular-nums;
 }
-.route-created {
+.rule-created {
   font-size: 12px;
   color: var(--muted);
   font-family: var(--font-mono);
@@ -1029,19 +875,12 @@ onMounted(() => {
 }
 
 @media (max-width: 800px) {
-  .route-body {
-    grid-template-columns: 1fr;
-  }
-  .route-conditions {
-    border-right: none;
-    border-bottom: 1px solid var(--route-border);
-  }
-  .route-footer {
+  .rule-footer {
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
   }
-  .route-created {
+  .rule-created {
     margin-left: 0;
   }
   .target-row {
@@ -1061,25 +900,22 @@ onMounted(() => {
   }
 }
 
-html[data-theme="dark"] .route-card {
-  --route-border: rgba(255, 255, 255, 0.05);
-  --route-border-subtle: rgba(255, 255, 255, 0.05);
-  --route-bg-tint: rgba(255, 255, 255, 0.02);
-  --route-bg-footer: rgba(255, 255, 255, 0.01);
+html[data-theme="dark"] .rule-card {
+  --rule-border: rgba(255, 255, 255, 0.05);
+  --rule-border-subtle: rgba(255, 255, 255, 0.05);
+  --rule-bg-tint: rgba(255, 255, 255, 0.02);
+  --rule-bg-footer: rgba(255, 255, 255, 0.01);
 }
-html[data-theme="dark"] .route-header,
-html[data-theme="dark"] .route-conditions,
-html[data-theme="dark"] .route-footer {
-  border-color: var(--route-border);
+html[data-theme="dark"] .rule-header,
+html[data-theme="dark"] .rule-targets,
+html[data-theme="dark"] .rule-footer {
+  border-color: var(--rule-border);
 }
-html[data-theme="dark"] .route-conditions {
-  background: var(--route-bg-tint);
-}
-html[data-theme="dark"] .route-footer {
-  background: var(--route-bg-footer);
+html[data-theme="dark"] .rule-footer {
+  background: var(--rule-bg-footer);
 }
 html[data-theme="dark"] .target-row {
-  border-bottom-color: var(--route-border-subtle);
+  border-bottom-color: var(--rule-border-subtle);
 }
 html[data-theme="dark"] .fallback-banner {
   background: var(--accent-soft);

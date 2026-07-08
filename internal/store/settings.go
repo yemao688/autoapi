@@ -63,6 +63,11 @@ func (s *Store) GetSettings() (*model.Settings, error) {
 			if json.Unmarshal(data, &s) == nil {
 				settings.Advanced = s
 			}
+		case "logging":
+			var s model.LoggingSettings
+			if json.Unmarshal(data, &s) == nil {
+				settings.Logging = s
+			}
 		}
 	}
 
@@ -79,6 +84,7 @@ func (s *Store) SaveSettings(settings model.Settings) error {
 		"server":     settings.Server,
 		"data":       settings.Data,
 		"advanced":   settings.Advanced,
+		"logging":    settings.Logging,
 	}
 
 	return s.execTx(func(tx *sql.Tx) error {
@@ -146,6 +152,13 @@ func defaultSettings() model.Settings {
 			DebugMode:    false,
 			Experimental: false,
 			HTTPProxy:    "system",
+		},
+		Logging: model.LoggingSettings{
+			Enabled:    true,
+			Level:      "info",
+			MaxSizeMB:  10,
+			MaxAgeDays: 7,
+			MaxBackups: 3,
 		},
 	}
 }

@@ -238,6 +238,57 @@ ALTER TABLE request_logs ADD COLUMN cache_hit INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE route_targets ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
 `,
 	},
+	{
+		// Phase 4: route rules → model rules. The previous `routes` table
+		// (which was keyed by an internal UUID and ordered by `priority`) is
+		// renamed to `model_rules` and the `description` and `priority`
+		// columns are dropped. We also rename `route_id` → `rule_id` on the
+		// `route_targets` table and drop the `route_conditions` table.
+		//
+		// The migration is split into steps so each one is a simple, fast
+		// DDL statement — SQLite does not support renaming columns
+		// directly, so route_targets.route_id is rebuilt via table-rename
+		// + copy + drop. Existing rows are preserved.
+		ID: "011_route_to_model_rule",
+		SQL: `
+-- Rename the routes table to model_rules (preserves all rows).
+ALTER TABLE routes RENAME TO model_rules;
+
+-- Drop the description and priority columns. SQLite supports
+-- ALTER TABLE ... DROP COLUMN since 3.35.0; the Wails runtime requires a
+-- recent enough SQLite so this is safe.
+ALTER TABLE model_rules DROP COLUMN description;
+ALTER TABLE model_rules DROP COLUMN priority;
+
+-- Drop the now-unused route_conditions table.
+DROP TABLE IF EXISTS route_conditions;
+
+-- Rebuild route_targets so its foreign key column is rule_id instead
+-- of route_id. SQLite does not support renaming a column directly; the
+-- canonical rebuild dance is: create a new table with the desired schema,
+-- copy the data, drop the old, rename the new. The new schema includes
+-- every column added by earlier migrations (tier, max_retries, hit_count,
+-- failure_count, enabled) so the resulting table is equivalent to the
+-- pre-migration one with the route_id→rule_id column rename.
+CREATE TABLE rule_targets_new (
+    id TEXT PRIMARY KEY,
+    rule_id TEXT NOT NULL REFERENCES model_rules(id) ON DELETE CASCADE,
+    provider_id TEXT NOT NULL,
+    model_name TEXT NOT NULL DEFAULT '',
+    tier INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 0,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1
+);
+INSERT INTO rule_targets_new (id, rule_id, provider_id, model_name, tier, max_retries, hit_count, failure_count, enabled)
+    SELECT id, route_id, provider_id, model_name, tier, max_retries, hit_count, failure_count, enabled
+    FROM route_targets;
+DROP TABLE route_targets;
+ALTER TABLE rule_targets_new RENAME TO rule_targets;
+CREATE INDEX IF NOT EXISTS idx_rule_targets_rule_tier ON rule_targets(rule_id, tier);
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have
@@ -271,31 +322,42 @@ func (s *Store) backfillCost() {
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists
-// on the `route_targets` table. Used as a SkipIfRedundant predicate so the
+// on the per-target table. Used as a SkipIfRedundant predicate so the
 // 010_route_target_enabled migration is safe to ship on DBs that already
 // picked up the same schema change under the old `009_route_target_enabled`
 // ID (the migration row in _migrations still says 009, so the renamed entry
 // would otherwise be applied on top of the existing column and fail with
 // "duplicate column name").
+//
+// Phase 4 renamed `route_targets` to `rule_targets`, so this predicate
+// inspects both table names. If either table exists and has the `enabled`
+// column, the migration is treated as already applied. The same predicate
+// is run for both pre- and post-rename DBs.
 func routeTargetsHasEnabled(tx *sql.Tx) (bool, error) {
-	rows, err := tx.Query(`PRAGMA table_info(route_targets)`)
-	if err != nil {
-		return false, fmt.Errorf("store: pragma table_info: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dfltValue sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
-			return false, fmt.Errorf("store: scan pragma table_info: %w", err)
+	for _, table := range []string{"rule_targets", "route_targets"} {
+		rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+		if err != nil {
+			// PRAGMA errors when the table doesn't exist; treat that as
+			// "not yet present" and continue to the next candidate.
+			continue
 		}
-		if name == "enabled" {
-			return true, nil
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltValue sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+				rows.Close()
+				return false, fmt.Errorf("store: scan pragma table_info: %w", err)
+			}
+			if name == "enabled" {
+				rows.Close()
+				return true, nil
+			}
 		}
+		rows.Close()
 	}
-	return false, rows.Err()
+	return false, nil
 }
 
 // migrate applies all pending migrations in a single transaction.

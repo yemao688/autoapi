@@ -5,15 +5,15 @@ import {api} from '../models';
 
 export function CreateAPIKey(arg1:model.ApiKeyInput):Promise<model.ApiKey>;
 
-export function CreateProvider(arg1:model.ProviderInput):Promise<model.Provider>;
+export function CreateModelRule(arg1:model.ModelRuleInput):Promise<model.ModelRule>;
 
-export function CreateRoute(arg1:model.RouteInput):Promise<model.Route>;
+export function CreateProvider(arg1:model.ProviderInput):Promise<model.Provider>;
 
 export function DeleteAPIKey(arg1:string):Promise<void>;
 
-export function DeleteProvider(arg1:string):Promise<void>;
+export function DeleteModelRule(arg1:string):Promise<void>;
 
-export function DeleteRoute(arg1:string):Promise<void>;
+export function DeleteProvider(arg1:string):Promise<void>;
 
 export function ExportData(arg1:model.ExportFormat):Promise<api.ExportResult>;
 
@@ -21,11 +21,11 @@ export function FetchUpstreamModels(arg1:string):Promise<Array<model.Model>>;
 
 export function GetDashboard():Promise<model.DashboardData>;
 
+export function GetModelRule(arg1:string):Promise<model.ModelRule>;
+
 export function GetProvider(arg1:string):Promise<model.Provider>;
 
 export function GetProxyStatus():Promise<api.ProxyStatus>;
-
-export function GetRoute(arg1:string):Promise<model.Route>;
 
 export function GetSettings():Promise<model.Settings>;
 
@@ -41,11 +41,11 @@ export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
 export function ListEndpoints():Promise<Array<model.Endpoint>>;
 
+export function ListModelRules():Promise<Array<model.ModelRule>>;
+
 export function ListModels(arg1:string):Promise<Array<model.Model>>;
 
 export function ListProviders():Promise<Array<model.Provider>>;
-
-export function ListRoutes():Promise<Array<model.Route>>;
 
 export function NavigateTo(arg1:string):Promise<void>;
 
@@ -57,7 +57,7 @@ export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;
 
 export function Quit():Promise<void>;
 
-export function ReorderRoutes(arg1:Array<string>):Promise<void>;
+export function ReorderModelRules(arg1:Array<string>):Promise<void>;
 
 export function RestartProxy():Promise<void>;
 
@@ -75,6 +75,6 @@ export function TestProvider(arg1:string):Promise<model.ProviderTestResult>;
 
 export function UpdateAPIKey(arg1:string,arg2:model.ApiKeyInput):Promise<model.ApiKey>;
 
-export function UpdateProvider(arg1:string,arg2:model.ProviderInput):Promise<model.Provider>;
+export function UpdateModelRule(arg1:string,arg2:model.ModelRuleInput):Promise<model.ModelRule>;
 
-export function UpdateRoute(arg1:string,arg2:model.RouteInput):Promise<model.Route>;
+export function UpdateProvider(arg1:string,arg2:model.ProviderInput):Promise<model.Provider>;

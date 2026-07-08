@@ -393,6 +393,26 @@ export namespace model {
 		    return a;
 		}
 	}
+	export class LoggingSettings {
+	    enabled: boolean;
+	    level: string;
+	    max_size_mb: number;
+	    max_age_days: number;
+	    max_backups: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoggingSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.level = source["level"];
+	        this.max_size_mb = source["max_size_mb"];
+	        this.max_age_days = source["max_age_days"];
+	        this.max_backups = source["max_backups"];
+	    }
+	}
 	export class Model {
 	    id: string;
 	    provider_id: string;
@@ -441,6 +461,111 @@ export namespace model {
 	        this.cost = source["cost"];
 	    }
 	}
+	export class ModelRuleTarget {
+	    id: string;
+	    rule_id: string;
+	    provider_id: string;
+	    model_name: string;
+	    max_retries: number;
+	    hit_count: number;
+	    failure_count: number;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelRuleTarget(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.rule_id = source["rule_id"];
+	        this.provider_id = source["provider_id"];
+	        this.model_name = source["model_name"];
+	        this.max_retries = source["max_retries"];
+	        this.hit_count = source["hit_count"];
+	        this.failure_count = source["failure_count"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class ModelRule {
+	    id: string;
+	    name: string;
+	    enabled: boolean;
+	    created_at: number;
+	    updated_at: number;
+	    targets: ModelRuleTarget[];
+	    monthly_hits: number;
+	    monthly_savings: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelRule(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
+	        this.monthly_hits = source["monthly_hits"];
+	        this.monthly_savings = source["monthly_savings"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ModelRuleInput {
+	    name: string;
+	    enabled: boolean;
+	    targets: ModelRuleTarget[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelRuleInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class ModelTestResult {
 	    ok: boolean;
 	    latency_ms: number;
@@ -515,140 +640,6 @@ export namespace model {
 	    }
 	}
 	
-	export class RouteTarget {
-	    id: string;
-	    route_id: string;
-	    provider_id: string;
-	    model_name: string;
-	    max_retries: number;
-	    hit_count: number;
-	    failure_count: number;
-	    enabled: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new RouteTarget(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.route_id = source["route_id"];
-	        this.provider_id = source["provider_id"];
-	        this.model_name = source["model_name"];
-	        this.max_retries = source["max_retries"];
-	        this.hit_count = source["hit_count"];
-	        this.failure_count = source["failure_count"];
-	        this.enabled = source["enabled"];
-	    }
-	}
-	export class RouteCondition {
-	    id: string;
-	    route_id: string;
-	    field: string;
-	    operator: string;
-	    value: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new RouteCondition(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.route_id = source["route_id"];
-	        this.field = source["field"];
-	        this.operator = source["operator"];
-	        this.value = source["value"];
-	    }
-	}
-	export class Route {
-	    id: string;
-	    name: string;
-	    description: string;
-	    enabled: boolean;
-	    created_at: number;
-	    updated_at: number;
-	    conditions: RouteCondition[];
-	    targets: RouteTarget[];
-	    monthly_hits: number;
-	    monthly_savings: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new Route(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.enabled = source["enabled"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	        this.conditions = this.convertValues(source["conditions"], RouteCondition);
-	        this.targets = this.convertValues(source["targets"], RouteTarget);
-	        this.monthly_hits = source["monthly_hits"];
-	        this.monthly_savings = source["monthly_savings"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
-	export class RouteInput {
-	    name: string;
-	    description: string;
-	    enabled: boolean;
-	    conditions: RouteCondition[];
-	    targets: RouteTarget[];
-	
-	    static createFrom(source: any = {}) {
-	        return new RouteInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.enabled = source["enabled"];
-	        this.conditions = this.convertValues(source["conditions"], RouteCondition);
-	        this.targets = this.convertValues(source["targets"], RouteTarget);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
 	export class RoutingSettings {
 	    default_provider_id: string;
 	    default_model: string;
@@ -689,6 +680,7 @@ export namespace model {
 	    server: ServerSettings;
 	    data: DataSettings;
 	    advanced: AdvancedSettings;
+	    logging: LoggingSettings;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -702,6 +694,7 @@ export namespace model {
 	        this.server = this.convertValues(source["server"], ServerSettings);
 	        this.data = this.convertValues(source["data"], DataSettings);
 	        this.advanced = this.convertValues(source["advanced"], AdvancedSettings);
+	        this.logging = this.convertValues(source["logging"], LoggingSettings);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

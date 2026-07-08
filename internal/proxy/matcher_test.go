@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,11 +14,10 @@ func makeProvider(id string) *model.Provider {
 }
 
 func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
-	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
-	rules := []model.Route{
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ProviderID: "p0", ModelName: "m0", Enabled: true},
 				{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				{ProviderID: "p2", ModelName: "m2", Enabled: true},
@@ -26,7 +26,7 @@ func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
 	}
 	req := &InboundRequest{Model: "x"}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(req, rules, "", map[string]*CircuitBreaker{}, lookup)
+	cands, err := selectCandidates(req, rules, "", "", map[string]*CircuitBreaker{}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +42,10 @@ func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
 }
 
 func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
-	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
-	rules := []model.Route{
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ProviderID: "p0", ModelName: "m0", Enabled: true},
 				{ProviderID: "p1", ModelName: "m1", Enabled: true},
 			},
@@ -58,7 +57,7 @@ func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
 	}
 	breakers := map[string]*CircuitBreaker{"p0": open}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +67,7 @@ func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
 }
 
 func TestSelectCandidates_DefaultFallback(t *testing.T) {
-	rules := []model.Route{}
+	rules := []model.ModelRule{}
 	breakers := map[string]*CircuitBreaker{}
 	lookup := func(id string) (*model.Provider, error) {
 		if id == "default" {
@@ -76,7 +75,7 @@ func TestSelectCandidates_DefaultFallback(t *testing.T) {
 		}
 		return nil, fmt.Errorf("not found")
 	}
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", "", breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,11 +85,10 @@ func TestSelectCandidates_DefaultFallback(t *testing.T) {
 }
 
 func TestSelectCandidates_DefaultFallbackWhenAllOpen(t *testing.T) {
-	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
-	rules := []model.Route{
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ProviderID: "p0", ModelName: "m0", Enabled: true},
 			},
 		},
@@ -103,7 +101,7 @@ func TestSelectCandidates_DefaultFallbackWhenAllOpen(t *testing.T) {
 	lookup := func(id string) (*model.Provider, error) {
 		return makeProvider(id), nil
 	}
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", "", breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,15 +111,15 @@ func TestSelectCandidates_DefaultFallbackWhenAllOpen(t *testing.T) {
 }
 
 func TestSelectCandidates_NoCandidates(t *testing.T) {
-	rules := []model.Route{}
-	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, func(string) (*model.Provider, error) { return nil, fmt.Errorf("not found") })
+	rules := []model.ModelRule{}
+	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, func(string) (*model.Provider, error) { return nil, fmt.Errorf("not found") })
 	if err == nil {
 		t.Fatal("expected error when no candidates")
 	}
 }
 
 func TestSelectCandidates_DefaultFallbackPreservesModel(t *testing.T) {
-	rules := []model.Route{}
+	rules := []model.ModelRule{}
 	breakers := map[string]*CircuitBreaker{}
 	lookup := func(id string) (*model.Provider, error) {
 		if id == "default" {
@@ -129,7 +127,7 @@ func TestSelectCandidates_DefaultFallbackPreservesModel(t *testing.T) {
 		}
 		return nil, fmt.Errorf("not found")
 	}
-	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "default", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "default", "", breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,96 +136,72 @@ func TestSelectCandidates_DefaultFallbackPreservesModel(t *testing.T) {
 	}
 }
 
-func TestSelectCandidates_EmptyRouteTargetModelPreservesRequestModel(t *testing.T) {
-	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
-	rules := []model.Route{
+func TestSelectCandidates_EmptyTargetModelPreservesRequestModel(t *testing.T) {
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "user-model", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ProviderID: "p0", ModelName: "", Enabled: true},
 			},
 		},
 	}
 	breakers := map[string]*CircuitBreaker{}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "", "", breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cands) != 1 || cands[0].modelName != "user-model" {
-		t.Fatalf("expected empty route target model to fall back to request model, got %+v", cands)
+		t.Fatalf("expected empty target model to fall back to request model, got %+v", cands)
 	}
 }
 
-func TestSelectCandidates_NonEmptyRouteTargetModelOverrides(t *testing.T) {
-	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
-	rules := []model.Route{
+func TestSelectCandidates_NonEmptyTargetModelOverrides(t *testing.T) {
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "user-model", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ProviderID: "p0", ModelName: "route-model", Enabled: true},
 			},
 		},
 	}
 	breakers := map[string]*CircuitBreaker{}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "", "", breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cands) != 1 || cands[0].modelName != "route-model" {
-		t.Fatalf("expected non-empty route target model to override request model, got %+v", cands)
+		t.Fatalf("expected non-empty target model to override request model, got %+v", cands)
 	}
 }
 
-func TestSelectRoute_AllOperators(t *testing.T) {
-	// rules must be pre-sorted (highest priority first); selectRoute no longer sorts.
-	baseRoute := func() model.Route {
-		return model.Route{
-			ID: "r", Enabled: true,
-			Targets: []model.RouteTarget{
-				{ProviderID: "p", ModelName: "m", Enabled: true},
-			},
-		}
+// TestSelectCandidates_UnknownModelReturnsError verifies the no-match path
+// when no default provider is configured: the matcher must surface an
+// "unknown model" error instead of silently forwarding to a wrong target.
+func TestSelectCandidates_UnknownModelReturnsError(t *testing.T) {
+	rules := []model.ModelRule{
+		{ID: "r1", Name: "registered-model", Enabled: true},
 	}
+	breakers := map[string]*CircuitBreaker{}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-
-	cases := []struct {
-		name    string
-		cond    model.RouteCondition
-		req     *InboundRequest
-		matched bool
-	}{
-		{"matches exact", model.RouteCondition{Field: "model", Operator: model.OpMatches, Value: "gpt-4"}, &InboundRequest{Model: "gpt-4"}, true},
-		{"matches wildcard", model.RouteCondition{Field: "model", Operator: model.OpMatches, Value: "gpt-*"}, &InboundRequest{Model: "gpt-4o"}, true},
-		{"matches no match", model.RouteCondition{Field: "model", Operator: model.OpMatches, Value: "claude-*"}, &InboundRequest{Model: "gpt-4"}, false},
-		{"equals case insensitive", model.RouteCondition{Field: "model", Operator: model.OpEquals, Value: "GPT-4"}, &InboundRequest{Model: "gpt-4"}, true},
-		{"lt true", model.RouteCondition{Field: "estimated_tokens", Operator: model.OpLT, Value: "100"}, &InboundRequest{EstimatedTokens: 50}, true},
-		{"lt false", model.RouteCondition{Field: "estimated_tokens", Operator: model.OpLT, Value: "100"}, &InboundRequest{EstimatedTokens: 150}, false},
-		{"gt true", model.RouteCondition{Field: "estimated_tokens", Operator: model.OpGT, Value: "100"}, &InboundRequest{EstimatedTokens: 150}, true},
-		{"gt false", model.RouteCondition{Field: "estimated_tokens", Operator: model.OpGT, Value: "100"}, &InboundRequest{EstimatedTokens: 50}, false},
-		{"between inclusive", model.RouteCondition{Field: "estimated_tokens", Operator: model.OpBetween, Value: "10,100"}, &InboundRequest{EstimatedTokens: 50}, true},
-		{"between out", model.RouteCondition{Field: "estimated_tokens", Operator: model.OpBetween, Value: "10,100"}, &InboundRequest{EstimatedTokens: 5}, false},
-		{"time between wrap", model.RouteCondition{Field: "time.hour", Operator: model.OpBetween, Value: "23,7"}, &InboundRequest{TimeHour: 2}, true},
-		{"in set", model.RouteCondition{Field: "model", Operator: model.OpIn, Value: "gpt-4,gpt-4o"}, &InboundRequest{Model: "gpt-4o"}, true},
-		{"in set missing", model.RouteCondition{Field: "model", Operator: model.OpIn, Value: "gpt-4,gpt-4o"}, &InboundRequest{Model: "claude-3"}, false},
+	_, err := selectCandidates(&InboundRequest{Model: "not-registered"}, rules, "", "", breakers, lookup)
+	if err == nil {
+		t.Fatal("expected error for unknown model")
 	}
+	if !strings.Contains(err.Error(), "unknown model") {
+		t.Fatalf("expected 'unknown model' in error, got: %v", err)
+	}
+}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := baseRoute()
-			r.Conditions = []model.RouteCondition{tc.cond}
-			cands, err := selectCandidates(tc.req, []model.Route{r}, "", map[string]*CircuitBreaker{}, lookup)
-			if tc.matched {
-				if err != nil || len(cands) != 1 {
-					t.Fatalf("expected match, got err=%v cands=%+v", err, cands)
-				}
-			} else {
-				if err == nil && len(cands) != 0 {
-					t.Fatalf("expected no match, got cands=%+v", cands)
-				}
-			}
-		})
+func TestFindModelRule_DisabledSkipped(t *testing.T) {
+	rules := []model.ModelRule{
+		{ID: "r1", Name: "x", Enabled: false},
+		{ID: "r2", Name: "x", Enabled: true},
+	}
+	rule, ok := findModelRule(&InboundRequest{Model: "x"}, rules)
+	if !ok || rule.ID != "r2" {
+		t.Fatalf("expected to find enabled r2, got %+v ok=%v", rule, ok)
 	}
 }
 
@@ -274,13 +248,13 @@ func TestCircuitBreaker_WouldAllowDoesNotClaimProbe(t *testing.T) {
 
 // TestSelectCandidates_PopulatesTargetIDAndMaxRetries verifies the candidate
 // struct carries the per-target ID and MaxRetries from the underlying
-// RouteTarget, so the proxy can address per-target hit/failure counters and
-// bound the in-target retry loop.
+// ModelRuleTarget, so the proxy can address per-target hit/failure
+// counters and bound the in-target retry loop.
 func TestSelectCandidates_PopulatesTargetIDAndMaxRetries(t *testing.T) {
-	rules := []model.Route{
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
 				{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 2, Enabled: true},
 				{ID: "t2", ProviderID: "p2", ModelName: "m2", MaxRetries: 5, Enabled: true},
@@ -288,7 +262,7 @@ func TestSelectCandidates_PopulatesTargetIDAndMaxRetries(t *testing.T) {
 		},
 	}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,12 +288,12 @@ func TestSelectCandidates_PopulatesTargetIDAndMaxRetries(t *testing.T) {
 }
 
 // TestSelectCandidates_DefaultFallbackHasEmptyTargetID verifies the synthetic
-// default-fallback candidate (used when no route matches or all targets are
+// default-fallback candidate (used when no rule matches or all targets are
 // open) has no targetID — this is what guards the proxy's IncrementTargetStats
-// call so it isn't issued for a candidate that has no row in route_targets.
+// call so it isn't issued for a candidate that has no row in rule_targets.
 func TestSelectCandidates_DefaultFallbackHasEmptyTargetID(t *testing.T) {
-	// no route matched → default fallback path
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, nil, "default", map[string]*CircuitBreaker{},
+	// no rule matched → default fallback path
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, nil, "default", "", map[string]*CircuitBreaker{},
 		func(id string) (*model.Provider, error) { return makeProvider(id), nil })
 	if err != nil {
 		t.Fatal(err)
@@ -335,10 +309,10 @@ func TestSelectCandidates_DefaultFallbackHasEmptyTargetID(t *testing.T) {
 // target is disabled and no default is configured, selectCandidates must
 // return an error rather than silently forwarding to a disabled provider.
 func TestSelectCandidates_SkipsDisabledTargets(t *testing.T) {
-	rules := []model.Route{
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
 				{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: false}, // disabled
 				{ID: "t2", ProviderID: "p2", ModelName: "m2", Enabled: true},
@@ -347,7 +321,7 @@ func TestSelectCandidates_SkipsDisabledTargets(t *testing.T) {
 		},
 	}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,10 +343,10 @@ func TestSelectCandidates_SkipsDisabledTargets(t *testing.T) {
 // the default should be returned (same fallback path used when all circuits
 // are open).
 func TestSelectCandidates_AllDisabledFallsBackToDefault(t *testing.T) {
-	rules := []model.Route{
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: false},
 				{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: false},
 			},
@@ -384,7 +358,7 @@ func TestSelectCandidates_AllDisabledFallsBackToDefault(t *testing.T) {
 		}
 		return makeProvider(id), nil
 	}
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", map[string]*CircuitBreaker{}, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", "", map[string]*CircuitBreaker{}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,17 +370,18 @@ func TestSelectCandidates_AllDisabledFallsBackToDefault(t *testing.T) {
 // TestSelectCandidates_AllDisabledNoDefault verifies the error path: every
 // target disabled AND no default provider → no available provider.
 func TestSelectCandidates_AllDisabledNoDefault(t *testing.T) {
-	rules := []model.Route{
+	rules := []model.ModelRule{
 		{
-			ID: "r1", Enabled: true,
-			Targets: []model.RouteTarget{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
 				{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: false},
 			},
 		},
 	}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, lookup)
+	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, lookup)
 	if err == nil {
 		t.Fatal("expected error when all targets disabled and no default configured")
 	}
 }
+

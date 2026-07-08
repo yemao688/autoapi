@@ -6,24 +6,24 @@ export function CreateAPIKey(arg1) {
   return window['go']['api']['App']['CreateAPIKey'](arg1);
 }
 
-export function CreateProvider(arg1) {
-  return window['go']['api']['App']['CreateProvider'](arg1);
+export function CreateModelRule(arg1) {
+  return window['go']['api']['App']['CreateModelRule'](arg1);
 }
 
-export function CreateRoute(arg1) {
-  return window['go']['api']['App']['CreateRoute'](arg1);
+export function CreateProvider(arg1) {
+  return window['go']['api']['App']['CreateProvider'](arg1);
 }
 
 export function DeleteAPIKey(arg1) {
   return window['go']['api']['App']['DeleteAPIKey'](arg1);
 }
 
-export function DeleteProvider(arg1) {
-  return window['go']['api']['App']['DeleteProvider'](arg1);
+export function DeleteModelRule(arg1) {
+  return window['go']['api']['App']['DeleteModelRule'](arg1);
 }
 
-export function DeleteRoute(arg1) {
-  return window['go']['api']['App']['DeleteRoute'](arg1);
+export function DeleteProvider(arg1) {
+  return window['go']['api']['App']['DeleteProvider'](arg1);
 }
 
 export function ExportData(arg1) {
@@ -38,16 +38,16 @@ export function GetDashboard() {
   return window['go']['api']['App']['GetDashboard']();
 }
 
+export function GetModelRule(arg1) {
+  return window['go']['api']['App']['GetModelRule'](arg1);
+}
+
 export function GetProvider(arg1) {
   return window['go']['api']['App']['GetProvider'](arg1);
 }
 
 export function GetProxyStatus() {
   return window['go']['api']['App']['GetProxyStatus']();
-}
-
-export function GetRoute(arg1) {
-  return window['go']['api']['App']['GetRoute'](arg1);
 }
 
 export function GetSettings() {
@@ -78,16 +78,16 @@ export function ListEndpoints() {
   return window['go']['api']['App']['ListEndpoints']();
 }
 
+export function ListModelRules() {
+  return window['go']['api']['App']['ListModelRules']();
+}
+
 export function ListModels(arg1) {
   return window['go']['api']['App']['ListModels'](arg1);
 }
 
 export function ListProviders() {
   return window['go']['api']['App']['ListProviders']();
-}
-
-export function ListRoutes() {
-  return window['go']['api']['App']['ListRoutes']();
 }
 
 export function NavigateTo(arg1) {
@@ -110,8 +110,8 @@ export function Quit() {
   return window['go']['api']['App']['Quit']();
 }
 
-export function ReorderRoutes(arg1) {
-  return window['go']['api']['App']['ReorderRoutes'](arg1);
+export function ReorderModelRules(arg1) {
+  return window['go']['api']['App']['ReorderModelRules'](arg1);
 }
 
 export function RestartProxy() {
@@ -146,10 +146,10 @@ export function UpdateAPIKey(arg1, arg2) {
   return window['go']['api']['App']['UpdateAPIKey'](arg1, arg2);
 }
 
-export function UpdateProvider(arg1, arg2) {
-  return window['go']['api']['App']['UpdateProvider'](arg1, arg2);
+export function UpdateModelRule(arg1, arg2) {
+  return window['go']['api']['App']['UpdateModelRule'](arg1, arg2);
 }
 
-export function UpdateRoute(arg1, arg2) {
-  return window['go']['api']['App']['UpdateRoute'](arg1, arg2);
+export function UpdateProvider(arg1, arg2) {
+  return window['go']['api']['App']['UpdateProvider'](arg1, arg2);
 }

@@ -8,157 +8,141 @@ import (
 	"autoapi/internal/model"
 )
 
-// ListRoutes returns all routes with their conditions and targets, ordered by
-// priority ascending (lower number = higher precedence). Priority is an internal
-// sort key (not exposed on the Route struct); the slice order is the source of
-// truth for callers.
-func (s *Store) ListRoutes() ([]model.Route, error) {
+// ListModelRules returns all model rules with their targets, ordered by
+// created_at descending (most recent first). The Name is unique across
+// enabled rules and is the model name exposed to clients.
+func (s *Store) ListModelRules() ([]model.ModelRule, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, description, enabled, created_at, updated_at
-		FROM routes ORDER BY priority ASC`)
+		SELECT id, name, enabled, created_at, updated_at
+		FROM model_rules ORDER BY created_at DESC`)
 	if err != nil {
-		return nil, fmt.Errorf("store: list routes: %w", err)
+		return nil, fmt.Errorf("store: list model rules: %w", err)
 	}
 	defer rows.Close()
 
-	var routes []model.Route
+	var rules []model.ModelRule
 	for rows.Next() {
-		var r model.Route
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("store: scan route: %w", err)
+		var r model.ModelRule
+		if err := rows.Scan(&r.ID, &r.Name, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("store: scan model rule: %w", err)
 		}
-		routes = append(routes, r)
+		rules = append(rules, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if routes == nil {
-		routes = []model.Route{}
+	if rules == nil {
+		rules = []model.ModelRule{}
 	}
 
-	// Hydrate conditions and targets for each route.
-	for i, r := range routes {
-		conds, err := s.listConditions(r.ID)
-		if err != nil {
-			return nil, err
-		}
+	// Hydrate targets for each rule.
+	for i, r := range rules {
 		targets, err := s.listTargets(r.ID)
 		if err != nil {
 			return nil, err
 		}
-		routes[i].Conditions = conds
-		routes[i].Targets = targets
+		rules[i].Targets = targets
 	}
 
-	return routes, nil
+	return rules, nil
 }
 
-// GetRoute returns a single route with conditions and targets.
-func (s *Store) GetRoute(id string) (*model.Route, error) {
+// GetModelRule returns a single model rule with targets.
+func (s *Store) GetModelRule(id string) (*model.ModelRule, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, description, enabled, created_at, updated_at
-		FROM routes WHERE id = ?`, id)
+		SELECT id, name, enabled, created_at, updated_at
+		FROM model_rules WHERE id = ?`, id)
 
-	var r model.Route
-	if err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
+	var r model.ModelRule
+	if err := row.Scan(&r.ID, &r.Name, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("store: get route %q: %w", id, ErrNotFound)
+			return nil, fmt.Errorf("store: get model rule %q: %w", id, ErrNotFound)
 		}
-		return nil, fmt.Errorf("store: get route %q: %w", id, err)
+		return nil, fmt.Errorf("store: get model rule %q: %w", id, err)
 	}
 
-	conds, err := s.listConditions(r.ID)
-	if err != nil {
-		return nil, err
-	}
 	targets, err := s.listTargets(r.ID)
 	if err != nil {
 		return nil, err
 	}
-	r.Conditions = conds
 	r.Targets = targets
 	return &r, nil
 }
 
-// CreateRoute inserts a route with its conditions and targets.
-func (s *Store) CreateRoute(in model.RouteInput) (*model.Route, error) {
+// CreateModelRule inserts a model rule with its targets. Name uniqueness is
+// enforced: a duplicate name returns an error so the UI can surface it.
+func (s *Store) CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, error) {
 	now := nowMs()
 	id := makeID()
 
-	r := &model.Route{
-		ID:          id,
-		Name:        in.Name,
-		Description: in.Description,
-		Enabled:     in.Enabled,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	r := &model.ModelRule{
+		ID:        id,
+		Name:      in.Name,
+		Enabled:   in.Enabled,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	if err := s.execTx(func(tx *sql.Tx) error {
-		// New rules land at the bottom of the list: priority = current max + 1
-		// (COALESCE handles the empty-table case → 1). Priority is the internal
-		// ordinal sort key (see ListRoutes ORDER BY); it is not exposed on the
-		// Route struct. Note: two concurrent CreateRoute calls could compute
-		// the same value under default deferred locking — acceptable for a
-		// single-user desktop app; ReorderRoutes rewrites the sequence anyway.
-		var priority int
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(priority), 0) + 1 FROM routes`).Scan(&priority); err != nil {
-			return fmt.Errorf("store: compute next priority: %w", err)
+		// Enforce name uniqueness before insert. The CHECK here is the
+		// application-level guarantee; the schema has no UNIQUE constraint
+		// on name yet (the column already exists from the old `routes` table
+		// and we keep description-less backwards compatibility).
+		var count int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM model_rules WHERE name = ?`, r.Name).Scan(&count); err != nil {
+			return fmt.Errorf("store: check unique name: %w", err)
+		}
+		if count > 0 {
+			return fmt.Errorf("store: model rule name %q is already in use", r.Name)
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO routes (id, name, description, priority, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			r.ID, r.Name, r.Description, priority, boolInt(r.Enabled), r.CreatedAt, r.UpdatedAt); err != nil {
-			return err
-		}
-		conds, err := s.insertConditions(tx, r.ID, in.Conditions)
-		if err != nil {
+			INSERT INTO model_rules (id, name, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)`,
+			r.ID, r.Name, boolInt(r.Enabled), r.CreatedAt, r.UpdatedAt); err != nil {
 			return err
 		}
 		targets, err := s.insertTargets(tx, r.ID, in.Targets)
 		if err != nil {
 			return err
 		}
-		r.Conditions = conds
 		r.Targets = targets
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("store: create route: %w", err)
+		return nil, fmt.Errorf("store: create model rule: %w", err)
 	}
 	return r, nil
 }
 
-// UpdateRoute replaces a route's metadata, conditions, and targets. Priority
-// is intentionally NOT touched here — it's the internal sort key owned by the
-// store and is only rewritten by ReorderRoutes.
-func (s *Store) UpdateRoute(id string, in model.RouteInput) (*model.Route, error) {
+// UpdateModelRule replaces a model rule's metadata and targets.
+func (s *Store) UpdateModelRule(id string, in model.ModelRuleInput) (*model.ModelRule, error) {
 	now := nowMs()
 
 	if err := s.execTx(func(tx *sql.Tx) error {
+		// Name uniqueness: allow the rule to keep its own name, but reject
+		// a rename to a name that another rule already has.
+		var count int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM model_rules WHERE name = ? AND id <> ?`,
+			in.Name, id).Scan(&count); err != nil {
+			return fmt.Errorf("store: check unique name: %w", err)
+		}
+		if count > 0 {
+			return fmt.Errorf("store: model rule name %q is already in use", in.Name)
+		}
 		res, err := tx.Exec(`
-			UPDATE routes SET name=?, description=?, enabled=?, updated_at=?
+			UPDATE model_rules SET name=?, enabled=?, updated_at=?
 			WHERE id=?`,
-			in.Name, in.Description, boolInt(in.Enabled), now, id)
+			in.Name, boolInt(in.Enabled), now, id)
 		if err != nil {
 			return err
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return fmt.Errorf("store: update route %q: %w", id, ErrNotFound)
+			return fmt.Errorf("store: update model rule %q: %w", id, ErrNotFound)
 		}
-		// Replace conditions. (DELETE+reinsert is fine — conditions have no
-		// counters to preserve.)
-		if _, err := tx.Exec(`DELETE FROM route_conditions WHERE route_id = ?`, id); err != nil {
-			return err
-		}
-		if _, err := s.insertConditions(tx, id, in.Conditions); err != nil {
-			return err
-		}
-		// Reconcile targets: UPDATE in place for targets that round-trip their
-		// ID (preserves per-target hit_count/failure_count), DELETE for
-		// targets the user removed, INSERT for genuinely new ones (empty ID).
-		// tier is always rewritten from the slice index on both UPDATE and
-		// INSERT paths so target order round-trips through drag-reorder.
+		// Reconcile targets: UPDATE in place for targets that round-trip
+		// their ID (preserves per-target hit_count/failure_count), DELETE
+		// for targets the user removed, INSERT for genuinely new ones
+		// (empty ID).
 		if _, err := s.upsertTargets(tx, id, in.Targets); err != nil {
 			return err
 		}
@@ -166,119 +150,73 @@ func (s *Store) UpdateRoute(id string, in model.RouteInput) (*model.Route, error
 	}); err != nil {
 		return nil, err
 	}
-	return s.GetRoute(id)
+	return s.GetModelRule(id)
 }
 
-// DeleteRoute removes a route (conditions/targets cascade).
-func (s *Store) DeleteRoute(id string) error {
+// DeleteModelRule removes a model rule (targets cascade).
+func (s *Store) DeleteModelRule(id string) error {
 	return s.execTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM routes WHERE id = ?`, id)
+		res, err := tx.Exec(`DELETE FROM model_rules WHERE id = ?`, id)
 		if err != nil {
-			return fmt.Errorf("store: delete route: %w", err)
+			return fmt.Errorf("store: delete model rule: %w", err)
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return fmt.Errorf("store: delete route %q: %w", id, ErrNotFound)
+			return fmt.Errorf("store: delete model rule %q: %w", id, ErrNotFound)
 		}
 		return nil
 	})
 }
 
-// ReorderRoutes updates the priority values to match the given ordered ID
-// slice. Position in the slice determines priority (0-based).
-func (s *Store) ReorderRoutes(orderedIDs []string) error {
-	// priority values are ordinal, not semantic — only ORDER BY matters.
-	return s.execTx(func(tx *sql.Tx) error {
-		for i, id := range orderedIDs {
-			priority := i
-			if _, err := tx.Exec(`UPDATE routes SET priority = ?, updated_at = ? WHERE id = ?`,
-				priority, nowMs(), id); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+// ReorderModelRules is a no-op kept for API compatibility. The previous
+// drag-reorder UX was removed when route rules became model rules: rules
+// are now keyed by a unique Name (the client-facing model name) and there
+// is no meaningful order to preserve.
+func (s *Store) ReorderModelRules(orderedIDs []string) error {
+	return nil
 }
 
 // ---------------------------------------------------------------------------
 //  Internal helpers
 // ---------------------------------------------------------------------------
 
-func (s *Store) listConditions(routeID string) ([]model.RouteCondition, error) {
+func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
 	rows, err := s.db.Query(`
-		SELECT id, route_id, field, operator, value
-		FROM route_conditions WHERE route_id = ?`, routeID)
+		SELECT id, rule_id, provider_id, model_name, max_retries, hit_count, failure_count, enabled
+		FROM rule_targets WHERE rule_id = ? ORDER BY tier ASC`, ruleID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var out []model.RouteCondition
+	var out []model.ModelRuleTarget
 	for rows.Next() {
-		var c model.RouteCondition
-		if err := rows.Scan(&c.ID, &c.RouteID, &c.Field, &c.Operator, &c.Value); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	if out == nil {
-		out = []model.RouteCondition{}
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) listTargets(routeID string) ([]model.RouteTarget, error) {
-	rows, err := s.db.Query(`
-		SELECT id, route_id, provider_id, model_name, max_retries, hit_count, failure_count, enabled
-		FROM route_targets WHERE route_id = ? ORDER BY tier ASC`, routeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []model.RouteTarget
-	for rows.Next() {
-		var t model.RouteTarget
-		if err := rows.Scan(&t.ID, &t.RouteID, &t.ProviderID, &t.ModelName, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
+		var t model.ModelRuleTarget
+		if err := rows.Scan(&t.ID, &t.RuleID, &t.ProviderID, &t.ModelName, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
 	}
 	if out == nil {
-		out = []model.RouteTarget{}
+		out = []model.ModelRuleTarget{}
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) insertConditions(tx *sql.Tx, routeID string, in []model.RouteCondition) ([]model.RouteCondition, error) {
-	out := make([]model.RouteCondition, len(in))
-	for i, c := range in {
-		c.ID = makeID()
-		c.RouteID = routeID
-		if _, err := tx.Exec(`
-			INSERT INTO route_conditions (id, route_id, field, operator, value)
-			VALUES (?, ?, ?, ?, ?)`,
-			c.ID, c.RouteID, c.Field, c.Operator, c.Value); err != nil {
-			return nil, err
-		}
-		out[i] = c
-	}
-	return out, nil
-}
-
-// insertTargets writes a slice of targets for a freshly-created route.
+// insertTargets writes a slice of targets for a freshly-created rule.
 //
 // CONTRACT (api consumer-facing): every target inserted here is treated as
 // "new". The Go zero-value for Enabled is false, so a caller that omits
-// `Enabled` (or sends a freshly-constructed RouteTarget) would otherwise
-// produce a disabled target. We coerce Enabled=true on insert so a brand-new
-// target is always usable without the caller having to opt in. Toggling to
-// false happens via the UPDATE path on a subsequent UpdateRoute. This matches
-// the spec "default to true when created without an explicit value" — the
-// "explicit false" case is the supported way to create a disabled target and
-// is exercised by re-issuing UpdateRoute with Enabled: false.
-func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget) ([]model.RouteTarget, error) {
-	out := make([]model.RouteTarget, len(in))
+// `Enabled` (or sends a freshly-constructed ModelRuleTarget) would
+// otherwise produce a disabled target. We coerce Enabled=true on insert so
+// a brand-new target is always usable without the caller having to opt in.
+// Toggling to false happens via the UPDATE path on a subsequent
+// UpdateModelRule. This matches the spec "default to true when created
+// without an explicit value" — the "explicit false" case is the supported
+// way to create a disabled target and is exercised by re-issuing
+// UpdateModelRule with Enabled: false.
+func (s *Store) insertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTarget) ([]model.ModelRuleTarget, error) {
+	out := make([]model.ModelRuleTarget, len(in))
 	for i, t := range in {
 		// Defense in depth: the frontend clamps to >= 0, but a negative value
 		// would make the retry loop body execute zero times (target silently
@@ -287,21 +225,21 @@ func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 			t.MaxRetries = 0
 		}
 		// New target path: default-to-true (see CONTRACT above). Without this
-		// line, a caller that constructs RouteTarget{ProviderID: "p1"} and
+		// line, a caller that constructs ModelRuleTarget{ProviderID: "p1"} and
 		// submits it would get a disabled row that the proxy silently drops.
 		if !t.Enabled {
 			t.Enabled = true
 		}
 		t.ID = makeID()
-		t.RouteID = routeID
+		t.RuleID = ruleID
 		// `tier` is the internal positional sort key (kept from the slice
-		// index so the target order round-trips through Create/UpdateRoute);
+		// index so the target order round-trips through Create/UpdateModelRule);
 		// hit_count/failure_count are managed by IncrementTargetStats and
 		// default to 0 on insert.
 		if _, err := tx.Exec(`
-			INSERT INTO route_targets (id, route_id, provider_id, model_name, tier, max_retries, enabled)
+			INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, enabled)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, t.RouteID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+			t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 			return nil, err
 		}
 		out[i] = t
@@ -309,8 +247,8 @@ func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 	return out, nil
 }
 
-// upsertTargets reconciles the incoming target list `in` against the existing
-// route_targets rows for routeID:
+// upsertTargets reconciles the incoming target list `in` against the
+// existing rule_targets rows for ruleID:
 //
 //   - Incoming targets with a non-empty ID that matches an existing row are
 //     UPDATEd in place (provider_id, model_name, tier, max_retries). This
@@ -323,12 +261,12 @@ func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 //     removed them.
 //
 // `tier` is always written from the slice index `i` on both UPDATE and INSERT
-// paths so that a target whose position changed via drag-reorder still has
-// its row updated (the ID round-trips, but tier moves with it).
+// paths so that a target whose position changed still has its row updated
+// (the ID round-trips, but tier moves with it).
 //
 // max_retries is clamped to >= 0 — see insertTargets for the rationale.
-func (s *Store) upsertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget) ([]model.RouteTarget, error) {
-	out := make([]model.RouteTarget, len(in))
+func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTarget) ([]model.ModelRuleTarget, error) {
+	out := make([]model.ModelRuleTarget, len(in))
 
 	// Clamp max_retries up-front so the clamp applies to both UPDATE and
 	// INSERT paths without duplicating the check.
@@ -339,7 +277,7 @@ func (s *Store) upsertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 	}
 
 	// Collect the IDs of incoming targets that round-trip from existing rows
-	// (those whose ID the client knew about). Anything in route_targets whose
+	// (those whose ID the client knew about). Anything in rule_targets whose
 	// ID is NOT in this set is a removal and must be DELETEd.
 	incomingIDs := make([]string, 0, len(in))
 	for _, t := range in {
@@ -350,19 +288,19 @@ func (s *Store) upsertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 
 	// Step 1: DELETE targets the user removed (not present in the incoming set).
 	if len(incomingIDs) == 0 {
-		// No incoming IDs at all → drop every existing target for this route.
-		if _, err := tx.Exec(`DELETE FROM route_targets WHERE route_id = ?`, routeID); err != nil {
+		// No incoming IDs at all → drop every existing target for this rule.
+		if _, err := tx.Exec(`DELETE FROM rule_targets WHERE rule_id = ?`, ruleID); err != nil {
 			return nil, err
 		}
 	} else {
 		placeholders := strings.Repeat("?,", len(incomingIDs)-1) + "?"
 		args := make([]interface{}, 0, len(incomingIDs)+1)
-		args = append(args, routeID)
+		args = append(args, ruleID)
 		for _, id := range incomingIDs {
 			args = append(args, id)
 		}
 		if _, err := tx.Exec(
-			`DELETE FROM route_targets WHERE route_id = ? AND id NOT IN (`+placeholders+`)`,
+			`DELETE FROM rule_targets WHERE rule_id = ? AND id NOT IN (`+placeholders+`)`,
 			args...); err != nil {
 			return nil, err
 		}
@@ -370,20 +308,20 @@ func (s *Store) upsertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 
 	// Step 2: UPSERT each incoming target.
 	for i, t := range in {
-		t.RouteID = routeID
+		t.RuleID = ruleID
 		if t.ID == "" {
 			// New target: INSERT with a fresh ID. Apply the default-to-enabled
 			// heuristic (same CONTRACT as insertTargets) so a caller that omits
 			// `Enabled` still gets a usable target. Toggling to false happens
-			// via the UPDATE path on a subsequent UpdateRoute.
+			// via the UPDATE path on a subsequent UpdateModelRule.
 			if !t.Enabled {
 				t.Enabled = true
 			}
 			t.ID = makeID()
 			if _, err := tx.Exec(`
-				INSERT INTO route_targets (id, route_id, provider_id, model_name, tier, max_retries, enabled)
+				INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, enabled)
 				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				t.ID, t.RouteID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+				t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 				return nil, err
 			}
 		} else {
@@ -394,10 +332,10 @@ func (s *Store) upsertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 			// off, or back on, with full fidelity. The default-to-true rule
 			// only applies to NEW targets (the ID=="" branch above).
 			if _, err := tx.Exec(`
-				UPDATE route_targets
+				UPDATE rule_targets
 				SET provider_id = ?, model_name = ?, tier = ?, max_retries = ?, enabled = ?
-				WHERE id = ? AND route_id = ?`,
-				t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled), t.ID, t.RouteID); err != nil {
+				WHERE id = ? AND rule_id = ?`,
+				t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled), t.ID, t.RuleID); err != nil {
 				return nil, err
 			}
 		}
@@ -411,7 +349,7 @@ func (s *Store) upsertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 // typically 1; pass negatives to reset. TODO(v2): batch async if this shows up
 // in profiling.
 func (s *Store) IncrementTargetStats(targetID string, hitDelta, failDelta int64) error {
-	_, err := s.db.Exec(`UPDATE route_targets
+	_, err := s.db.Exec(`UPDATE rule_targets
 		SET hit_count = hit_count + ?,
 		    failure_count = failure_count + ?
 		WHERE id = ?`, hitDelta, failDelta, targetID)
