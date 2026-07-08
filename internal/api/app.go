@@ -16,6 +16,9 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	stdruntime "runtime"
 	"time"
 
 	"autoapi/internal/model"
@@ -76,6 +79,7 @@ type StoreService interface {
 	GetSettings() (*model.Settings, error)
 	SaveSettings(s model.Settings) error
 	ListEndpoints() ([]model.Endpoint, error)
+	StorageDir() string
 
 	// Export / import
 	Export(format model.ExportFormat) ([]byte, string, error) // (data, filename, err)
@@ -440,6 +444,24 @@ func (a *App) ListEndpoints() ([]model.Endpoint, error) {
 		return nil, errNotImpl
 	}
 	return a.deps.Store.ListEndpoints()
+}
+
+func (a *App) OpenStorageFolder() error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	dir := a.deps.Store.StorageDir()
+	if dir == "" {
+		return fmt.Errorf("store: storage dir not available")
+	}
+	switch stdruntime.GOOS {
+	case "darwin":
+		return exec.Command("open", dir).Start()
+	case "windows":
+		return exec.Command("explorer", dir).Start()
+	default:
+		return exec.Command("xdg-open", dir).Start()
+	}
 }
 
 // ----- Data export / purge -----

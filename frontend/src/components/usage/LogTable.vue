@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { model } from '../../../wailsjs/go/models'
 
+import { useProviderStyle } from '@/composables/useProviderStyle'
+
 interface Props {
   logs: model.RequestLog[]
 }
@@ -10,6 +12,8 @@ const emit = defineEmits<{
   (e: 'clearFilters'): void
 }>()
 
+  const { color: providerColor, initial: providerInitial, textColor: providerTextColor } = useProviderStyle()
+
 function formatTime(ts: number): string {
   const d = new Date(ts)
   const mm = String(d.getMonth() + 1).padStart(2, '0')
@@ -17,28 +21,6 @@ function formatTime(ts: number): string {
   const hh = String(d.getHours()).padStart(2, '0')
   const mi = String(d.getMinutes()).padStart(2, '0')
   return `${mm}/${dd} ${hh}:${mi}`
-}
-
-const providerColors: Record<string, string> = {
-  openai: '#10a37f',
-  anthropic: '#d97757',
-  deepseek: '#272729',
-  moonshot: '#0071e3',
-  '智谱 glm': '#2563eb',
-  glm: '#2563eb',
-}
-
-// TODO(uiux/polish): deduplicate provider color/initial logic with TokensPane.vue
-// by reconciling useProviderMeta for case-insensitive / Chinese-name handling.
-function providerColor(name: string): string {
-  return providerColors[name.toLowerCase()] || '#6e6e73'
-}
-
-function providerInitial(name: string): string {
-  const code = name.match(/[\u4e00-\u9fa5]/)
-    ? name[name.length - 1]
-    : name.trim().charAt(0).toUpperCase()
-  return code || name.charAt(0).toUpperCase()
 }
 
 function statusBadgeClass(statusCode: number): string {
@@ -89,7 +71,7 @@ function statusText(statusCode: number): string {
               class="list-icon"
               :style="{
                 background: providerColor(log.provider_name),
-                color: providerColor(log.provider_name) === '#272729' ? 'rgba(255,255,255,0.86)' : '#fff',
+                color: providerTextColor(log.provider_name),
                 width: '22px',
                 height: '22px',
                 fontSize: '10px',

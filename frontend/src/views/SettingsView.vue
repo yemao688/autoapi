@@ -156,8 +156,12 @@ function copyStoragePath() {
   copyToClipboard(storagePath.value)
 }
 
-function openInFinder() {
-  toast.push('暂未实现', 'warning')
+async function openInFinder() {
+  try {
+    await api.openStorageFolder()
+  } catch (e: any) {
+    toast.push('打开文件夹失败：' + (e?.message || String(e)), 'error')
+  }
 }
 
 function notImplemented() {

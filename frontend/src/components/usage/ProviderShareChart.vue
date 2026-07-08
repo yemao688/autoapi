@@ -3,23 +3,14 @@ import { computed } from 'vue'
 import type { model } from '../../../wailsjs/go/models'
 import { formatTokens } from '@/composables/useChartFormat'
 
+import { useProviderStyle } from '@/composables/useProviderStyle'
+
 interface Props {
   data: model.ChartAggregates
 }
 const props = defineProps<Props>()
 
-const providerColors: Record<string, string> = {
-  openai: '#10a37f',
-  anthropic: '#d97757',
-  deepseek: '#272729',
-  moonshot: '#0071e3',
-  '智谱 glm': '#2563eb',
-  glm: '#2563eb',
-}
-
-function color(name: string): string {
-  return providerColors[name.toLowerCase()] || '#6e6e73'
-}
+const { color } = useProviderStyle()
 
 const option = computed(() => {
   const shares = props.data.provider_shares || []

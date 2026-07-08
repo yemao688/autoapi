@@ -95,6 +95,14 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// StorageDir returns the directory containing the SQLite database file.
+func (s *Store) StorageDir() string {
+	if s.dsnPath == "" {
+		return ""
+	}
+	return filepath.Dir(s.dsnPath)
+}
+
 // RawDB exposes the underlying *sql.DB for direct queries. Used by the
 // service layer for master_password operations that don't fit the
 // high-level interface. Do NOT close this handle.

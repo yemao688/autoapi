@@ -3,14 +3,14 @@ import { ref, computed, onMounted } from 'vue'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
-import { useProviderMeta } from '../composables/useProviderMeta'
+import { useProviderStyle } from '../composables/useProviderStyle'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import type { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
-const { color: providerColor, letter: providerLetter } = useProviderMeta()
+const { color: providerColor, initial: providerLetter } = useProviderStyle()
 const { tokens: fmtTokens, latency: fmtLatency } = useFormatters()
 const toast = useToast()
 const confirm = useConfirm()
