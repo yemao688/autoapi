@@ -181,6 +181,73 @@ func (a *App) GetSystemHealth() (model.ServiceHealth, error) {
 	return *h, nil
 }
 
+// ----- Window / app control (used by the tray / application menu) -----
+//
+// These methods are the bridge between the Wails native menu (or, in builds
+// that support it, a system tray icon) and the Go side. They all check
+// a.ctx for nil because menu callbacks may fire before OnStartup populated it
+// (e.g. when the menu is built at startup time and the user clicks an item
+// while the runtime is still wiring up), and runtime.* helpers below would
+// otherwise log.Fatal on a nil context.
+
+// ShowWindow makes the main window visible. On a hidden or minimised window
+// this both shows and un-minimises it. Returns an error only when ctx is
+// unavailable; runtime.WindowShow is a no-op when the window is already
+// visible, so we do not propagate its lack of return value.
+func (a *App) ShowWindow() error {
+	if a.ctx == nil {
+		return fmt.Errorf("app: ShowWindow called before Startup")
+	}
+	runtime.WindowShow(a.ctx)
+	// WindowUnminimise has no effect if the window is not minimised; calling
+	// it ensures the window is brought back to the foreground on platforms
+	// where Show alone leaves a minimised window hidden. Wails v2 has no
+	// WindowRaise, so this is the closest portable approximation.
+	runtime.WindowUnminimise(a.ctx)
+	return nil
+}
+
+// HideWindow hides the main window. Used when the user picks "hide" from the
+// tray / menu bar instead of closing the app.
+func (a *App) HideWindow() error {
+	if a.ctx == nil {
+		return fmt.Errorf("app: HideWindow called before Startup")
+	}
+	runtime.WindowHide(a.ctx)
+	return nil
+}
+
+// Quit terminates the application. The Wails runtime.Quit helper requires a
+// non-nil ctx; we silently no-op when the context has not been set yet
+// (e.g. the menu is clicked during shutdown), which is preferable to the
+// log.Fatal that runtime.Quit would otherwise trigger.
+func (a *App) Quit() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.Quit(a.ctx)
+}
+
+// NavigateTo asks the frontend to push a route. We use a Wails event rather
+// than mutating the router directly because the Vue router lives inside the
+// WebView; the AppWindow component listens for the "navigate" event and
+// forwards the path to vue-router.
+func (a *App) NavigateTo(path string) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "app:navigate", path)
+}
+
+// RestartProxy rebinds the local HTTP listener (used after the user toggles
+// port/bind in settings, or via the tray "restart" shortcut).
+func (a *App) RestartProxy() error {
+	if a.deps.Proxy == nil {
+		return errNotImpl
+	}
+	return a.deps.Proxy.Restart()
+}
+
 // ----- Providers -----
 
 func (a *App) ListProviders() ([]model.Provider, error) {

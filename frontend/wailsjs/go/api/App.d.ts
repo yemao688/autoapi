@@ -35,6 +35,8 @@ export function GetUsageStats():Promise<model.UsageStats>;
 
 export function GetUsageTrends(arg1:model.UsageTrendsQuery):Promise<model.UsageTrends>;
 
+export function HideWindow():Promise<void>;
+
 export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
 export function ListEndpoints():Promise<Array<model.Endpoint>>;
@@ -45,17 +47,25 @@ export function ListProviders():Promise<Array<model.Provider>>;
 
 export function ListRoutes():Promise<Array<model.Route>>;
 
+export function NavigateTo(arg1:string):Promise<void>;
+
 export function OpenStorageFolder():Promise<void>;
 
 export function PurgeLogs(arg1:number):Promise<number>;
 
 export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;
 
+export function Quit():Promise<void>;
+
 export function ReorderRoutes(arg1:Array<string>):Promise<void>;
+
+export function RestartProxy():Promise<void>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 
 export function SetModelsActive(arg1:string,arg2:Array<string>,arg3:boolean):Promise<void>;
+
+export function ShowWindow():Promise<void>;
 
 export function TestAllProviders():Promise<Array<model.ProviderTestResult>>;
 
