@@ -158,8 +158,8 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0"},
-					{ProviderID: "p1", ModelName: "m1"},
+					{ProviderID: "p0", ModelName: "m0", Enabled: true},
+					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
 			},
 		},
@@ -218,8 +218,8 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0"},
-					{ProviderID: "p1", ModelName: "m1"},
+					{ProviderID: "p0", ModelName: "m0", Enabled: true},
+					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
 			},
 		},
@@ -286,8 +286,8 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0"},
-					{ProviderID: "p1", ModelName: "m1"},
+					{ProviderID: "p0", ModelName: "m0", Enabled: true},
+					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
 			},
 		},
@@ -334,8 +334,8 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0"},
-					{ProviderID: "p1", ModelName: "m1"},
+					{ProviderID: "p0", ModelName: "m0", Enabled: true},
+					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
 			},
 		},
@@ -375,7 +375,7 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "m0"},
+					{ProviderID: "p0", ModelName: "m0", Enabled: true},
 				},
 			},
 		},
@@ -494,7 +494,7 @@ func TestGenericOpenAI_ImagesRoute(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "dall-e-3"},
+					{ProviderID: "p0", ModelName: "dall-e-3", Enabled: true},
 				},
 			},
 		},
@@ -546,7 +546,7 @@ func TestStreaming_PassThrough(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ProviderID: "p0", ModelName: "gpt-4o"},
+					{ProviderID: "p0", ModelName: "gpt-4o", Enabled: true},
 				},
 			},
 		},
@@ -612,8 +612,8 @@ func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2},
-					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0},
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
 				},
 			},
 		},
@@ -685,8 +685,8 @@ func TestFailover_RetryBoundedExhaustedFallsThrough(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2},
-					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0},
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
 				},
 			},
 		},
@@ -757,7 +757,7 @@ func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o"},
+					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o", Enabled: true},
 				},
 			},
 		},
@@ -836,7 +836,7 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 			{
 				ID: "r1", Enabled: true,
 				Targets: []model.RouteTarget{
-					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o"},
+					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o", Enabled: true},
 				},
 			},
 		},

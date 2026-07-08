@@ -18,9 +18,9 @@ func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
 		{
 			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "m0"},
-				{ProviderID: "p1", ModelName: "m1"},
-				{ProviderID: "p2", ModelName: "m2"},
+				{ProviderID: "p0", ModelName: "m0", Enabled: true},
+				{ProviderID: "p1", ModelName: "m1", Enabled: true},
+				{ProviderID: "p2", ModelName: "m2", Enabled: true},
 			},
 		},
 	}
@@ -47,8 +47,8 @@ func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
 		{
 			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "m0"},
-				{ProviderID: "p1", ModelName: "m1"},
+				{ProviderID: "p0", ModelName: "m0", Enabled: true},
+				{ProviderID: "p1", ModelName: "m1", Enabled: true},
 			},
 		},
 	}
@@ -91,7 +91,7 @@ func TestSelectCandidates_DefaultFallbackWhenAllOpen(t *testing.T) {
 		{
 			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "m0"},
+				{ProviderID: "p0", ModelName: "m0", Enabled: true},
 			},
 		},
 	}
@@ -144,7 +144,7 @@ func TestSelectCandidates_EmptyRouteTargetModelPreservesRequestModel(t *testing.
 		{
 			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: ""},
+				{ProviderID: "p0", ModelName: "", Enabled: true},
 			},
 		},
 	}
@@ -165,7 +165,7 @@ func TestSelectCandidates_NonEmptyRouteTargetModelOverrides(t *testing.T) {
 		{
 			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p0", ModelName: "route-model"},
+				{ProviderID: "p0", ModelName: "route-model", Enabled: true},
 			},
 		},
 	}
@@ -186,7 +186,7 @@ func TestSelectRoute_AllOperators(t *testing.T) {
 		return model.Route{
 			ID: "r", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ProviderID: "p", ModelName: "m"},
+				{ProviderID: "p", ModelName: "m", Enabled: true},
 			},
 		}
 	}
@@ -281,9 +281,9 @@ func TestSelectCandidates_PopulatesTargetIDAndMaxRetries(t *testing.T) {
 		{
 			ID: "r1", Enabled: true,
 			Targets: []model.RouteTarget{
-				{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0},
-				{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 2},
-				{ID: "t2", ProviderID: "p2", ModelName: "m2", MaxRetries: 5},
+				{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+				{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 2, Enabled: true},
+				{ID: "t2", ProviderID: "p2", ModelName: "m2", MaxRetries: 5, Enabled: true},
 			},
 		},
 	}
@@ -326,5 +326,87 @@ func TestSelectCandidates_DefaultFallbackHasEmptyTargetID(t *testing.T) {
 	}
 	if len(cands) != 1 || cands[0].targetID != "" || cands[0].maxRetries != 0 {
 		t.Fatalf("expected default candidate with empty targetID/maxRetries=0, got %+v", cands)
+	}
+}
+
+// TestSelectCandidates_SkipsDisabledTargets verifies the Phase-3 per-target
+// enable/disable flag: a target with Enabled=false is dropped from the
+// candidate list, and the survivors keep their slice (tier) order. If every
+// target is disabled and no default is configured, selectCandidates must
+// return an error rather than silently forwarding to a disabled provider.
+func TestSelectCandidates_SkipsDisabledTargets(t *testing.T) {
+	rules := []model.Route{
+		{
+			ID: "r1", Enabled: true,
+			Targets: []model.RouteTarget{
+				{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
+				{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: false}, // disabled
+				{ID: "t2", ProviderID: "p2", ModelName: "m2", Enabled: true},
+				{ID: "t3", ProviderID: "p3", ModelName: "m3", Enabled: false}, // disabled
+			},
+		},
+	}
+	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 2 {
+		t.Fatalf("expected 2 candidates (disabled skipped), got %d: %+v", len(cands), cands)
+	}
+	if cands[0].provider.ID != "p0" || cands[1].provider.ID != "p2" {
+		t.Fatalf("expected candidates [p0, p2] in tier order, got [%s, %s]",
+			cands[0].provider.ID, cands[1].provider.ID)
+	}
+	if cands[0].targetID != "t0" || cands[1].targetID != "t2" {
+		t.Fatalf("expected targetID round-trip for survivors, got [%s, %s]",
+			cands[0].targetID, cands[1].targetID)
+	}
+}
+
+// TestSelectCandidates_AllDisabledFallsBackToDefault covers the corner case
+// where every routed target is disabled but a default provider is configured:
+// the default should be returned (same fallback path used when all circuits
+// are open).
+func TestSelectCandidates_AllDisabledFallsBackToDefault(t *testing.T) {
+	rules := []model.Route{
+		{
+			ID: "r1", Enabled: true,
+			Targets: []model.RouteTarget{
+				{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: false},
+				{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: false},
+			},
+		},
+	}
+	lookup := func(id string) (*model.Provider, error) {
+		if id == "default" {
+			return makeProvider(id), nil
+		}
+		return makeProvider(id), nil
+	}
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", map[string]*CircuitBreaker{}, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].provider.ID != "default" || cands[0].targetID != "" {
+		t.Fatalf("expected single default candidate, got %+v", cands)
+	}
+}
+
+// TestSelectCandidates_AllDisabledNoDefault verifies the error path: every
+// target disabled AND no default provider → no available provider.
+func TestSelectCandidates_AllDisabledNoDefault(t *testing.T) {
+	rules := []model.Route{
+		{
+			ID: "r1", Enabled: true,
+			Targets: []model.RouteTarget{
+				{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: false},
+			},
+		},
+	}
+	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
+	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", map[string]*CircuitBreaker{}, lookup)
+	if err == nil {
+		t.Fatal("expected error when all targets disabled and no default configured")
 	}
 }

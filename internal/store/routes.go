@@ -229,7 +229,7 @@ func (s *Store) listConditions(routeID string) ([]model.RouteCondition, error) {
 
 func (s *Store) listTargets(routeID string) ([]model.RouteTarget, error) {
 	rows, err := s.db.Query(`
-		SELECT id, route_id, provider_id, model_name, max_retries, hit_count, failure_count
+		SELECT id, route_id, provider_id, model_name, max_retries, hit_count, failure_count, enabled
 		FROM route_targets WHERE route_id = ? ORDER BY tier ASC`, routeID)
 	if err != nil {
 		return nil, err
@@ -239,7 +239,7 @@ func (s *Store) listTargets(routeID string) ([]model.RouteTarget, error) {
 	var out []model.RouteTarget
 	for rows.Next() {
 		var t model.RouteTarget
-		if err := rows.Scan(&t.ID, &t.RouteID, &t.ProviderID, &t.ModelName, &t.MaxRetries, &t.HitCount, &t.FailureCount); err != nil {
+		if err := rows.Scan(&t.ID, &t.RouteID, &t.ProviderID, &t.ModelName, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -266,6 +266,17 @@ func (s *Store) insertConditions(tx *sql.Tx, routeID string, in []model.RouteCon
 	return out, nil
 }
 
+// insertTargets writes a slice of targets for a freshly-created route.
+//
+// CONTRACT (api consumer-facing): every target inserted here is treated as
+// "new". The Go zero-value for Enabled is false, so a caller that omits
+// `Enabled` (or sends a freshly-constructed RouteTarget) would otherwise
+// produce a disabled target. We coerce Enabled=true on insert so a brand-new
+// target is always usable without the caller having to opt in. Toggling to
+// false happens via the UPDATE path on a subsequent UpdateRoute. This matches
+// the spec "default to true when created without an explicit value" — the
+// "explicit false" case is the supported way to create a disabled target and
+// is exercised by re-issuing UpdateRoute with Enabled: false.
 func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget) ([]model.RouteTarget, error) {
 	out := make([]model.RouteTarget, len(in))
 	for i, t := range in {
@@ -275,6 +286,12 @@ func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 		if t.MaxRetries < 0 {
 			t.MaxRetries = 0
 		}
+		// New target path: default-to-true (see CONTRACT above). Without this
+		// line, a caller that constructs RouteTarget{ProviderID: "p1"} and
+		// submits it would get a disabled row that the proxy silently drops.
+		if !t.Enabled {
+			t.Enabled = true
+		}
 		t.ID = makeID()
 		t.RouteID = routeID
 		// `tier` is the internal positional sort key (kept from the slice
@@ -282,9 +299,9 @@ func (s *Store) insertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 		// hit_count/failure_count are managed by IncrementTargetStats and
 		// default to 0 on insert.
 		if _, err := tx.Exec(`
-			INSERT INTO route_targets (id, route_id, provider_id, model_name, tier, max_retries)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			t.ID, t.RouteID, t.ProviderID, t.ModelName, i, t.MaxRetries); err != nil {
+			INSERT INTO route_targets (id, route_id, provider_id, model_name, tier, max_retries, enabled)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, t.RouteID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 			return nil, err
 		}
 		out[i] = t
@@ -355,22 +372,32 @@ func (s *Store) upsertTargets(tx *sql.Tx, routeID string, in []model.RouteTarget
 	for i, t := range in {
 		t.RouteID = routeID
 		if t.ID == "" {
-			// New target: INSERT with a fresh ID.
+			// New target: INSERT with a fresh ID. Apply the default-to-enabled
+			// heuristic (same CONTRACT as insertTargets) so a caller that omits
+			// `Enabled` still gets a usable target. Toggling to false happens
+			// via the UPDATE path on a subsequent UpdateRoute.
+			if !t.Enabled {
+				t.Enabled = true
+			}
 			t.ID = makeID()
 			if _, err := tx.Exec(`
-				INSERT INTO route_targets (id, route_id, provider_id, model_name, tier, max_retries)
-				VALUES (?, ?, ?, ?, ?, ?)`,
-				t.ID, t.RouteID, t.ProviderID, t.ModelName, i, t.MaxRetries); err != nil {
+				INSERT INTO route_targets (id, route_id, provider_id, model_name, tier, max_retries, enabled)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				t.ID, t.RouteID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 				return nil, err
 			}
 		} else {
 			// Existing target: UPDATE in place; hit_count/failure_count and the
 			// row's PK are intentionally left untouched so counters round-trip.
+			// `enabled` IS written through verbatim (no defaulting) so the
+			// frontend's toggle is honored — a user can flip an existing target
+			// off, or back on, with full fidelity. The default-to-true rule
+			// only applies to NEW targets (the ID=="" branch above).
 			if _, err := tx.Exec(`
 				UPDATE route_targets
-				SET provider_id = ?, model_name = ?, tier = ?, max_retries = ?
+				SET provider_id = ?, model_name = ?, tier = ?, max_retries = ?, enabled = ?
 				WHERE id = ? AND route_id = ?`,
-				t.ProviderID, t.ModelName, i, t.MaxRetries, t.ID, t.RouteID); err != nil {
+				t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled), t.ID, t.RouteID); err != nil {
 				return nil, err
 			}
 		}

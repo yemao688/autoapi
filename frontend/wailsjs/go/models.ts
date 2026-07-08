@@ -622,6 +622,7 @@ export namespace model {
 	    max_retries: number;
 	    hit_count: number;
 	    failure_count: number;
+	    enabled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new RouteTarget(source);
@@ -636,6 +637,7 @@ export namespace model {
 	        this.max_retries = source["max_retries"];
 	        this.hit_count = source["hit_count"];
 	        this.failure_count = source["failure_count"];
+	        this.enabled = source["enabled"];
 	    }
 	}
 	export class RouteCondition {

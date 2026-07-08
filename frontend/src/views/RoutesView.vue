@@ -9,10 +9,11 @@ import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
+import RouteTargetModal from '@/components/RouteTargetModal.vue'
 import { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
-const { color: providerColor, initial: providerLetter } = useProviderStyle()
+const { color: providerColor, initial: providerLetter, textColor: providerTextColor } = useProviderStyle()
 const { currency: fmtCurrency } = useFormatters()
 const toast = useToast()
 const confirm = useConfirm()
@@ -36,7 +37,8 @@ const editingId = ref('')
 const saving = ref(false)
 const deleting = ref(false)
 
-// Form state — targets live separately so vue-draggable-plus can rebind cleanly.
+// Form state — only route-level fields are edited in the modal now.
+// Targets are managed inline on the rule card.
 const form = ref<{
   name: string
   description: string
@@ -49,6 +51,12 @@ const form = ref<{
   conditions: [],
 })
 const formTargets = ref<model.RouteTarget[]>([])
+
+// ---- Target inline management ----
+const targetModalOpen = ref(false)
+const targetModalRoute = ref<model.Route | null>(null)
+const targetModalTarget = ref<model.RouteTarget | null>(null)
+const targetSaving = ref(false)
 
 // ---- Rule list drag (live-persist on reorder) ----
 // `vue-draggable-plus` mutates the bound array via splice, so a regular
@@ -73,16 +81,6 @@ async function persistRuleOrder() {
     toast.push('排序失败：' + (e?.message || String(e)), 'error')
     await loadRoutes() // revert to server truth
   }
-}
-
-// Stable v-for key for form targets (new ones lack a backend id).
-let _targetSeq = 0
-function targetKey(target: model.RouteTarget, idx: number): string {
-  if (target.id) return target.id
-  if (!(target as any)._cid) {
-    Object.defineProperty(target, '_cid', { value: `t-${++_targetSeq}`, enumerable: false })
-  }
-  return (target as any)._cid
 }
 
 const providerNameMap = computed(() => {
@@ -117,7 +115,7 @@ function targetIconStyle(providerId: string) {
   const name = providerNameMap.value[providerId] || ''
   return {
     background: providerColor(name),
-    color: 'white',
+    color: providerTextColor(name),
   }
 }
 
@@ -137,14 +135,6 @@ function removeCondition(idx: number) {
   form.value.conditions.splice(idx, 1)
 }
 
-function addTarget() {
-  formTargets.value.push(new model.RouteTarget({ provider_id: '', model_name: '', max_retries: 0 }))
-}
-
-function removeTarget(idx: number) {
-  formTargets.value.splice(idx, 1)
-}
-
 function openCreate() {
   editingId.value = ''
   form.value = {
@@ -153,7 +143,8 @@ function openCreate() {
     enabled: true,
     conditions: [new model.RouteCondition({ field: 'model', operator: 'matches', value: '' })],
   }
-  formTargets.value = [new model.RouteTarget({ provider_id: '', model_name: '', max_retries: 0 })]
+  // New routes still need at least one default target; it is managed inline afterward.
+  formTargets.value = [new model.RouteTarget({ provider_id: '', model_name: '', max_retries: 0, enabled: true })]
   modalOpen.value = true
 }
 
@@ -165,6 +156,7 @@ function openEdit(route: model.Route) {
     enabled: route.enabled,
     conditions: route.conditions.map((c) => new model.RouteCondition({ field: c.field, operator: c.operator, value: c.value })),
   }
+  // Preserve existing targets even though they are edited outside the modal.
   formTargets.value = route.targets.map((t) => new model.RouteTarget({
     id: t.id,
     route_id: t.route_id,
@@ -173,6 +165,7 @@ function openEdit(route: model.Route) {
     max_retries: t.max_retries,
     hit_count: t.hit_count,
     failure_count: t.failure_count,
+    enabled: t.enabled,
   }))
   modalOpen.value = true
 }
@@ -240,6 +233,116 @@ async function deleteRoute(id: string, name: string) {
   }
 }
 
+// ---- Inline target management ----
+function openAddTarget(route: model.Route) {
+  targetModalRoute.value = route
+  targetModalTarget.value = null
+  targetModalOpen.value = true
+}
+
+function openEditTarget(route: model.Route, target: model.RouteTarget) {
+  targetModalRoute.value = route
+  targetModalTarget.value = new model.RouteTarget({
+    id: target.id,
+    route_id: target.route_id,
+    provider_id: target.provider_id,
+    model_name: target.model_name,
+    max_retries: target.max_retries,
+    enabled: target.enabled,
+    hit_count: target.hit_count,
+    failure_count: target.failure_count,
+  })
+  targetModalOpen.value = true
+}
+
+function closeTargetModal() {
+  targetModalOpen.value = false
+  targetModalRoute.value = null
+  targetModalTarget.value = null
+}
+
+async function updateRouteTargets(route: model.Route, targets: model.RouteTarget[]): Promise<boolean> {
+  try {
+    const input = new model.RouteInput({
+      name: route.name,
+      description: route.description,
+      enabled: route.enabled,
+      conditions: route.conditions,
+      targets,
+    })
+    await api.updateRoute(route.id, input)
+    await loadRoutes()
+    toast.push('目标已更新', 'success')
+    return true
+  } catch (e: any) {
+    toast.push('更新失败：' + (e?.message || String(e)), 'error')
+    await loadRoutes()
+    return false
+  }
+}
+
+// Set of target IDs currently mid-toggle. Used to disable the toggle UI
+// while a request is in flight so rapid clicks don't race the in-progress
+// update (e.g. user mashes the toggle before the first PATCH lands, which
+// could otherwise leave the server in the wrong state because the route's
+// targets list is read once at the start of `updateRouteTargets`).
+const togglingTargets = ref<Set<string>>(new Set())
+
+function isTogglingTarget(id: string): boolean {
+  return togglingTargets.value.has(id)
+}
+
+async function toggleTarget(route: model.Route, target: model.RouteTarget) {
+  // Guard against re-entry on the same target. A new target (no id) is
+  // treated as never-in-flight so the guard is a no-op for it.
+  if (target.id && togglingTargets.value.has(target.id)) return
+  if (target.id) {
+    togglingTargets.value.add(target.id)
+    // Reassign so Vue's reactivity tracks the Set mutation.
+    togglingTargets.value = new Set(togglingTargets.value)
+  }
+  try {
+    const newTargets = route.targets.map((t) =>
+      t.id === target.id
+        ? new model.RouteTarget({ ...t, enabled: !t.enabled })
+        : t
+    )
+    await updateRouteTargets(route, newTargets)
+  } finally {
+    if (target.id) {
+      togglingTargets.value.delete(target.id)
+      togglingTargets.value = new Set(togglingTargets.value)
+    }
+  }
+}
+
+async function deleteTarget(route: model.Route, target: model.RouteTarget) {
+  const ok = await confirm.open({
+    title: '删除目标',
+    message: `确定删除目标「${targetProviderName(target)} · ${target.model_name || '默认'}」？此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  const newTargets = route.targets.filter((t) => t.id !== target.id)
+  await updateRouteTargets(route, newTargets)
+}
+
+async function onTargetModalSave(target: model.RouteTarget) {
+  const route = targetModalRoute.value
+  if (!route) return
+  targetSaving.value = true
+  try {
+    const newTargets = target.id
+      ? route.targets.map((t) => (t.id === target.id ? target : t))
+      : [...route.targets, target]
+    const ok = await updateRouteTargets(route, newTargets)
+    if (ok) closeTargetModal()
+  } finally {
+    targetSaving.value = false
+  }
+}
+
 function editDefault() {
   fallbackProviderId.value = settings.value?.routing?.default_provider_id || ''
   fallbackModel.value = settings.value?.routing?.default_model || ''
@@ -297,6 +400,7 @@ function importJSON() {
             provider_id: t.provider_id || '',
             model_name: t.model_name || '',
             max_retries: typeof t.max_retries === 'number' ? t.max_retries : 0,
+            enabled: t.enabled !== false,
           })),
         }))
       }
@@ -407,6 +511,14 @@ onMounted(() => {
                   <input type="checkbox" :checked="route.enabled" @change="toggleRoute(route)">
                   <span class="toggle-slider blue"></span>
                 </label>
+                <button
+                  class="btn btn-icon"
+                  style="width: 30px; height: 30px;"
+                  aria-label="添加目标"
+                  @click="openAddTarget(route)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                </button>
                 <DropdownMenu :menu-id="route.id">
                   <template #trigger="{ toggle, open }">
                     <button
@@ -440,22 +552,77 @@ onMounted(() => {
                 </div>
               </div>
               <div>
-                <div class="text-muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin-bottom: 6px;">目标</div>
-                <div v-for="(target, tidx) in route.targets" :key="tidx" class="row" style="gap: 8px; margin-bottom: 6px; align-items: flex-start;">
-                  <div class="list-icon" :style="{ ...targetIconStyle(target.provider_id), width: '24px', height: '24px', fontSize: '11px', borderRadius: '6px' }">
-                    {{ providerLetter(targetProviderName(target)) }}
-                  </div>
-                  <div style="flex: 1; min-width: 0;">
-                    <div style="font-size: 13px; font-weight: 500;">{{ targetProviderName(target) }}</div>
-                    <div class="text-mono text-muted" style="font-size: 11.5px;">{{ target.model_name || '默认' }}</div>
-                    <div class="target-counters">
-                      命中 <span>{{ formatHits(target.hit_count) }}</span>
-                      <span style="margin: 0 3px;">·</span>
-                      失败 <span :class="{ 'fail-hi': target.failure_count > 0 }">{{ formatHits(target.failure_count) }}</span>
+                <div class="row-between" style="margin-bottom: 6px;">
+                  <div class="text-muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;">目标</div>
+                  <button
+                    class="btn btn-icon"
+                    style="width: 22px; height: 22px;"
+                    aria-label="添加目标"
+                    @click="openAddTarget(route)"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                  </button>
+                </div>
+                <div class="stack-tight">
+                  <div
+                    v-for="(target, tidx) in route.targets"
+                    :key="target.id || tidx"
+                    class="row target-row"
+                    :class="{ 'target-disabled': !target.enabled }"
+                  >
+                    <div class="list-icon" :style="{ ...targetIconStyle(target.provider_id), width: '26px', height: '26px', fontSize: '11px', borderRadius: '6px' }">
+                      {{ providerLetter(targetProviderName(target)) }}
+                    </div>
+                    <div class="target-info">
+                      <div class="row" style="gap: 8px; align-items: center;">
+                        <span class="target-provider">{{ targetProviderName(target) }}</span>
+                        <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">已禁用</span>
+                      </div>
+                      <div class="target-meta">
+                        <span>{{ target.model_name || '默认' }}</span>
+                        <span class="dot-sep">·</span>
+                        <span>重试 {{ target.max_retries }}</span>
+                        <span class="dot-sep">·</span>
+                        <span>T{{ tidx + 1 }}</span>
+                      </div>
+                      <div class="target-counters">
+                        命中 <span>{{ formatHits(target.hit_count) }}</span>
+                        <span style="margin: 0 3px;">·</span>
+                        失败 <span :class="{ 'fail-hi': target.failure_count > 0 }">{{ formatHits(target.failure_count) }}</span>
+                      </div>
+                    </div>
+                    <div class="row" style="gap: 6px; margin-left: auto;">
+                      <label class="toggle toggle-target">
+                        <input
+                          type="checkbox"
+                          :checked="target.enabled"
+                          :disabled="isTogglingTarget(target.id || '')"
+                          @change="toggleTarget(route, target)"
+                        >
+                        <span class="toggle-slider"></span>
+                      </label>
+                      <DropdownMenu :menu-id="`${route.id}-target-${target.id || tidx}`">
+                        <template #trigger="{ toggle, open }">
+                          <button
+                            class="btn btn-icon"
+                            style="width: 26px; height: 26px;"
+                            :aria-expanded="open"
+                            aria-haspopup="menu"
+                            aria-label="目标操作"
+                            @click="toggle"
+                          >
+                            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                          </button>
+                        </template>
+                        <template #menu="{ close }">
+                          <button class="dropdown-item" role="menuitem" @click="openEditTarget(route, target); close()">编辑</button>
+                          <button class="dropdown-item danger" role="menuitem" @click="deleteTarget(route, target); close()">删除</button>
+                        </template>
+                      </DropdownMenu>
                     </div>
                   </div>
+                  <div v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">无</div>
                 </div>
-                <div v-if="!route.targets.length" class="text-muted" style="font-size: 12px;">无</div>
               </div>
               <div>
                 <div class="text-muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin-bottom: 6px;">{{ route.enabled ? '本月命中' : '状态' }}</div>
@@ -526,41 +693,6 @@ onMounted(() => {
           <button class="btn btn-secondary" style="align-self: flex-start;" @click="addCondition">添加条件</button>
         </div>
 
-        <div class="field" style="margin-bottom: 8px;">
-          <div class="field-label">目标 <span class="text-muted" style="font-weight: 400; text-transform: none; letter-spacing: 0;">· 拖动排序</span></div>
-        </div>
-        <VueDraggable
-          v-model="formTargets"
-          handle=".drag-handle"
-          :animation="150"
-          ghost-class="sortable-ghost"
-          chosen-class="sortable-chosen"
-          drag-class="sortable-drag"
-          class="stack-tight"
-          style="gap: 8px;"
-        >
-          <div v-for="(target, idx) in formTargets" :key="targetKey(target, idx)" class="row" style="gap: 8px; align-items: flex-start;">
-            <!-- Target drag handle -->
-            <svg class="drag-handle" viewBox="0 0 16 28" fill="currentColor" width="14" height="22" aria-label="拖拽排序" style="margin-top: 6px;">
-              <circle cx="5" cy="5.5" r="1.4"/>
-              <circle cx="11" cy="5.5" r="1.4"/>
-              <circle cx="5" cy="14" r="1.5"/>
-              <circle cx="11" cy="14" r="1.5"/>
-              <circle cx="5" cy="22.5" r="1.5"/>
-              <circle cx="11" cy="22.5" r="1.5"/>
-            </svg>
-            <select v-model="target.provider_id" class="select" style="flex: 1;">
-              <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
-            </select>
-            <input v-model="target.model_name" class="input" style="flex: 1;" placeholder="模型">
-            <input v-model.number="target.max_retries" type="number" class="input" style="width: 110px;" placeholder="最大重试" min="0" step="1">
-            <button class="btn btn-icon" style="width: 28px; height: 28px;" @click="removeTarget(idx)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-        </VueDraggable>
-        <button class="btn btn-secondary" style="align-self: flex-start;" @click="addTarget">添加目标</button>
-
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">取消</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveRoute">{{ saving ? '保存中…' : '保存' }}</button>
@@ -568,6 +700,16 @@ onMounted(() => {
       </div>
     </div>
   </Teleport>
+
+  <!-- Target add/edit modal -->
+  <RouteTargetModal
+    :open="targetModalOpen"
+    :target="targetModalTarget"
+    :providers="providers || []"
+    :saving="targetSaving"
+    @close="closeTargetModal"
+    @save="onTargetModalSave"
+  />
 
   <!-- Default fallback modal -->
   <Teleport to="body">
@@ -592,3 +734,62 @@ onMounted(() => {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.target-row {
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+}
+.target-row:last-child {
+  border-bottom: none;
+}
+.target-info {
+  flex: 1;
+  min-width: 0;
+}
+.target-provider {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.target-disabled .target-provider {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.target-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.target-disabled .target-meta {
+  opacity: 0.7;
+}
+.target-disabled .list-icon {
+  opacity: 0.5;
+}
+.dot-sep {
+  margin: 0 4px;
+  color: var(--border-strong);
+}
+.toggle-target {
+  width: 32px;
+  height: 18px;
+}
+.toggle-target .toggle-slider::before {
+  width: 14px;
+  height: 14px;
+  top: 2px;
+  left: 2px;
+}
+.toggle-target input:checked + .toggle-slider::before {
+  transform: translateX(14px);
+}
+
+html[data-theme="dark"] .target-row {
+  border-bottom-color: rgba(255, 255, 255, 0.05);
+}
+</style>
