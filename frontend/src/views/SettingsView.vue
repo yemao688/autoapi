@@ -289,7 +289,7 @@ watch(fetchedSettings, loadSettings, { once: true })
               <div class="row-between" style="margin-bottom: 0;">
                 <div>
                   <div class="field-label">登录时启动</div>
-                  <div class="field-help">macOS 登录后自动在后台启动 autoapi</div>
+                  <div class="field-help">macOS 登录后自动在后台启动 Autoapi</div>
                 </div>
                 <label class="toggle"><input type="checkbox" v-model="settings.general.launch_at_login" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
               </div>
@@ -321,7 +321,7 @@ watch(fetchedSettings, loadSettings, { once: true })
               <div class="field-label">关闭主窗口时</div>
               <select class="select" style="max-width: 320px;" v-model="settings.general.close_action" @change="markSettingsDirty">
                 <option value="background">继续在后台运行</option>
-                <option value="quit">退出 autoapi</option>
+                <option value="quit">退出 Autoapi</option>
                 <option value="ask">每次询问</option>
               </select>
             </div>
@@ -685,14 +685,14 @@ watch(fetchedSettings, loadSettings, { once: true })
             <div class="section-head">
               <div>
                 <div class="section-title">关于</div>
-                <div class="section-sub">autoapi v0.4.2</div>
+                <div class="section-sub">Autoapi v0.4.2</div>
               </div>
             </div>
 
             <div class="row" style="gap: 16px; align-items: flex-start;">
               <div style="width: 56px; height: 56px; border-radius: 14px; background: var(--black); color: white; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: 24px; font-weight: 700; flex-shrink: 0;">A</div>
               <div style="flex: 1;">
-                <div style="font-size: 15px; font-weight: 600;">autoapi</div>
+                <div style="font-size: 15px; font-weight: 600;">Autoapi</div>
                 <div class="text-muted" style="font-size: 12.5px; margin-top: 2px;">自研模型路由软件 · 个人使用</div>
                 <div class="row" style="gap: 16px; margin-top: 12px; font-size: 12px; color: var(--muted);">
                   <span><span class="text-mono">v0.4.2</span> · 构建 20260518</span>
