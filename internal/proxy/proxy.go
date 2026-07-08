@@ -1425,11 +1425,26 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			StreamErr:    writeErr,
 		}, attemptOrder
 	case streamErr != nil:
-		// Mid-stream read error. Distinguish upstream failure from
-		// client disconnect: a client closing the connection kills
-		// resp.Body.Read via context cancellation, but that is NOT
-		// a provider failure and must not penalize the breaker.
-		if !usageAcc.Done() && !isClientDisconnect(streamErr) {
+		// If the stream already observed [DONE], the response was
+		// delivered successfully. A subsequent read error (commonly
+		// context.Canceled when the client closes the connection
+		// right after receiving the full response) is NOT a failure
+		// of any kind — treat it as a clean completion.
+		if usageAcc.Done() {
+			logEntry.Chain = append(logEntry.Chain, chainEntry)
+			return streamAttemptResult{
+				Status:       "success",
+				StatusCode:   upstreamStatus,
+				LatencyMs:    attemptLatencyMs,
+				FirstTokenMs: int(firstByteTime.Milliseconds()),
+			}, attemptOrder
+		}
+		// Mid-stream read error BEFORE [DONE]. Distinguish upstream
+		// failure from client disconnect: a client closing the
+		// connection kills resp.Body.Read via context cancellation,
+		// but that is NOT a provider failure and must not penalize
+		// the breaker.
+		if !isClientDisconnect(streamErr) {
 			p.breakerFor(c.provider.ID).Record(false)
 			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, streamErr.Error()); err != nil {
 				slog.Error("proxy: update provider health", "err", err)

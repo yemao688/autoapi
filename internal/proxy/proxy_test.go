@@ -2132,3 +2132,167 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 		t.Fatalf("expected chain error to mention 'client disconnect', got %q", log.Chain[0].Error)
 	}
 }
+
+// TestStreaming_DoneThenClientCancel_IsSuccess is a regression test for the
+// bug observed in production logs: a streaming request that completes
+// SUCCESSFULLY (full SSE body including the [DONE] marker is delivered to
+// the client) was being recorded as a failure because the client closed
+// its connection immediately after receiving the full response. The
+// proxy's final resp.Body.Read returned context.Canceled, and the old
+// streamErr branch tagged the chain entry "client_abort" even though the
+// response had already been fully and correctly delivered.
+//
+// Setup:
+//   - Upstream sends a complete SSE stream: one data chunk, then
+//     "data: [DONE]", then closes the response writer (clean EOF from
+//     the upstream's perspective).
+//   - The client reads the ENTIRE body (until its own Read returns EOF).
+//   - The client then closes its connection / cancels its request
+//     context. Because the client transport is still attached to the
+//     proxy's request context, the proxy's next/last resp.Body.Read may
+//     return context.Canceled.
+//
+// Expectations:
+//   - Chain entry Status == "success" (NOT "client_abort").
+//   - No "client disconnect" warning is emitted for this request.
+//   - Breaker is NOT penalized.
+//   - Provider health stays Connected.
+//   - The recorded log has no Error.
+func TestStreaming_DoneThenClientCancel_IsSuccess(t *testing.T) {
+	// releaseCh lets the upstream handler close the response body
+	// AFTER the client has already cancelled its context. This
+	// reproduces the production race: the client SDK receives the
+	// complete response (including [DONE]) and immediately closes
+	// its connection, but the upstream side of the proxy connection
+	// is still open. The proxy's next resp.Body.Read then returns
+	// context.Canceled (not io.EOF) because the client transport
+	// cancelled the request context. The fix: when usageAcc.Done()
+	// is true, any subsequent read error is a clean completion.
+	releaseCh := make(chan struct{})
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// Send a complete SSE stream: a data chunk with usage, then [DONE].
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// Hold the response body open until the test releases us.
+		// This ensures the upstream does NOT send a clean EOF; the
+		// only way the proxy's body Read terminates is via the
+		// client's context cancellation.
+		select {
+		case <-releaseCh:
+		case <-r.Context().Done():
+		}
+	}))
+	defer upstreamSrv.Close()
+	defer close(releaseCh)
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: upstreamSrv.URL},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	// Use a cancellable client context so we can cancel AFTER reading
+	// the [DONE] marker, simulating a client that disconnects right
+	// after the response completes.
+	clientCtx, clientCancel := context.WithCancel(context.Background())
+	defer clientCancel()
+
+	req, _ := http.NewRequestWithContext(clientCtx, "POST",
+		proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	// Read until we see [DONE] — the full response has been delivered
+	// to the client at this point.
+	readBuf := make([]byte, 1024)
+	var got strings.Builder
+	for {
+		n, rerr := resp.Body.Read(readBuf)
+		if n > 0 {
+			got.Write(readBuf[:n])
+			if strings.Contains(got.String(), "[DONE]") {
+				break
+			}
+		}
+		if rerr != nil {
+			t.Fatalf("client read ended before [DONE]: %v (got %q)", rerr, got.String())
+		}
+	}
+
+	// Cancel the client context NOW — the response is fully
+	// delivered, but the upstream body is still held open by the
+	// handler. The proxy's resp.Body.Read will return
+	// context.Canceled. This is the exact production race.
+	clientCancel()
+	_ = resp.Body.Close()
+
+	// Let the proxy finish its end-of-stream handling + flush the log.
+	time.Sleep(200 * time.Millisecond)
+	p.Stop()
+
+	log, ok := store.LastLog()
+	if !ok {
+		t.Fatalf("expected log entry")
+	}
+	if len(log.Chain) != 1 {
+		t.Fatalf("expected 1 chain entry, got %d: %+v", len(log.Chain), log.Chain)
+	}
+	ce := log.Chain[0]
+	if ce.Status != "success" {
+		t.Fatalf("expected chain status=success (stream completed, [DONE] seen before client cancel), got %q (err=%q)",
+			ce.Status, ce.Error)
+	}
+	if ce.Error != "" {
+		t.Fatalf("expected chain entry to have NO error for a successful stream, got %q", ce.Error)
+	}
+	if log.Error != "" {
+		t.Fatalf("expected top-level log to have NO error, got %q", log.Error)
+	}
+	// Breaker must NOT be penalized.
+	breaker := p.breakerFor("p0")
+	if breaker.consecutiveFailures != 0 {
+		t.Fatalf("expected breaker consecutiveFailures=0, got %d", breaker.consecutiveFailures)
+	}
+	// Provider health stays Connected (not Error).
+	prov, _ := store.GetProvider("p0")
+	if prov.Status == model.ProviderStatusError {
+		t.Fatalf("expected provider status != error, got %q (err=%q)",
+			prov.Status, prov.ErrorMessage)
+	}
+}
