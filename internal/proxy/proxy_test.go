@@ -20,7 +20,7 @@ import (
 
 type mockStore struct {
 	providers map[string]*model.Provider
-	routes    []model.Route
+	rules     []model.ModelRule
 	apiKeys   []model.ApiKey
 	settings  *model.Settings
 
@@ -47,7 +47,7 @@ func (m *mockStore) ListProviders() ([]model.Provider, error) {
 	return out, nil
 }
 
-func (m *mockStore) ListRoutes() ([]model.Route, error) { return m.routes, nil }
+func (m *mockStore) ListModelRules() ([]model.ModelRule, error) { return m.rules, nil }
 
 func (m *mockStore) GetProvider(id string) (*model.Provider, error) {
 	p, ok := m.providers[id]
@@ -154,10 +154,10 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ProviderID: "p0", ModelName: "m0", Enabled: true},
 					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
@@ -214,10 +214,10 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ProviderID: "p0", ModelName: "m0", Enabled: true},
 					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
@@ -282,10 +282,10 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ProviderID: "p0", ModelName: "m0", Enabled: true},
 					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
@@ -330,10 +330,10 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ProviderID: "p0", ModelName: "m0", Enabled: true},
 					{ProviderID: "p1", ModelName: "m1", Enabled: true},
 				},
@@ -371,10 +371,10 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ProviderID: "p0", ModelName: "m0", Enabled: true},
 				},
 			},
@@ -428,7 +428,7 @@ func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"default": {ID: "default", Name: "Default", BaseURL: srv.URL},
 		},
-		routes:  []model.Route{},
+		rules:  []model.ModelRule{},
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 		settings: &model.Settings{
 			Routing: model.RoutingSettings{DefaultProviderID: "default"},
@@ -490,10 +490,10 @@ func TestGenericOpenAI_ImagesRoute(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "dall-e-3", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ProviderID: "p0", ModelName: "dall-e-3", Enabled: true},
 				},
 			},
@@ -542,10 +542,10 @@ func TestStreaming_PassThrough(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "gpt-4o", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ProviderID: "p0", ModelName: "gpt-4o", Enabled: true},
 				},
 			},
@@ -608,10 +608,10 @@ func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
 					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
 				},
@@ -681,10 +681,10 @@ func TestFailover_RetryBoundedExhaustedFallsThrough(t *testing.T) {
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
 					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
 				},
@@ -753,10 +753,10 @@ func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "gpt-4o", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o", Enabled: true},
 				},
 			},
@@ -832,10 +832,10 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
 		},
-		routes: []model.Route{
+		rules: []model.ModelRule{
 			{
-				ID: "r1", Enabled: true,
-				Targets: []model.RouteTarget{
+				ID: "r1", Name: "gpt-4o", Enabled: true,
+				Targets: []model.ModelRuleTarget{
 					{ID: "t0", ProviderID: "p0", ModelName: "gpt-4o", Enabled: true},
 				},
 			},

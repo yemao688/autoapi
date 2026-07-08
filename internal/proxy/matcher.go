@@ -1,19 +1,19 @@
-// matcher.go implements the route rule engine used by the proxy to select a
-// target provider/model. Rules are evaluated in slice order (top = highest
-// priority); only enabled rules are considered. All conditions in a rule must
-// match (AND semantics).
+// matcher.go implements the model-rule lookup used by the proxy to select a
+// target provider/model. A rule matches by exact model name: the rule's
+// Name equals the request's Model field. Disabled rules and rules with no
+// enabled targets fall through to the default provider (if configured).
 package proxy
 
 import (
 	"fmt"
-	"path"
-	"strconv"
-	"strings"
 
 	"autoapi/internal/model"
 )
 
-// InboundRequest carries the request context used for route matching.
+// InboundRequest carries the request context used for model-rule lookup.
+// Header / EstimatedTokens / Task / TimeHour are preserved on the struct
+// for forward-compatibility (e.g. later routing hints) but are no longer
+// consulted by the matcher.
 type InboundRequest struct {
 	Model           string
 	Header          map[string]string
@@ -26,24 +26,27 @@ type InboundRequest struct {
 type candidate struct {
 	provider   *model.Provider
 	modelName  string
-	routeID    string
-	routeLabel string
+	ruleID     string
+	ruleLabel  string
 	targetID   string
 	maxRetries int
 }
 
-// selectCandidates picks the highest-priority enabled route (callers must
-// supply `rules` sorted highest-priority first — see selectRoute), collects
-// all of its forwarding targets in slice order, filters out targets that are
-// disabled or whose provider's circuit breaker is open, and falls back to the
-// default provider when every routed target is filtered out. The getProvider
-// closure resolves provider IDs to full provider records. Disabled targets are
-// skipped without disturbing the relative tier ordering of the survivors.
-func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderID string, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
-	route, matched := selectRoute(req, rules)
+// selectCandidates picks the enabled model rule whose Name equals req.Model
+// (exact match) and collects all of its forwarding targets in slice order,
+// filtering out targets that are disabled or whose provider's circuit
+// breaker is open. If no rule matches (or all targets are open), the call
+// falls back to the default provider/model when one is configured.
+//
+// `rules` does not need to be pre-sorted; lookup is by exact name equality
+// so the input order is irrelevant. The getProvider closure resolves
+// provider IDs to full provider records. Disabled targets are skipped
+// without disturbing the relative tier ordering of the survivors.
+func selectCandidates(req *InboundRequest, rules []model.ModelRule, defaultProviderID, defaultModel string, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
+	rule, matched := findModelRule(req, rules)
 	if !matched {
 		if defaultProviderID == "" {
-			return nil, fmt.Errorf("no route matched and no default provider configured")
+			return nil, fmt.Errorf("unknown model: %s", req.Model)
 		}
 		p, err := getProvider(defaultProviderID)
 		if err != nil {
@@ -52,11 +55,15 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 		if isOpen(defaultProviderID, breakers) {
 			return nil, fmt.Errorf("no available provider: default provider circuit is open")
 		}
-		return []candidate{{provider: p, modelName: req.Model, routeID: "", routeLabel: ""}}, nil
+		outName := req.Model
+		if defaultModel != "" {
+			outName = defaultModel
+		}
+		return []candidate{{provider: p, modelName: outName, ruleID: "", ruleLabel: ""}}, nil
 	}
 
 	var out []candidate
-	for _, t := range route.Targets {
+	for _, t := range rule.Targets {
 		// Disabled targets are skipped during candidate selection. The slice
 		// order (tier) is the source of truth for failover ordering, so this
 		// `continue` preserves the relative order of the remaining targets.
@@ -73,8 +80,8 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 		out = append(out, candidate{
 			provider:   p,
 			modelName:  modelNameForTarget(t.ModelName, req.Model),
-			routeID:    route.ID,
-			routeLabel: route.Name,
+			ruleID:     rule.ID,
+			ruleLabel:  rule.Name,
 			targetID:   t.ID,
 			maxRetries: t.MaxRetries,
 		})
@@ -88,7 +95,11 @@ func selectCandidates(req *InboundRequest, rules []model.Route, defaultProviderI
 		if isOpen(defaultProviderID, breakers) {
 			return nil, fmt.Errorf("no available provider: all targets and default are open")
 		}
-		out = append(out, candidate{provider: p, modelName: req.Model, routeID: "", routeLabel: ""})
+		outName := req.Model
+		if defaultModel != "" {
+			outName = defaultModel
+		}
+		out = append(out, candidate{provider: p, modelName: outName, ruleID: "", ruleLabel: ""})
 	}
 
 	if len(out) == 0 {
@@ -104,178 +115,19 @@ func isOpen(providerID string, breakers map[string]*CircuitBreaker) bool {
 	return false
 }
 
-// selectRoute picks the highest-priority enabled route whose conditions all
-// match. Callers MUST provide `rules` already sorted by priority ascending;
-// ListRoutes does this via ORDER BY priority ASC. The bool reports whether a
-// route was selected.
-func selectRoute(req *InboundRequest, rules []model.Route) (*model.Route, bool) {
+// findModelRule returns the first enabled rule whose Name equals req.Model.
+// Order in `rules` is irrelevant because Name is unique by design (the
+// store enforces uniqueness on Create/Update).
+func findModelRule(req *InboundRequest, rules []model.ModelRule) (*model.ModelRule, bool) {
 	for i := range rules {
 		if !rules[i].Enabled {
 			continue
 		}
-		if !matchAll(req, rules[i].Conditions) {
-			continue
+		if rules[i].Name == req.Model {
+			return &rules[i], true
 		}
-		return &rules[i], true
 	}
 	return nil, false
-}
-
-func matchAll(req *InboundRequest, conds []model.RouteCondition) bool {
-	for _, c := range conds {
-		if !matchCondition(req, c) {
-			return false
-		}
-	}
-	return true
-}
-
-func matchCondition(req *InboundRequest, c model.RouteCondition) bool {
-	actual := extractField(req, c.Field)
-	if actual == nilField {
-		return false
-	}
-
-	switch c.Operator {
-	case model.OpMatches:
-		return matchMatches(actual, c.Value)
-	case model.OpEquals:
-		return strings.EqualFold(actual, c.Value)
-	case model.OpLT:
-		return cmpNumeric(actual, c.Value) < 0
-	case model.OpGT:
-		return cmpNumeric(actual, c.Value) > 0
-	case model.OpBetween:
-		return betweenNumeric(actual, c.Value, c.Field == "time.hour")
-	case model.OpIn:
-		return inSet(actual, c.Value)
-	default:
-		return false
-	}
-}
-
-const nilField = ""
-
-func extractField(req *InboundRequest, field string) string {
-	switch field {
-	case "model":
-		return req.Model
-	case "header.x-priority":
-		if v, ok := req.Header["X-Priority"]; ok {
-			return v
-		}
-		return ""
-	case "estimated_tokens":
-		return strconv.Itoa(req.EstimatedTokens)
-	case "task":
-		return req.Task
-	case "time.hour":
-		return strconv.Itoa(req.TimeHour)
-	default:
-		return nilField
-	}
-}
-
-// matchMatches supports two conventions:
-//   - If the pattern contains a comma, it is treated as a list of sub-patterns;
-//     the value matches if any sub-pattern matches.
-//   - If a sub-pattern contains '*', it is treated as a glob (prefix/suffix/wildcard
-//     only). Otherwise it is case-insensitive equality.
-func matchMatches(value, pattern string) bool {
-	if value == "" || pattern == "" {
-		return false
-	}
-	parts := strings.Split(pattern, ",")
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if strings.Contains(p, "*") {
-			if matchGlob(value, p) {
-				return true
-			}
-		} else if strings.EqualFold(value, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchGlob(value, pattern string) bool {
-	if pattern == "*" {
-		return true
-	}
-	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
-		mid := pattern[1 : len(pattern)-1]
-		return strings.Contains(value, mid)
-	}
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(value, pattern[:len(pattern)-1])
-	}
-	if strings.HasPrefix(pattern, "*") {
-		return strings.HasSuffix(value, pattern[1:])
-	}
-	if ok, _ := path.Match(pattern, value); ok {
-		return true
-	}
-	return false
-}
-
-func cmpNumeric(a, b string) int {
-	fa, ok1 := parseFloat(a)
-	fb, ok2 := parseFloat(b)
-	if !ok1 || !ok2 {
-		return 0
-	}
-	if fa < fb {
-		return -1
-	}
-	if fa > fb {
-		return 1
-	}
-	return 0
-}
-
-// betweenNumeric parses lo,hi and checks inclusivity. When wrap is true (used
-// for time.hour), a reversed range such as 23,7 means [23,24] or [0,7].
-func betweenNumeric(value, bounds string, wrap bool) bool {
-	parts := strings.Split(bounds, ",")
-	if len(parts) != 2 {
-		return false
-	}
-	v, ok1 := parseFloat(value)
-	lo, ok2 := parseFloat(parts[0])
-	hi, ok3 := parseFloat(parts[1])
-	if !ok1 || !ok2 || !ok3 {
-		return false
-	}
-	if lo <= hi {
-		return v >= lo && v <= hi
-	}
-	if wrap {
-		return v >= lo || v <= hi
-	}
-	return false
-}
-
-func inSet(value, set string) bool {
-	parts := strings.Split(set, ",")
-	for _, p := range parts {
-		if strings.EqualFold(strings.TrimSpace(p), value) {
-			return true
-		}
-	}
-	return false
-}
-
-func parseFloat(s string) (float64, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	return f, err == nil
 }
 
 func modelNameForTarget(targetModel, requestModel string) string {

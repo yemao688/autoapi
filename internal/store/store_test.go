@@ -222,105 +222,170 @@ func TestAPIKeyCRUD(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-//  Route CRUD
+//  ModelRule CRUD
 // ---------------------------------------------------------------------------
 
-func TestRouteCRUD(t *testing.T) {
+func TestModelRuleCRUD(t *testing.T) {
 	s := newTestStore(t)
 
-	// Create with conditions and targets
-	r, err := s.CreateRoute(model.RouteInput{
-		Name:        "Test Route",
-		Description: "A test route",
-		Enabled:     true,
-		Conditions: []model.RouteCondition{
-			{Field: "model", Operator: model.OpMatches, Value: "gpt-*"},
-		},
-		Targets: []model.RouteTarget{
+	// Create with targets
+	r, err := s.CreateModelRule(model.ModelRuleInput{
+		Name:    "Test Model",
+		Enabled: true,
+		Targets: []model.ModelRuleTarget{
 			{ProviderID: "p01", ModelName: "gpt-4o"},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateRoute: %v", err)
-	}
-	if len(r.Conditions) != 1 {
-		t.Fatalf("expected 1 condition, got %d", len(r.Conditions))
+		t.Fatalf("CreateModelRule: %v", err)
 	}
 	if len(r.Targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(r.Targets))
 	}
 
 	// Get
-	got, err := s.GetRoute(r.ID)
+	got, err := s.GetModelRule(r.ID)
 	if err != nil {
-		t.Fatalf("GetRoute: %v", err)
+		t.Fatalf("GetModelRule: %v", err)
 	}
-	if got.Name != "Test Route" {
-		t.Fatalf("expected 'Test Route', got %q", got.Name)
+	if got.Name != "Test Model" {
+		t.Fatalf("expected 'Test Model', got %q", got.Name)
 	}
 
 	// List
-	list, err := s.ListRoutes()
+	list, err := s.ListModelRules()
 	if err != nil {
-		t.Fatalf("ListRoutes: %v", err)
+		t.Fatalf("ListModelRules: %v", err)
 	}
 	if len(list) != 1 {
-		t.Fatalf("expected 1 route, got %d", len(list))
+		t.Fatalf("expected 1 model rule, got %d", len(list))
 	}
 
 	// Update
-	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
-		Name:        "Updated Route",
-		Description: "Updated",
-		Enabled:     false,
-		Conditions:  []model.RouteCondition{},
-		Targets:     []model.RouteTarget{},
+	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
+		Name:    "Updated Model",
+		Enabled: false,
+		Targets: []model.ModelRuleTarget{},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRoute: %v", err)
+		t.Fatalf("UpdateModelRule: %v", err)
 	}
-	if updated.Name != "Updated Route" {
-		t.Fatalf("expected 'Updated Route', got %q", updated.Name)
+	if updated.Name != "Updated Model" {
+		t.Fatalf("expected 'Updated Model', got %q", updated.Name)
 	}
-	if len(updated.Conditions) != 0 {
-		t.Fatalf("expected 0 conditions, got %d", len(updated.Conditions))
+	if len(updated.Targets) != 0 {
+		t.Fatalf("expected 0 targets, got %d", len(updated.Targets))
 	}
 
-	// Reorder
-	if err := s.ReorderRoutes([]string{r.ID}); err != nil {
-		t.Fatalf("ReorderRoutes: %v", err)
+	// Reorder (no-op but must still succeed for API compatibility)
+	if err := s.ReorderModelRules([]string{r.ID}); err != nil {
+		t.Fatalf("ReorderModelRules: %v", err)
 	}
 
 	// Delete
-	if err := s.DeleteRoute(r.ID); err != nil {
-		t.Fatalf("DeleteRoute: %v", err)
+	if err := s.DeleteModelRule(r.ID); err != nil {
+		t.Fatalf("DeleteModelRule: %v", err)
 	}
-	_, err = s.GetRoute(r.ID)
+	_, err = s.GetModelRule(r.ID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
-// TestRouteUpdatePreservesTargetCounters verifies the round-trip fix: editing
-// a route must NOT reset per-target hit_count/failure_count on targets that
+// TestModelRule_NameUniqueness verifies that two rules cannot share the
+// same Name (the client-facing model identifier). The second Create/Update
+// with a duplicate name must return an error.
+func TestModelRule_NameUniqueness(t *testing.T) {
+	s := newTestStore(t)
+
+	// First rule lands cleanly.
+	if _, err := s.CreateModelRule(model.ModelRuleInput{
+		Name:    "shared-name",
+		Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p01", ModelName: "m"}},
+	}); err != nil {
+		t.Fatalf("CreateModelRule (first): %v", err)
+	}
+
+	// Second rule with the same name must fail.
+	if _, err := s.CreateModelRule(model.ModelRuleInput{
+		Name:    "shared-name",
+		Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p02", ModelName: "m"}},
+	}); err == nil {
+		t.Fatal("expected error for duplicate name, got nil")
+	}
+
+	// A different name should still work.
+	if _, err := s.CreateModelRule(model.ModelRuleInput{
+		Name:    "different-name",
+		Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p03", ModelName: "m"}},
+	}); err != nil {
+		t.Fatalf("CreateModelRule (different name): %v", err)
+	}
+}
+
+// TestModelRule_UpdateRenameRejectsDuplicate verifies that renaming a rule
+// to an already-taken name is rejected by the store.
+func TestModelRule_UpdateRenameRejectsDuplicate(t *testing.T) {
+	s := newTestStore(t)
+
+	r1, err := s.CreateModelRule(model.ModelRuleInput{
+		Name:    "alpha",
+		Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p01", ModelName: "m"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateModelRule (r1): %v", err)
+	}
+	if _, err := s.CreateModelRule(model.ModelRuleInput{
+		Name:    "beta",
+		Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p02", ModelName: "m"}},
+	}); err != nil {
+		t.Fatalf("CreateModelRule (r2): %v", err)
+	}
+
+	// Try to rename alpha → beta; should fail.
+	if _, err := s.UpdateModelRule(r1.ID, model.ModelRuleInput{
+		Name:    "beta",
+		Enabled: true,
+		Targets: r1.Targets,
+	}); err == nil {
+		t.Fatal("expected rename-to-duplicate error, got nil")
+	}
+
+	// Rename alpha → alpha (no-op rename) should still succeed.
+	if _, err := s.UpdateModelRule(r1.ID, model.ModelRuleInput{
+		Name:    "alpha",
+		Enabled: true,
+		Targets: r1.Targets,
+	}); err != nil {
+		t.Fatalf("UpdateModelRule (same name): %v", err)
+	}
+}
+
+// TestModelRuleUpdatePreservesTargetCounters verifies the round-trip fix: editing
+// a rule must NOT reset per-target hit_count/failure_count on targets that
 // were kept (same ID round-trips). It also covers reorder (tier rewritten from
 // slice index while ID is preserved), add (new row, counters default 0), and
 // remove (deleted).
-func TestRouteUpdatePreservesTargetCounters(t *testing.T) {
+func TestModelRuleUpdatePreservesTargetCounters(t *testing.T) {
 	s := newTestStore(t)
 
 	// Create with three targets.
-	r, err := s.CreateRoute(model.RouteInput{
+	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Counter Test",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ProviderID: "p01", ModelName: "m1"}, // tier 0
 			{ProviderID: "p01", ModelName: "m2"}, // tier 1
 			{ProviderID: "p02", ModelName: "m3"}, // tier 2
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateRoute: %v", err)
+		t.Fatalf("CreateModelRule: %v", err)
 	}
 	if len(r.Targets) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(r.Targets))
@@ -339,9 +404,9 @@ func TestRouteUpdatePreservesTargetCounters(t *testing.T) {
 	}
 
 	// Sanity: counters reflected before update.
-	pre, err := s.GetRoute(r.ID)
+	pre, err := s.GetModelRule(r.ID)
 	if err != nil {
-		t.Fatalf("GetRoute (pre): %v", err)
+		t.Fatalf("GetModelRule (pre): %v", err)
 	}
 	want := []struct {
 		id              string
@@ -365,17 +430,17 @@ func TestRouteUpdatePreservesTargetCounters(t *testing.T) {
 	//   - m2 omitted → DELETEd.
 	//   - m4 has empty ID → INSERTed fresh; counters default to 0.
 	//   - MaxRetries change on m1 must persist via UPDATE.
-	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Counter Test (renamed)",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ID: m3.ID, ProviderID: "p02", ModelName: "m3"},
 			{ID: m1.ID, ProviderID: "p01", ModelName: "m1", MaxRetries: 4},
 			{ProviderID: "p03", ModelName: "m4"}, // new, empty ID
 		},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRoute: %v", err)
+		t.Fatalf("UpdateModelRule: %v", err)
 	}
 
 	if len(updated.Targets) != 3 {
@@ -435,9 +500,9 @@ func TestRouteUpdatePreservesTargetCounters(t *testing.T) {
 	if err := s.IncrementTargetStats(updated.Targets[1].ID, 1, 0); err != nil {
 		t.Fatalf("IncrementTargetStats after update: %v", err)
 	}
-	post, err := s.GetRoute(r.ID)
+	post, err := s.GetModelRule(r.ID)
 	if err != nil {
-		t.Fatalf("GetRoute (post): %v", err)
+		t.Fatalf("GetModelRule (post): %v", err)
 	}
 	for _, tg := range post.Targets {
 		if tg.ID == m1.ID {
@@ -449,56 +514,56 @@ func TestRouteUpdatePreservesTargetCounters(t *testing.T) {
 
 	// Edge case: updating with an empty Targets slice deletes all targets
 	// cleanly (no incoming IDs → DELETE WHERE route_id = ?).
-	cleared, err := s.UpdateRoute(r.ID, model.RouteInput{
+	cleared, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Counter Test (renamed)",
 		Enabled: true,
-		Targets: []model.RouteTarget{},
+		Targets: []model.ModelRuleTarget{},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRoute (clear): %v", err)
+		t.Fatalf("UpdateModelRule (clear): %v", err)
 	}
 	if len(cleared.Targets) != 0 {
 		t.Fatalf("expected 0 targets after clearing, got %d", len(cleared.Targets))
 	}
 }
 
-// TestRouteClampsNegativeMaxRetries verifies Fix 2: a negative max_retries
+// TestModelRuleClampsNegativeMaxRetries verifies Fix 2: a negative max_retries
 // coming from the API is clamped to 0 rather than rejected (friendlier, and
 // prevents the silent-skip footgun in the retry loop).
-func TestRouteClampsNegativeMaxRetries(t *testing.T) {
+func TestModelRuleClampsNegativeMaxRetries(t *testing.T) {
 	s := newTestStore(t)
 
-	// CreateRoute clamps too.
-	r, err := s.CreateRoute(model.RouteInput{
+	// CreateModelRule clamps too.
+	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Clamp Test",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ProviderID: "p01", ModelName: "m1", MaxRetries: -7},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateRoute: %v", err)
+		t.Fatalf("CreateModelRule: %v", err)
 	}
 	if r.Targets[0].MaxRetries != 0 {
-		t.Fatalf("CreateRoute: expected MaxRetries clamped to 0, got %d", r.Targets[0].MaxRetries)
+		t.Fatalf("CreateModelRule: expected MaxRetries clamped to 0, got %d", r.Targets[0].MaxRetries)
 	}
 
-	// UpdateRoute (upsert path) clamps as well.
-	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+	// UpdateModelRule (upsert path) clamps as well.
+	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Clamp Test",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ID: r.Targets[0].ID, ProviderID: "p01", ModelName: "m1", MaxRetries: -1},
 		},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRoute: %v", err)
+		t.Fatalf("UpdateModelRule: %v", err)
 	}
 	if len(updated.Targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(updated.Targets))
 	}
 	if updated.Targets[0].MaxRetries != 0 {
-		t.Fatalf("UpdateRoute: expected MaxRetries clamped to 0, got %d", updated.Targets[0].MaxRetries)
+		t.Fatalf("UpdateModelRule: expected MaxRetries clamped to 0, got %d", updated.Targets[0].MaxRetries)
 	}
 	// And the existing target ID was preserved (not a new row).
 	if updated.Targets[0].ID != r.Targets[0].ID {
@@ -506,72 +571,72 @@ func TestRouteClampsNegativeMaxRetries(t *testing.T) {
 	}
 }
 
-// TestRouteTarget_EnabledDefaultsToTrueOnInsert verifies the Phase-3 spec
+// TestModelRuleTarget_EnabledDefaultsToTrueOnInsert verifies the Phase-3 spec
 // "default to true when a target is created without an explicit value":
 // a target constructed without setting `Enabled` must be stored as enabled.
 // This guards the assumption that a brand-new target is usable immediately
 // without the frontend having to opt in.
-func TestRouteTarget_EnabledDefaultsToTrueOnInsert(t *testing.T) {
+func TestModelRuleTarget_EnabledDefaultsToTrueOnInsert(t *testing.T) {
 	s := newTestStore(t)
 
-	// CreateRoute path.
-	r, err := s.CreateRoute(model.RouteInput{
+	// CreateModelRule path.
+	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Default-enabled",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ProviderID: "p01", ModelName: "m1"}, // Enabled unset (zero value)
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateRoute: %v", err)
+		t.Fatalf("CreateModelRule: %v", err)
 	}
 	if !r.Targets[0].Enabled {
-		t.Fatalf("CreateRoute: expected Enabled default-true, got false")
+		t.Fatalf("CreateModelRule: expected Enabled default-true, got false")
 	}
 
 	// Round-trip through the store to confirm persistence, not just an in-memory echo.
-	got, err := s.GetRoute(r.ID)
+	got, err := s.GetModelRule(r.ID)
 	if err != nil {
-		t.Fatalf("GetRoute: %v", err)
+		t.Fatalf("GetModelRule: %v", err)
 	}
 	if !got.Targets[0].Enabled {
-		t.Fatalf("GetRoute: expected persisted Enabled=true, got false")
+		t.Fatalf("GetModelRule: expected persisted Enabled=true, got false")
 	}
 
-	// UpdateRoute path: adding a new target (empty ID) to an existing route
+	// UpdateModelRule path: adding a new target (empty ID) to an existing route
 	// must also default-true.
-	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Default-enabled",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ID: r.Targets[0].ID, ProviderID: "p01", ModelName: "m1", Enabled: true},
 			{ProviderID: "p02", ModelName: "m2"}, // new target, Enabled unset
 		},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRoute: %v", err)
+		t.Fatalf("UpdateModelRule: %v", err)
 	}
 	if !updated.Targets[1].Enabled {
-		t.Fatalf("UpdateRoute (new target): expected Enabled default-true, got false")
+		t.Fatalf("UpdateModelRule (new target): expected Enabled default-true, got false")
 	}
 }
 
-// TestRouteTarget_EnabledToggleRoundTrip verifies the per-target enable/disable
-// toggle flows through CreateRoute, UpdateRoute, and the read path without
+// TestModelRuleTarget_EnabledToggleRoundTrip verifies the per-target enable/disable
+// toggle flows through CreateModelRule, UpdateModelRule, and the read path without
 // disturbing other fields or the per-target counters.
-func TestRouteTarget_EnabledToggleRoundTrip(t *testing.T) {
+func TestModelRuleTarget_EnabledToggleRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 
-	r, err := s.CreateRoute(model.RouteInput{
+	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Toggle",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ProviderID: "p01", ModelName: "m1", Enabled: true},
 			{ProviderID: "p02", ModelName: "m2", Enabled: true},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateRoute: %v", err)
+		t.Fatalf("CreateModelRule: %v", err)
 	}
 	t0, t1 := r.Targets[0], r.Targets[1]
 
@@ -581,19 +646,19 @@ func TestRouteTarget_EnabledToggleRoundTrip(t *testing.T) {
 	}
 
 	// Flip t0 off, t1 stays on.
-	updated, err := s.UpdateRoute(r.ID, model.RouteInput{
+	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Toggle",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ID: t0.ID, ProviderID: "p01", ModelName: "m1", Enabled: false},
 			{ID: t1.ID, ProviderID: "p02", ModelName: "m2", Enabled: true},
 		},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRoute: %v", err)
+		t.Fatalf("UpdateModelRule: %v", err)
 	}
 
-	var got0, got1 model.RouteTarget
+	var got0, got1 model.ModelRuleTarget
 	for _, tg := range updated.Targets {
 		switch tg.ID {
 		case t0.ID:
@@ -616,9 +681,9 @@ func TestRouteTarget_EnabledToggleRoundTrip(t *testing.T) {
 	}
 
 	// Re-read to confirm the change is persisted, not just echoed.
-	reread, err := s.GetRoute(r.ID)
+	reread, err := s.GetModelRule(r.ID)
 	if err != nil {
-		t.Fatalf("GetRoute: %v", err)
+		t.Fatalf("GetModelRule: %v", err)
 	}
 	for _, tg := range reread.Targets {
 		if tg.ID == t0.ID && tg.Enabled {
@@ -630,16 +695,16 @@ func TestRouteTarget_EnabledToggleRoundTrip(t *testing.T) {
 	}
 
 	// Flip t0 back on.
-	reEnabled, err := s.UpdateRoute(r.ID, model.RouteInput{
+	reEnabled, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Toggle",
 		Enabled: true,
-		Targets: []model.RouteTarget{
+		Targets: []model.ModelRuleTarget{
 			{ID: t0.ID, ProviderID: "p01", ModelName: "m1", Enabled: true},
 			{ID: t1.ID, ProviderID: "p02", ModelName: "m2", Enabled: true},
 		},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRoute (re-enable): %v", err)
+		t.Fatalf("UpdateModelRule (re-enable): %v", err)
 	}
 	if !reEnabled.Targets[0].Enabled {
 		t.Fatalf("t0: expected Enabled=true after re-enable, got false")
@@ -822,14 +887,14 @@ func TestProviderTestHelpers(t *testing.T) {
 	}
 }
 
-// TestRouteTarget_MigrationRenameIdempotency covers the Phase-3 oracle fix:
+// TestRuleTargets_MigrationRenameIdempotency covers the Phase-3 oracle fix:
 // the per-target `enabled` column was originally added under migration
 // "009_route_target_enabled" and is now "010_route_target_enabled". A
 // pre-existing DB will have the column AND a _migrations row with the old
 // ID, so the renamed entry must:
 //   - not crash with "duplicate column name", and
 //   - be recorded under its new ID in _migrations.
-func TestRouteTarget_MigrationRenameIdempotency(t *testing.T) {
+func TestRuleTargets_MigrationRenameIdempotency(t *testing.T) {
 	dir, err := os.MkdirTemp("", "autoapi-mig-rename-*")
 	if err != nil {
 		t.Fatal(err)

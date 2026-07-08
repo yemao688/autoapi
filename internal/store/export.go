@@ -40,9 +40,9 @@ func (s *Store) exportAllJSON() ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("store: export all json: list api keys: %w", err)
 	}
-	routes, err := s.ListRoutes()
+	rules, err := s.ListModelRules()
 	if err != nil {
-		return nil, "", fmt.Errorf("store: export all json: list routes: %w", err)
+		return nil, "", fmt.Errorf("store: export all json: list model rules: %w", err)
 	}
 	settings, err := s.GetSettings()
 	if err != nil {
@@ -59,7 +59,7 @@ func (s *Store) exportAllJSON() ([]byte, string, error) {
 		"providers":     providers,
 		"models":        models,
 		"api_keys":      keys,
-		"routes":        routes,
+		"model_rules":   rules,
 		"settings":      settings,
 		"request_logs":  logs,
 		"exported_at":   time.Now().UnixMilli(),

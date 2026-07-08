@@ -53,6 +53,13 @@ function defaultSettings(): model.Settings {
       experimental: false,
       http_proxy: 'system',
     },
+    logging: {
+      enabled: true,
+      level: 'info',
+      max_size_mb: 10,
+      max_age_days: 7,
+      max_backups: 3,
+    },
   } as model.Settings
 }
 
@@ -282,6 +289,15 @@ watch(fetchedSettings, loadSettings, { once: true })
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
               <span>{{ t('settings.sections.advanced') }}</span>
+            </a>
+            <a
+              class="sub-nav-item"
+              :class="{ active: activeSection === 'logging' }"
+              href="#logging"
+              @click.prevent="scrollToSection('logging')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M9 13h6M9 17h6M9 9h2"/></svg>
+              <span>{{ t('settings.sections.logging') }}</span>
             </a>
             <a
               class="sub-nav-item"
@@ -715,6 +731,55 @@ watch(fetchedSettings, loadSettings, { once: true })
                   <span class="text-mono" style="font-size: 12px; color: var(--muted);"><span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">⌘</span> <span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">R</span></span>
                 </div>
               </div>
+            </div>
+          </section>
+
+          <section class="card" id="logging">
+            <div class="section-head">
+              <div>
+                <div class="section-title">{{ t('settings.logging.title') }}</div>
+                <div class="section-sub">{{ t('settings.logging.subtitle') }}</div>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="row-between" style="margin-bottom: 0;">
+                <div>
+                  <div class="field-label">{{ t('settings.logging.enabled') }}</div>
+                  <div class="field-help text-mono" style="font-size: 11.5px;">~/.autoapi/logs/autoapi.log</div>
+                </div>
+                <label class="toggle"><input type="checkbox" v-model="settings.logging.enabled" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
+              </div>
+            </div>
+            <div class="h-divider"></div>
+
+            <div class="field">
+              <div class="field-label">{{ t('settings.logging.level') }}</div>
+              <select class="select" style="max-width: 320px;" v-model="settings.logging.level" @change="markSettingsDirty">
+                <option value="error">{{ t('settings.logging.levelError') }}</option>
+                <option value="warn">{{ t('settings.logging.levelWarn') }}</option>
+                <option value="info">{{ t('settings.logging.levelInfo') }}</option>
+                <option value="debug">{{ t('settings.logging.levelDebug') }}</option>
+                <option value="trace">{{ t('settings.logging.levelTrace') }}</option>
+              </select>
+            </div>
+            <div class="h-divider"></div>
+
+            <div class="field">
+              <div class="field-label">{{ t('settings.logging.maxSizeMB') }}</div>
+              <input class="input mono" style="max-width: 160px;" type="number" min="1" v-model.number="settings.logging.max_size_mb" @input="markSettingsDirty">
+            </div>
+            <div class="h-divider"></div>
+
+            <div class="field">
+              <div class="field-label">{{ t('settings.logging.maxAgeDays') }}</div>
+              <input class="input mono" style="max-width: 160px;" type="number" min="1" v-model.number="settings.logging.max_age_days" @input="markSettingsDirty">
+            </div>
+            <div class="h-divider"></div>
+
+            <div class="field" style="margin-bottom: 0;">
+              <div class="field-label">{{ t('settings.logging.maxBackups') }}</div>
+              <input class="input mono" style="max-width: 160px;" type="number" min="0" v-model.number="settings.logging.max_backups" @input="markSettingsDirty">
             </div>
           </section>
 

@@ -64,9 +64,9 @@ const providerOptions = computed<ProviderOption[]>(() => {
   return [{ name: t('usage.status.all'), id: '' }, ...list.map(p => ({ name: p.provider_name, id: p.provider_id }))]
 })
 
-const { data: routesData, execute: fetchRoutes } = useApi(api.routes)
+const { data: modelRulesData, execute: fetchModelRules } = useApi(api.modelRules)
 const routeOptions = computed<RouteOption[]>(() => {
-  const list = routesData.value || []
+  const list = modelRulesData.value || []
   return [{ name: t('usage.status.all'), id: '' }, ...list.map(r => ({ name: r.name || r.id, id: r.id }))]
 })
 
@@ -313,7 +313,7 @@ const { handleKeydown: handleTabKeydown } = useTabKeyboard(
 
 onMounted(() => {
   void refreshAll()
-  void fetchRoutes().catch((e) => toast.push(e?.message || String(e), 'error'))
+  void fetchModelRules().catch((e) => toast.push(e?.message || String(e), 'error'))
   EventsOn('log:new', () => {
     if (activePane.value === 'logs') {
       void queryLogs()

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"autoapi/internal/api"
+	"autoapi/internal/logger"
 	"autoapi/internal/model"
 	"autoapi/internal/proxy"
 	"autoapi/internal/service"
@@ -23,6 +24,39 @@ func NewApp() *api.App {
 	st, err := store.New(ctx, store.StoreDeps{})
 	if err != nil {
 		log.Fatalf("FATAL: store initialization failed: %v", err)
+	}
+
+	// Initialise the persistent application logger as early as possible
+	// so that any startup error from the proxy / service / API layer is
+	// captured to disk for post-mortem. The log file lives next to the
+	// SQLite database so a single "show in Finder" reveals both. The
+	// log section is read from the stored settings (or the defaults
+	// baked into the store) so user changes survive a restart.
+	storageDir := st.StorageDir()
+	logPath := filepath.Join(storageDir, "logs", "autoapi.log")
+	{
+		loggingCfg := model.LoggingSettings{
+			Enabled:    true,
+			Level:      "info",
+			MaxSizeMB:  10,
+			MaxAgeDays: 7,
+			MaxBackups: 3,
+		}
+		if s, sErr := st.GetSettings(); sErr == nil && s != nil {
+			loggingCfg = s.Logging
+		}
+		// Stderr logs the failure; the user still sees it in the Wails
+		// console even when the rotating file cannot be created.
+		if err := logger.Init(logger.Config{
+			Enabled:    loggingCfg.Enabled,
+			Level:      loggingCfg.Level,
+			MaxSizeMB:  loggingCfg.MaxSizeMB,
+			MaxAgeDays: loggingCfg.MaxAgeDays,
+			MaxBackups: loggingCfg.MaxBackups,
+			Path:       logPath,
+		}); err != nil {
+			log.Printf("warning: logger.Init failed (%v); continuing with stderr-only", err)
+		}
 	}
 
 	prx := proxy.New(st, nil, func() *model.Settings {

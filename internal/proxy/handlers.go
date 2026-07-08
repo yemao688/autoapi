@@ -236,23 +236,30 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
+// handleModels returns the client-facing list of model names. The list is
+// driven by enabled model rules (each rule's Name is the model name) rather
+// than by the upstream lookup table, so /v1/models only shows models that
+// the operator has explicitly exposed through a rule.
 func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
-	models, err := p.store.ListModels("")
+	rules, err := p.store.ListModelRules()
 	if err != nil {
 		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list models")
 		return
 	}
-	data := make([]modelItem, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, m := range models {
-		if !m.Active {
+	data := make([]modelItem, 0, len(rules))
+	seen := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		if !rule.Enabled {
 			continue
 		}
-		if _, ok := seen[m.Name]; ok {
+		if rule.Name == "" {
 			continue
 		}
-		seen[m.Name] = struct{}{}
-		data = append(data, modelItem{ID: m.Name, Object: "model"})
+		if _, ok := seen[rule.Name]; ok {
+			continue
+		}
+		seen[rule.Name] = struct{}{}
+		data = append(data, modelItem{ID: rule.Name, Object: "model"})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{

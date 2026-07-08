@@ -48,7 +48,7 @@ type upstreamKeyProvider interface {
 // the constructor testable with a mock.
 type storeProxy interface {
 	ListProviders() ([]model.Provider, error)
-	ListRoutes() ([]model.Route, error)
+	ListModelRules() ([]model.ModelRule, error)
 	GetProvider(id string) (*model.Provider, error)
 	ListAPIKeys() ([]model.ApiKey, error)
 	GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error)
@@ -287,13 +287,13 @@ func (p *Proxy) currentSettings() *model.Settings {
 	return s
 }
 
-func (p *Proxy) loadRoutes() []model.Route {
-	routes, err := p.store.ListRoutes()
+func (p *Proxy) loadModelRules() []model.ModelRule {
+	rules, err := p.store.ListModelRules()
 	if err != nil {
-		slog.Error("proxy: failed to load routes", "err", err)
+		slog.Error("proxy: failed to load model rules", "err", err)
 		return nil
 	}
-	return routes
+	return rules
 }
 
 // authenticate validates the Bearer token against autoapi API keys. The token
@@ -355,10 +355,10 @@ func (p *Proxy) logRequestEntry(log *model.RequestLog) {
 }
 
 // resolveCandidates selects one or more provider/model candidates using the
-// route matcher, filtering out providers with an open circuit breaker.
+// model-rule matcher, filtering out providers with an open circuit breaker.
 func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
-	routes := p.loadRoutes()
-	defaultProviderID := p.currentSettings().Routing.DefaultProviderID
+	rules := p.loadModelRules()
+	settings := p.currentSettings().Routing
 
 	// Snapshot the breaker map to avoid racing with breakerFor writes.
 	p.breakersMu.RLock()
@@ -368,7 +368,7 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	p.breakersMu.RUnlock()
 
-	return selectCandidates(req, routes, defaultProviderID, breakers, p.store.GetProvider)
+	return selectCandidates(req, rules, settings.DefaultProviderID, settings.DefaultModel, breakers, p.store.GetProvider)
 }
 
 // breakerFor returns the circuit breaker for a provider, creating one if needed.
@@ -469,7 +469,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 				req.Host = upstreamURL.Host
 				req.Header.Del("Authorization")
 				req.Header.Set("Authorization", "Bearer "+upstreamKey)
-				req.Header.Set("X-Autoapi-Route", c.routeID)
+				req.Header.Set("X-Autoapi-Route", c.ruleID)
 				if req.Header.Get("Content-Type") == "" {
 					req.Header.Set("Content-Type", "application/json")
 				}
@@ -530,8 +530,8 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 				logEntry.ProviderID = c.provider.ID
 				logEntry.ProviderName = c.provider.Name
 				logEntry.Model = c.modelName
-				logEntry.RouteID = c.routeID
-				logEntry.RouteLabel = c.routeLabel
+				logEntry.RouteID = c.ruleID
+				logEntry.RouteLabel = c.ruleLabel
 				p.breakerFor(c.provider.ID).Record(true)
 				if c.targetID != "" {
 					if err := p.store.IncrementTargetStats(c.targetID, 1, 0); err != nil {
@@ -565,8 +565,8 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 				logEntry.ProviderID = c.provider.ID
 				logEntry.ProviderName = c.provider.Name
 				logEntry.Model = c.modelName
-				logEntry.RouteID = c.routeID
-				logEntry.RouteLabel = c.routeLabel
+				logEntry.RouteID = c.ruleID
+				logEntry.RouteLabel = c.ruleLabel
 				// No breaker record: client errors aren't provider failures.
 				return
 			case CategoryNonRetryable:
@@ -576,8 +576,8 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 				logEntry.ProviderID = c.provider.ID
 				logEntry.ProviderName = c.provider.Name
 				logEntry.Model = c.modelName
-				logEntry.RouteID = c.routeID
-				logEntry.RouteLabel = c.routeLabel
+				logEntry.RouteID = c.ruleID
+				logEntry.RouteLabel = c.ruleLabel
 				// Record breaker once on the (final) provider-side non-retryable.
 				if isCircuitBreakerFailure(attemptErr, buf.statusCode) {
 					p.breakerFor(c.provider.ID).Record(false)
@@ -625,8 +625,8 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 		logEntry.ProviderID = lastCandidate.provider.ID
 		logEntry.ProviderName = lastCandidate.provider.Name
 		logEntry.Model = lastCandidate.modelName
-		logEntry.RouteID = lastCandidate.routeID
-		logEntry.RouteLabel = lastCandidate.routeLabel
+		logEntry.RouteID = lastCandidate.ruleID
+		logEntry.RouteLabel = lastCandidate.ruleLabel
 	}
 }
 
@@ -682,8 +682,8 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 		logEntry.ProviderID = chosen.provider.ID
 		logEntry.ProviderName = chosen.provider.Name
 		logEntry.Model = chosen.modelName
-		logEntry.RouteID = chosen.routeID
-		logEntry.RouteLabel = chosen.routeLabel
+		logEntry.RouteID = chosen.ruleID
+		logEntry.RouteLabel = chosen.ruleLabel
 		return
 	}
 
@@ -710,7 +710,7 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 		req.Host = upstreamURL.Host
 		req.Header.Del("Authorization")
 		req.Header.Set("Authorization", "Bearer "+upstreamKey)
-		req.Header.Set("X-Autoapi-Route", chosen.routeID)
+		req.Header.Set("X-Autoapi-Route", chosen.ruleID)
 		if req.Header.Get("Content-Type") == "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -732,8 +732,8 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 		logEntry.ProviderID = chosen.provider.ID
 		logEntry.ProviderName = chosen.provider.Name
 		logEntry.Model = chosen.modelName
-		logEntry.RouteID = chosen.routeID
-		logEntry.RouteLabel = chosen.routeLabel
+		logEntry.RouteID = chosen.ruleID
+		logEntry.RouteLabel = chosen.ruleLabel
 		// Wrap body to capture TTFT (time to first token/byte). Pure
 		// passthrough — no buffering — so FlushInterval=-1 real-time
 		// flushing is preserved. ReverseProxy calls Body.Close() before
@@ -774,8 +774,8 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 			logEntry.ProviderID = chosen.provider.ID
 			logEntry.ProviderName = chosen.provider.Name
 			logEntry.Model = chosen.modelName
-			logEntry.RouteID = chosen.routeID
-			logEntry.RouteLabel = chosen.routeLabel
+			logEntry.RouteID = chosen.ruleID
+			logEntry.RouteLabel = chosen.ruleLabel
 			logEntry.LatencyMs = int(time.Now().UnixMilli() - logEntry.Timestamp)
 			if logEntry.StatusCode == 0 {
 				logEntry.StatusCode = http.StatusInternalServerError
@@ -791,8 +791,8 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	logEntry.ProviderID = chosen.provider.ID
 	logEntry.ProviderName = chosen.provider.Name
 	logEntry.Model = chosen.modelName
-	logEntry.RouteID = chosen.routeID
-	logEntry.RouteLabel = chosen.routeLabel
+	logEntry.RouteID = chosen.ruleID
+	logEntry.RouteLabel = chosen.ruleLabel
 
 	// Connection failed before headers arrived — ModifyResponse was not called
 	// and upstreamStatus stayed 0. Classify the failure and decide whether to

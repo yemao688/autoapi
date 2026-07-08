@@ -63,30 +63,30 @@ export const api = {
     return wails.SetModelsActive(providerId, modelNames, active) as Promise<void>
   },
 
-  // Routes
-  routes: (): Promise<model.Route[]> => {
+  // Model rules
+  modelRules: (): Promise<model.ModelRule[]> => {
     ensureWails()
-    return wails.ListRoutes() as Promise<model.Route[]>
+    return wails.ListModelRules() as Promise<model.ModelRule[]>
   },
-  getRoute: (id: string): Promise<model.Route> => {
+  getModelRule: (id: string): Promise<model.ModelRule> => {
     ensureWails()
-    return wails.GetRoute(id) as Promise<model.Route>
+    return wails.GetModelRule(id) as Promise<model.ModelRule>
   },
-  createRoute: (input: model.RouteInput): Promise<model.Route> => {
+  createModelRule: (input: model.ModelRuleInput): Promise<model.ModelRule> => {
     ensureWails()
-    return wails.CreateRoute(input) as Promise<model.Route>
+    return wails.CreateModelRule(input) as Promise<model.ModelRule>
   },
-  updateRoute: (id: string, input: model.RouteInput): Promise<model.Route> => {
+  updateModelRule: (id: string, input: model.ModelRuleInput): Promise<model.ModelRule> => {
     ensureWails()
-    return wails.UpdateRoute(id, input) as Promise<model.Route>
+    return wails.UpdateModelRule(id, input) as Promise<model.ModelRule>
   },
-  deleteRoute: (id: string): Promise<void> => {
+  deleteModelRule: (id: string): Promise<void> => {
     ensureWails()
-    return wails.DeleteRoute(id) as Promise<void>
+    return wails.DeleteModelRule(id) as Promise<void>
   },
-  reorderRoutes: (ids: string[]): Promise<void> => {
+  reorderModelRules: (ids: string[]): Promise<void> => {
     ensureWails()
-    return wails.ReorderRoutes(ids) as Promise<void>
+    return wails.ReorderModelRules(ids) as Promise<void>
   },
 
   // API Keys

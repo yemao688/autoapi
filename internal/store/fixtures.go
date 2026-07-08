@@ -105,77 +105,52 @@ func seedIfEmpty(db *sql.DB) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Routes (4) with conditions and targets
+	// Model rules (client-facing model names mapped to upstream provider/model
+	// targets). Conditions were removed in the route-rule → model-rule
+	// refactor: a rule matches by exact Name equality, so there is nothing
+	// to seed but the rules themselves and their targets.
 	// -----------------------------------------------------------------------
-	type condSeed struct {
-		field, operator, value string
-	}
 	type targSeed struct {
 		providerID, modelName string
 	}
-	type routeSeed struct {
-		id, name, desc string
-		priority       int
-		enabled        bool
-		conds          []condSeed
-		targets        []targSeed
+	type ruleSeed struct {
+		id, name string
+		enabled  bool
+		targets  []targSeed
 	}
-	routes := []routeSeed{
+	rules := []ruleSeed{
 		{
-			id: "r01", name: "High-priority tasks → GPT-4o", desc: "Route complex reasoning tasks to OpenAI GPT-4o for highest quality",
-			priority: 1, enabled: true,
-			conds: []condSeed{
-				{field: "task", operator: "matches", value: "reasoning,code,analysis"},
-				{field: "estimated_tokens", operator: "gt", value: "2000"},
-			},
+			id: "r01", name: "gpt-4o", enabled: true,
 			targets: []targSeed{
 				{providerID: "p01", modelName: "gpt-4o"},
 			},
 		},
 		{
-			id: "r02", name: "Creative writing → Claude", desc: "Route creative and writing tasks to Anthropic Claude",
-			priority: 2, enabled: true,
-			conds: []condSeed{
-				{field: "task", operator: "matches", value: "writing,creative,translation"},
-			},
+			id: "r02", name: "claude-3.5-sonnet", enabled: true,
 			targets: []targSeed{
 				{providerID: "p02", modelName: "claude-3.5-sonnet"},
 			},
 		},
 		{
-			id: "r03", name: "Cost-sensitive → DeepSeek", desc: "Route high-volume/cost-sensitive queries to DeepSeek",
-			priority: 3, enabled: true,
-			conds: []condSeed{
-				{field: "header.x-priority", operator: "equals", value: "low"},
-				{field: "estimated_tokens", operator: "lt", value: "500"},
-			},
+			id: "r03", name: "deepseek-chat", enabled: true,
 			targets: []targSeed{
 				{providerID: "p03", modelName: "deepseek-chat"},
 			},
 		},
 		{
-			id: "r04", name: "Chinese content → Moonshot", desc: "Route Chinese-language queries to Moonshot for better accuracy",
-			priority: 4, enabled: true,
-			conds: []condSeed{
-				{field: "model", operator: "matches", value: "moonshot-*"},
-			},
+			id: "r04", name: "moonshot-v1", enabled: true,
 			targets: []targSeed{
 				{providerID: "p04", modelName: "moonshot-v1"},
 			},
 		},
 	}
-	for _, r := range routes {
-		db.Exec(`INSERT INTO routes (id, name, description, priority, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
-			r.id, r.name, r.desc, r.priority, boolInt(r.enabled), now, now)
-		for i, c := range r.conds {
-			cid := fmt.Sprintf("%s-c%d", r.id, i+1)
-			db.Exec(`INSERT INTO route_conditions (id, route_id, field, operator, value) VALUES (?,?,?,?,?)`,
-				cid, r.id, c.field, c.operator, c.value)
-		}
+	for _, r := range rules {
+		db.Exec(`INSERT INTO model_rules (id, name, enabled, created_at, updated_at) VALUES (?,?,?,?,?)`,
+			r.id, r.name, boolInt(r.enabled), now, now)
 		for i, t := range r.targets {
 			tid := fmt.Sprintf("%s-t%d", r.id, i+1)
-			db.Exec(`INSERT INTO route_targets (id, route_id, provider_id, model_name, tier) VALUES (?,?,?,?,?)`,
-				tid, r.id, t.providerID, t.modelName, i)
+			db.Exec(`INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, enabled) VALUES (?,?,?,?,?,?)`,
+				tid, r.id, t.providerID, t.modelName, i, 1)
 		}
 	}
 
@@ -192,11 +167,11 @@ func seedIfEmpty(db *sql.DB) {
 		"p03": {"deepseek-chat", "deepseek-reasoner"},
 		"p04": {"moonshot-v1"},
 	}
-	routeLabels := map[string]string{
-		"r01": "High-priority → GPT-4o",
-		"r02": "Creative → Claude",
-		"r03": "Cost-sensitive → DeepSeek",
-		"r04": "Chinese → Moonshot",
+	ruleLabels := map[string]string{
+		"r01": "gpt-4o",
+		"r02": "claude-3.5-sonnet",
+		"r03": "deepseek-chat",
+		"r04": "moonshot-v1",
 	}
 
 	// Daily patterns: more activity on weekdays, less on weekends
@@ -250,7 +225,7 @@ func seedIfEmpty(db *sql.DB) {
 			if i%5 != 0 {
 				rnames := []string{"r01", "r02", "r03", "r04"}
 				rid = rnames[i%4]
-				rlabel = routeLabels[rid]
+				rlabel = ruleLabels[rid]
 			}
 
 			idStr := fmt.Sprintf("log-%05d", logID)
