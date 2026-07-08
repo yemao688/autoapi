@@ -553,6 +553,129 @@ func TestQueryLogsSQLInjection(t *testing.T) {
 	}
 }
 
+// ----- Chain + diagnostics round-trip -----
+//
+// TestRequestLogChainRoundTrip covers the new migration 012 columns:
+// chain_json, user_agent, client_ip, request_id. The test inserts a
+// log with a populated chain and request context, queries it back, and
+// verifies the Go-side decoding produces a non-empty Chain slice with
+// the right number of attempts and the per-attempt fields intact.
+// This guards the JSON-marshalling + Scan pair in QueryLogs and
+// InsertRequestLog against regressions in either direction.
+
+func TestRequestLogChainRoundTrip(t *testing.T) {
+	s := newLogsTestStore(t)
+
+	chain := []model.RequestLogChainEntry{
+		{
+			AttemptOrder: 1,
+			ProviderID:   "p-openai",
+			ProviderName: "OpenAI",
+			ModelName:    "gpt-4o",
+			TargetID:     "t-1",
+			Status:       "retryable",
+			StatusCode:   429,
+			Error:        "rate limited",
+			LatencyMs:    120,
+		},
+		{
+			AttemptOrder: 2,
+			ProviderID:   "p-deepseek",
+			ProviderName: "DeepSeek",
+			ModelName:    "deepseek-chat",
+			TargetID:     "t-2",
+			Status:       "success",
+			StatusCode:   200,
+			Error:        "",
+			LatencyMs:    350,
+		},
+	}
+
+	in := model.RequestLog{
+		ID:         "log-chain",
+		Timestamp:  1700000000000,
+		StatusCode: 200,
+		ProviderID: "p-deepseek",
+		// The final provider/model/route fields should match the last chain
+		// entry. The proxy sets them from the successful candidate, so a
+		// test that stores them in line with the last chain entry models the
+		// real data shape and proves the columns are not lost in transit.
+		ProviderName: "DeepSeek",
+		Model:        "deepseek-chat",
+		RouteID:      "r-fallback",
+		RouteLabel:   "Fallback",
+		APIKeyID:     "key-1",
+		InputTokens:  10,
+		OutputTokens: 20,
+		UserAgent:    "curl/8.0",
+		ClientIP:     "192.168.1.5",
+		RequestID:    "req-abc",
+		Chain:        chain,
+	}
+	if err := s.InsertRequestLog(in); err != nil {
+		t.Fatalf("InsertRequestLog: %v", err)
+	}
+
+	logs, total, err := s.QueryLogs(model.LogQuery{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if total != 1 || len(logs) != 1 {
+		t.Fatalf("expected 1 log, got total=%d len=%d", total, len(logs))
+	}
+	got := logs[0]
+
+	if got.UserAgent != "curl/8.0" {
+		t.Fatalf("UserAgent: want %q, got %q", "curl/8.0", got.UserAgent)
+	}
+	if got.ClientIP != "192.168.1.5" {
+		t.Fatalf("ClientIP: want %q, got %q", "192.168.1.5", got.ClientIP)
+	}
+	if got.RequestID != "req-abc" {
+		t.Fatalf("RequestID: want %q, got %q", "req-abc", got.RequestID)
+	}
+	if len(got.Chain) != 2 {
+		t.Fatalf("Chain: want 2 entries, got %d", len(got.Chain))
+	}
+	if got.Chain[0].Status != "retryable" || got.Chain[0].StatusCode != 429 {
+		t.Fatalf("Chain[0]: want retryable/429, got %s/%d", got.Chain[0].Status, got.Chain[0].StatusCode)
+	}
+	if got.Chain[1].Status != "success" || got.Chain[1].ProviderID != "p-deepseek" {
+		t.Fatalf("Chain[1]: want success/p-deepseek, got %s/%s", got.Chain[1].Status, got.Chain[1].ProviderID)
+	}
+	if got.Chain[0].LatencyMs != 120 || got.Chain[1].LatencyMs != 350 {
+		t.Fatalf("Chain latencies: want [120, 350], got [%d, %d]", got.Chain[0].LatencyMs, got.Chain[1].LatencyMs)
+	}
+}
+
+// TestRequestLogEmptyChainPersistsAsEmpty makes sure that a log row with
+// no chain (the pre-migration-012 shape, or streaming single-attempt
+// requests) round-trips as a nil/empty Chain slice and never as a
+// "null" JSON blob. The store treats an empty chain as a sentinel
+// empty string on disk so SQLite never has to distinguish "" from "null".
+
+func TestRequestLogEmptyChainPersistsAsEmpty(t *testing.T) {
+	s := newLogsTestStore(t)
+	in := model.RequestLog{
+		ID:        "log-no-chain",
+		Timestamp: 1700000001000,
+		Chain:     nil,
+	}
+	if err := s.InsertRequestLog(in); err != nil {
+		t.Fatalf("InsertRequestLog: %v", err)
+	}
+	logs, _, err := s.QueryLogs(model.LogQuery{Page: 1, PageSize: 5})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	if len(logs[0].Chain) != 0 {
+		t.Fatalf("expected empty chain, got %d entries", len(logs[0].Chain))
+	}
+}
+
 // ----- helpers -----
 
 func equalStringSlices(a, b []string) bool {

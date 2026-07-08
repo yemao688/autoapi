@@ -289,6 +289,22 @@ ALTER TABLE rule_targets_new RENAME TO rule_targets;
 CREATE INDEX IF NOT EXISTS idx_rule_targets_rule_tier ON rule_targets(rule_id, tier);
 `,
 	},
+	{
+		// Request-log diagnostics. Captures the per-attempt history of a
+		// single proxied request (chain_json) plus the request context
+		// (user_agent, client_ip, request_id) so the UI can show a per-row
+		// detail panel and operators can correlate a log entry with the
+		// matching structured slog line via request_id. Existing rows
+		// backfill to the empty string (no chain, no metadata) so the
+		// migration is a safe schema bump.
+		ID: "012_request_log_details",
+		SQL: `
+ALTER TABLE request_logs ADD COLUMN chain_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN user_agent TEXT NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN client_ip TEXT NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN request_id TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have

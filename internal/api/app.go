@@ -121,8 +121,8 @@ type ProxyService interface {
 // App is the single struct bound to the Wails runtime. All methods here are
 // auto-generated as TypeScript bindings under frontend/wailsjs/go/main/App.
 type App struct {
-	ctx   context.Context
-	deps  Deps
+	ctx  context.Context
+	deps Deps
 }
 
 // NewApp constructs an App with the given dependencies. Pass Deps{} (zero) to

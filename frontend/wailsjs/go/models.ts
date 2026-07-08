@@ -127,6 +127,34 @@ export namespace model {
 	        this.api_address = source["api_address"];
 	    }
 	}
+	export class RequestLogChainEntry {
+	    attempt_order: number;
+	    provider_id: string;
+	    provider_name: string;
+	    model_name: string;
+	    target_id: string;
+	    status: string;
+	    status_code: number;
+	    error: string;
+	    latency_ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RequestLogChainEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.attempt_order = source["attempt_order"];
+	        this.provider_id = source["provider_id"];
+	        this.provider_name = source["provider_name"];
+	        this.model_name = source["model_name"];
+	        this.target_id = source["target_id"];
+	        this.status = source["status"];
+	        this.status_code = source["status_code"];
+	        this.error = source["error"];
+	        this.latency_ms = source["latency_ms"];
+	    }
+	}
 	export class RequestLog {
 	    id: string;
 	    timestamp: number;
@@ -146,6 +174,10 @@ export namespace model {
 	    route_label: string;
 	    api_key_id: string;
 	    error?: string;
+	    user_agent: string;
+	    client_ip: string;
+	    request_id: string;
+	    chain: RequestLogChainEntry[];
 	
 	    static createFrom(source: any = {}) {
 	        return new RequestLog(source);
@@ -171,7 +203,29 @@ export namespace model {
 	        this.route_label = source["route_label"];
 	        this.api_key_id = source["api_key_id"];
 	        this.error = source["error"];
+	        this.user_agent = source["user_agent"];
+	        this.client_ip = source["client_ip"];
+	        this.request_id = source["request_id"];
+	        this.chain = this.convertValues(source["chain"], RequestLogChainEntry);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Provider {
 	    id: string;
@@ -639,6 +693,7 @@ export namespace model {
 	        this.models = source["models"];
 	    }
 	}
+	
 	
 	export class RoutingSettings {
 	    default_provider_id: string;

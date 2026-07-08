@@ -409,9 +409,9 @@ func TestModelRuleUpdatePreservesTargetCounters(t *testing.T) {
 		t.Fatalf("GetModelRule (pre): %v", err)
 	}
 	want := []struct {
-		id              string
-		model           string
-		hit, fail       int64
+		id        string
+		model     string
+		hit, fail int64
 	}{
 		{m1.ID, "m1", 5, 2},
 		{m2.ID, "m2", 3, 7},
