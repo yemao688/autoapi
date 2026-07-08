@@ -555,11 +555,22 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 			proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
 			proxy.BufferPool = p.bufferPool
 			proxy.ErrorLog = p.errorLog
-			// Share the proxy's transport so the upstream header timeout
-			// applies to non-streaming retries too (otherwise a hung
-			// upstream would block a retryable attempt until the client
-			// gave up).
-			proxy.Transport = p.transport
+			// Per-target ResponseHeaderTimeout: when the target has a
+			// non-zero timeout, clone p.transport and override the
+			// header deadline. Non-streaming has no first-byte concept,
+			// so ResponseHeaderTimeout is the right knob. When c.timeout
+			// is 0 we keep the shared transport (with its 30s default).
+			if c.timeout > 0 {
+				if t1, ok := p.transport.(*http.Transport); ok {
+					clone := t1.Clone()
+					clone.ResponseHeaderTimeout = c.timeout
+					proxy.Transport = clone
+				} else {
+					proxy.Transport = p.transport
+				}
+			} else {
+				proxy.Transport = p.transport
+			}
 
 			proxy.Director = func(req *http.Request) {
 				req.URL.Scheme = upstreamURL.Scheme
@@ -809,18 +820,31 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 
 // forwardStream proxies a streaming request to one of the available
 // candidates. It performs best-effort failover and per-target retry BEFORE
-// committing the first byte to the client: each upstream attempt is run
-// through the proxy's transport with the configured ResponseHeaderTimeout,
-// and only when a 2xx response is received do we copy headers and start
-// streaming the body. This is safe because the client has not seen any
-// response yet, so we can still abandon the attempt and try the next
-// target.
+// committing the first byte to the client: each upstream attempt runs under
+// a per-candidate first-byte timeout (Option A: single cumulative deadline
+// = headers arrival + first byte read), and only when a 2xx response is
+// received do we copy headers and start streaming the body. After the
+// 2xx commit, failover stops — the client has already seen the status — and
+// the upstream body is forwarded chunk-by-chunk in real time (http.Flusher
+// after every Write, preserving SSE compatibility).
 //
-// Real-time chunks are flushed to the client as they arrive
-// (http.Flusher.Flush after every Write), preserving SSE compatibility.
-// Time to first token/byte (TTFT) is captured by wrapping resp.Body in
-// firstByteTrackingReadCloser, which is a pure passthrough wrapper —
-// no buffering — so it does not affect real-time flushing.
+// True pass-through: there is no buffered body. The first byte through
+// the wrapper triggers a single point of success (breaker Record(true),
+// hit counter, provider health) so we never double-count. The SSE usage
+// parser (streamUsageAccumulator) processes data lines incrementally while
+// chunks are forwarded to the client; the [DONE] marker is observed via
+// Done() — if the body closes before [DONE], the breaker is penalized
+// once via Record(false). Client disconnects (broken pipe writing to the
+// client) do NOT penalize the provider.
+//
+// Per-chain TTFT/latency semantics:
+//   - Failed chain entry: LatencyMs = attempt wall-clock; FirstTokenMs = 0.
+//   - Success chain entry: LatencyMs = full stream wall-clock;
+//     FirstTokenMs = first-byte time within the success attempt.
+//   - Top-level logEntry.FirstTokenMs = Σ all prior failed chain
+//     LatencyMs + success chain FirstTokenMs. (Sum is computed in
+//     forwardStream; handler.go sets the top-level LatencyMs as the
+//     overall wall-clock and never needs to be touched here.)
 //
 // Once we start streaming (i.e. headers are committed), we do NOT retry:
 // the client has already seen the response status, so failover would
@@ -832,12 +856,12 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	var lastStatus int
 	var lastCandidate candidate
 	attemptOrder := 0
-
-	// httpStreamClient is created once and reused. The shared transport
-	// carries the ResponseHeaderTimeout (see upstreamResponseHeaderTimeout)
-	// so a hung upstream fails the attempt quickly, leaving room for a
-	// failover to the next candidate.
-	client := &http.Client{Transport: p.transport}
+	// firstByteCumulativeMs accumulates the LatencyMs of every failed
+	// chain entry (across all candidates and all per-target retries) so
+	// the top-level logEntry.FirstTokenMs can be computed as
+	// "Σ failed chain latencies + success chain FirstTokenMs" per the
+	// oracle-approved design.
+	firstByteCumulativeMs := 0
 
 	for _, c := range candidates {
 		lastCandidate = c
@@ -913,14 +937,12 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 			continue
 		}
 
-		// Per-target retry loop. Each iteration is a fresh
-		// http.Client.Do call (against the same upstreamURL with the same
-		// body). We retry only on CategoryRetryable and only up to
-		// c.maxRetries additional attempts, so a target with MaxRetries=0
-		// gets exactly one attempt.
+		// Per-target retry loop. Each iteration is a fresh streamAttempt
+		// call (one upstream HTTP attempt) against the same upstreamURL
+		// with the same body. We retry only on CategoryRetryable and only
+		// up to c.maxRetries additional attempts, so a target with
+		// MaxRetries=0 gets exactly one attempt.
 		var succeeded bool
-		var finalCat ErrorCategory
-		var finalAttemptErr error
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
 			if attempt > 0 && !p.breakerFor(c.provider.ID).Allow() {
 				slog.Debug("proxy: stream circuit opened mid-retry, falling through", "provider", c.provider.Name, "attempt", attempt)
@@ -939,251 +961,51 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 				break
 			}
 
-			attemptReq := r.Clone(r.Context())
-			attemptReq.URL = cloneURL(upstreamURL)
-			attemptReq.Host = upstreamURL.Host
-			attemptReq.RequestURI = "" // outbound requests must have an empty RequestURI
-			attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
-			attemptReq.ContentLength = int64(len(rewrittenBody))
-			attemptReq.Header = r.Header.Clone()
-			attemptReq.Header.Del("Authorization")
-			attemptReq.Header.Set("Authorization", "Bearer "+upstreamKey)
-			attemptReq.Header.Set("X-Autoapi-Route", c.ruleID)
-			attemptReq.Header.Del("Transfer-Encoding")
-			if attemptReq.Header.Get("Content-Type") == "" {
-				attemptReq.Header.Set("Content-Type", "application/json")
-			}
-			attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
+			result, newOrder := p.streamAttempt(r.Context(), w, r, c, upstreamKey, rewrittenBody, upstreamURL, attemptOrder, inputEstimate, logEntry)
+			attemptOrder = newOrder
 
-			attemptStart := time.Now()
-			resp, doErr := client.Do(attemptReq)
-			latencyMs := int(time.Since(attemptStart).Milliseconds())
-
-			if doErr != nil {
-				// Network / transport error before any headers arrived.
-				finalCat = CategorizeError(doErr, 0)
-				finalAttemptErr = doErr
-				if isTimeoutError(doErr) {
-					slog.Info("proxy: stream upstream header timeout",
-						"provider", c.provider.Name,
-						"model", c.modelName,
-						"attempt", attempt,
-						"err", doErr)
+			switch result.Status {
+			case "success":
+				// Top-level FirstTokenMs = Σ prior failed chain
+				// LatencyMs + success chain FirstTokenMs.
+				logEntry.FirstTokenMs = firstByteCumulativeMs + result.FirstTokenMs
+				logEntry.StatusCode = result.StatusCode
+				succeeded = true
+				return
+			case "client_abort":
+				logEntry.StatusCode = result.StatusCode
+				logEntry.Error = result.Error
+				succeeded = true
+				return
+			case "non_retryable":
+				logEntry.StatusCode = result.StatusCode
+				logEntry.Error = result.Error
+				succeeded = true
+				return
+			case "retryable":
+				firstByteCumulativeMs += result.LatencyMs
+				if result.StatusCode != 0 {
+					lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, result.StatusCode)
+					lastStatus = result.StatusCode
 				} else {
-					slog.Debug("proxy: stream attempt transport error",
-						"provider", c.provider.Name,
-						"model", c.modelName,
-						"attempt", attempt,
-						"category", finalCat,
-						"err", doErr)
-				}
-				switch finalCat {
-				case CategoryClientAbort:
-					// The client canceled mid-request. Do not penalize
-					// the provider; return without writing anything to
-					// the client (its connection is gone).
-					logEntry.StatusCode = statusClientClosed
-					logEntry.Error = "client disconnected: " + doErr.Error()
-					attemptOrder++
-					logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-						AttemptOrder: attemptOrder,
-						ProviderID:   c.provider.ID,
-						ProviderName: c.provider.Name,
-						ModelName:    c.modelName,
-						TargetID:     c.targetID,
-						Status:       "client_abort",
-						StatusCode:   statusClientClosed,
-						Error:        logEntry.Error,
-						LatencyMs:    latencyMs,
-					})
-					return
-				case CategoryNonRetryable:
-					// Should be rare for transport errors, but handle it
-					// for completeness.
-					p.writeError(w, http.StatusBadGateway, "upstream_error", doErr.Error())
-					logEntry.StatusCode = http.StatusBadGateway
-					logEntry.Error = doErr.Error()
-					logEntry.ProviderID = c.provider.ID
-					logEntry.ProviderName = c.provider.Name
-					logEntry.Model = c.modelName
-					logEntry.RouteID = c.ruleID
-					logEntry.RouteLabel = c.ruleLabel
-					attemptOrder++
-					logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-						AttemptOrder: attemptOrder,
-						ProviderID:   c.provider.ID,
-						ProviderName: c.provider.Name,
-						ModelName:    c.modelName,
-						TargetID:     c.targetID,
-						Status:       "non_retryable",
-						StatusCode:   http.StatusBadGateway,
-						Error:        doErr.Error(),
-						LatencyMs:    latencyMs,
-					})
-					return
-				case CategoryRetryable:
-					lastErr = doErr
+					lastErr = fmt.Errorf("upstream %s: %s", c.provider.Name, result.Error)
 					lastStatus = 0
-					if c.targetID != "" {
-						if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
-							slog.Error("proxy: increment target failure count (stream)", "err", err)
-						}
-					}
-					attemptOrder++
-					logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-						AttemptOrder: attemptOrder,
-						ProviderID:   c.provider.ID,
-						ProviderName: c.provider.Name,
-						ModelName:    c.modelName,
-						TargetID:     c.targetID,
-						Status:       "retryable",
-						StatusCode:   0,
-						Error:        doErr.Error(),
-						LatencyMs:    latencyMs,
-					})
-					slog.Debug("proxy: stream retrying same target",
-						"provider", c.provider.Name,
-						"model", c.modelName,
-						"attempt", attempt,
-						"maxRetries", c.maxRetries)
-					continue
 				}
-			}
-
-			// We have a response with headers. Read the body up front so
-			// we can decide between streaming (2xx) and short-circuit
-			// (non-2xx) before writing anything to the client.
-			upstreamStatus := resp.StatusCode
-			respBody, readErr := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if readErr != nil {
-				// Body read failed after headers. Treat as a transport
-				// error: classify and decide retry vs. fail.
-				finalCat = CategorizeError(readErr, upstreamStatus)
-				finalAttemptErr = readErr
-				lastErr = readErr
-				lastStatus = upstreamStatus
 				if c.targetID != "" {
 					if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
 						slog.Error("proxy: increment target failure count (stream)", "err", err)
 					}
 				}
-				attemptOrder++
-				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-					AttemptOrder: attemptOrder,
-					ProviderID:   c.provider.ID,
-					ProviderName: c.provider.Name,
-					ModelName:    c.modelName,
-					TargetID:     c.targetID,
-					Status:       "retryable",
-					StatusCode:   upstreamStatus,
-					Error:        readErr.Error(),
-					LatencyMs:    latencyMs,
-				})
-				slog.Debug("proxy: stream body read error",
+				slog.Debug("proxy: stream retrying same target",
 					"provider", c.provider.Name,
 					"model", c.modelName,
 					"attempt", attempt,
-					"status", upstreamStatus,
-					"err", readErr)
+					"maxRetries", c.maxRetries)
 				continue
-			}
-
-			// 2xx: stream the body to the client with real-time
-			// flushing. After this point, no further retry is possible:
-			// the client has already seen the upstream status.
-			if upstreamStatus < 400 {
-				slog.Debug("proxy: stream upstream success",
-					"provider", c.provider.Name,
-					"model", c.modelName,
-					"attempt", attempt,
-					"status", upstreamStatus)
-				streamErr := p.writeStreamSuccess(w, r, c, resp, respBody, inputEstimate, logEntry)
-
-				// Capture chain entry for the success path. Latency for
-				// the chain entry covers the full attempt including
-				// streaming the body to the client, since that's what
-				// the user actually waited for.
-				attemptLatencyMs := int(time.Since(attemptStart).Milliseconds())
-				attemptOrder++
-				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-					AttemptOrder: attemptOrder,
-					ProviderID:   c.provider.ID,
-					ProviderName: c.provider.Name,
-					ModelName:    c.modelName,
-					TargetID:     c.targetID,
-					Status:       "success",
-					StatusCode:   upstreamStatus,
-					Error:        "",
-					LatencyMs:    attemptLatencyMs,
-				})
-				if streamErr != nil && isClientDisconnect(streamErr) {
-					// Mid-stream client abort: do not penalize the
-					// provider, mark the request closed by the client.
-					logEntry.StatusCode = statusClientClosed
-					logEntry.Error = "client disconnected: " + streamErr.Error()
-					slog.Warn("proxy: stream client disconnect",
-						"provider", c.provider.Name,
-						"model", c.modelName,
-						"err", streamErr.Error())
-				}
-				succeeded = true
+			default:
+				slog.Error("proxy: stream unknown attempt status", "status", result.Status)
 				return
 			}
-
-			// Non-2xx upstream: classify the response and decide whether
-			// to retry on the same target, fall through to the next
-			// candidate, or fail immediately to the client.
-			cat := CategorizeError(nil, upstreamStatus)
-			finalCat = cat
-			finalAttemptErr = nil
-			lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, upstreamStatus)
-			lastStatus = upstreamStatus
-			slog.Debug("proxy: stream upstream non-2xx",
-				"provider", c.provider.Name,
-				"model", c.modelName,
-				"attempt", attempt,
-				"status", upstreamStatus,
-				"category", cat)
-
-			if cat == CategoryNonRetryable || cat == CategoryClientAbort {
-				// Non-retryable (4xx hard) or client abort. Write the
-				// upstream error verbatim to the client and return.
-				p.writeStreamError(w, upstreamStatus, resp.Header, respBody, logEntry, c, attemptOrder+1, latencyMs, "non_retryable", lastErr.Error())
-				if isCircuitBreakerFailure(nil, upstreamStatus) {
-					p.breakerFor(c.provider.ID).Record(false)
-					if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
-						slog.Error("proxy: update provider health", "err", err)
-					}
-				}
-				return
-			}
-
-			// CategoryRetryable: record the failed attempt and loop
-			// for another try (or fall through to the next candidate if
-			// we've exhausted maxRetries).
-			if c.targetID != "" {
-				if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
-					slog.Error("proxy: increment target failure count (stream)", "err", err)
-				}
-			}
-			attemptOrder++
-			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-				AttemptOrder: attemptOrder,
-				ProviderID:   c.provider.ID,
-				ProviderName: c.provider.Name,
-				ModelName:    c.modelName,
-				TargetID:     c.targetID,
-				Status:       "retryable",
-				StatusCode:   upstreamStatus,
-				Error:        lastErr.Error(),
-				LatencyMs:    latencyMs,
-			})
-			slog.Debug("proxy: stream retrying same target",
-				"provider", c.provider.Name,
-				"model", c.modelName,
-				"attempt", attempt,
-				"maxRetries", c.maxRetries)
 		}
 
 		if succeeded {
@@ -1193,7 +1015,14 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 		// Exhausted retries on this candidate (or breaker opened
 		// mid-retry). Record breaker once on the final outcome, then
 		// fall through to the next candidate.
-		if finalCat == CategoryRetryable && isCircuitBreakerFailure(finalAttemptErr, lastStatus) {
+		if isCircuitBreakerFailure(nil, lastStatus) {
+			p.breakerFor(c.provider.ID).Record(false)
+			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
+				slog.Error("proxy: update provider health", "err", err)
+			}
+		} else if lastStatus == 0 && lastErr != nil && isNetError(lastErr) {
+			// Pure transport failure (refused, timeout) — counts as
+			// circuit-breaker failure but with no HTTP status code.
 			p.breakerFor(c.provider.ID).Record(false)
 			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
 				slog.Error("proxy: update provider health", "err", err)
@@ -1230,121 +1059,419 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	}
 }
 
-// writeStreamSuccess copies the upstream response headers + body to the
-// client with real-time flushing. It returns the read error from the
-// streaming copy, if any, so the caller can decide whether to penalize
-// the provider (a network mid-stream error) or treat the abort as a
-// client-side disconnect.
+// streamAttempt performs ONE upstream streaming HTTP attempt under a
+// per-candidate first-byte timeout (Option A: single cumulative deadline
+// = headers arrival + first byte read). It owns the per-attempt chain
+// entry and the breaker / hit / health side effects.
 //
-// The function also drives the TTFT timer, the success breaker/hit
-// counters, and the logEntry status / provider fields so the caller's
-// post-ServeHTTP bookkeeping is minimal.
-func (p *Proxy) writeStreamSuccess(w http.ResponseWriter, r *http.Request, c candidate, resp *http.Response, respBody []byte, inputEstimate int, logEntry *model.RequestLog) error {
-	// Set provider/model fields NOW (not just after streaming) so they
-	// are present even if streaming panics or the client disconnects
-	// mid-stream before the function returns.
+// Outcomes:
+//   - "success": 2xx received and stream completed (or broke mid-stream).
+//     Committed = true. Caller computes top-level FirstTokenMs.
+//   - "client_abort": request context canceled (Do error or write error).
+//     Committed = true. No breaker penalty.
+//   - "non_retryable": upstream 4xx hard (e.g. 400/422) OR transport
+//     error classified as non-retryable. Committed = true (error
+//     response already written to client).
+//   - "retryable": transport error or 5xx; the caller can retry the
+//     same candidate (if budget remains) or fall through.
+//
+// Resource safety: resp.Body.Close() is deferred immediately after a
+// successful Do, so every code path releases the upstream connection.
+func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (streamAttemptResult, int) {
+	// Per-candidate first-byte timeout. We use the TRANSPORT's
+	// ResponseHeaderTimeout (not a context.WithTimeout on the
+	// request) because http.Client monitors req.Context() for the
+	// ENTIRE request lifecycle, including body reads. A context
+	// deadline would therefore kill long LLM streams (o1/o3
+	// reasoning, slow providers, long outputs) as soon as the
+	// deadline expires — even after the first byte had already
+	// arrived. ResponseHeaderTimeout, in contrast, ONLY bounds the
+	// time between sending the request and receiving response
+	// headers; once headers arrive, body reads are unbounded. This
+	// is the correct "first-byte timeout" semantics: if the
+	// upstream does not send response headers within `timeout`,
+	// the attempt fails fast and we failover. Once headers arrive,
+	// SSE providers send the first body chunk almost immediately,
+	// so the first-byte window is effectively covered.
+	timeout := c.timeout
+	if timeout == 0 {
+		timeout = defaultFirstByteTimeout
+	}
+
+	attemptReq := r.Clone(ctx)
+	attemptReq.URL = cloneURL(upstreamURL)
+	attemptReq.Host = upstreamURL.Host
+	attemptReq.RequestURI = "" // outbound requests must have an empty RequestURI
+	attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
+	attemptReq.ContentLength = int64(len(rewrittenBody))
+	attemptReq.Header = r.Header.Clone()
+	attemptReq.Header.Del("Authorization")
+	attemptReq.Header.Set("Authorization", "Bearer "+upstreamKey)
+	attemptReq.Header.Set("X-Autoapi-Route", c.ruleID)
+	attemptReq.Header.Del("Transfer-Encoding")
+	if attemptReq.Header.Get("Content-Type") == "" {
+		attemptReq.Header.Set("Content-Type", "application/json")
+	}
+	attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
+
+	// Per-attempt transport with the candidate-specific first-byte
+	// timeout. Clone p.transport (not http.DefaultTransport) so
+	// streaming inherits any future tuning on p.transport (TLS,
+	// dialer, etc.) rather than only DefaultTransport's defaults.
+	// The ResponseHeaderTimeout override still applies after the
+	// clone.
+	transport := p.transport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = timeout
+	client := &http.Client{Transport: transport}
+
+	attemptStart := time.Now()
+	resp, doErr := client.Do(attemptReq)
+
+	if doErr != nil {
+		// No upstream connection to release — proceed to classify.
+		latencyMs := int(time.Since(attemptStart).Milliseconds())
+		cat := CategorizeError(doErr, 0)
+		if isTimeoutError(doErr) {
+			slog.Info("proxy: stream first-byte timeout",
+				"provider", c.provider.Name,
+				"model", c.modelName,
+				"err", doErr)
+		} else {
+			slog.Debug("proxy: stream attempt transport error",
+				"provider", c.provider.Name,
+				"model", c.modelName,
+				"category", cat,
+				"err", doErr)
+		}
+		switch cat {
+		case CategoryClientAbort:
+			attemptOrder++
+			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+				AttemptOrder: attemptOrder,
+				ProviderID:   c.provider.ID,
+				ProviderName: c.provider.Name,
+				ModelName:    c.modelName,
+				TargetID:     c.targetID,
+				Status:       "client_abort",
+				StatusCode:   statusClientClosed,
+				Error:        "client disconnected: " + doErr.Error(),
+				LatencyMs:    latencyMs,
+			})
+			return streamAttemptResult{
+				Status:     "client_abort",
+				StatusCode: statusClientClosed,
+				Error:      "client disconnected: " + doErr.Error(),
+				LatencyMs:  latencyMs,
+			}, attemptOrder
+		case CategoryNonRetryable:
+			p.writeError(w, http.StatusBadGateway, "upstream_error", doErr.Error())
+			attemptOrder++
+			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+				AttemptOrder: attemptOrder,
+				ProviderID:   c.provider.ID,
+				ProviderName: c.provider.Name,
+				ModelName:    c.modelName,
+				TargetID:     c.targetID,
+				Status:       "non_retryable",
+				StatusCode:   http.StatusBadGateway,
+				Error:        doErr.Error(),
+				LatencyMs:    latencyMs,
+			})
+			return streamAttemptResult{
+				Status:     "non_retryable",
+				StatusCode: http.StatusBadGateway,
+				Error:      doErr.Error(),
+				LatencyMs:  latencyMs,
+			}, attemptOrder
+		case CategoryRetryable:
+			fallthrough
+		default:
+			attemptOrder++
+			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+				AttemptOrder: attemptOrder,
+				ProviderID:   c.provider.ID,
+				ProviderName: c.provider.Name,
+				ModelName:    c.modelName,
+				TargetID:     c.targetID,
+				Status:       "retryable",
+				StatusCode:   0,
+				Error:        doErr.Error(),
+				LatencyMs:    latencyMs,
+			})
+			return streamAttemptResult{
+				Status:    "retryable",
+				Error:     doErr.Error(),
+				LatencyMs: latencyMs,
+			}, attemptOrder
+		}
+	}
+
+	// We have a response. Defer Close so every path (success, fail,
+	// panic) releases the upstream connection.
+	defer resp.Body.Close()
+
+	// Set provider/model fields NOW (in case of mid-stream abort or
+	// panic) so the log entry always carries the chosen provider.
 	logEntry.ProviderID = c.provider.ID
 	logEntry.ProviderName = c.provider.Name
 	logEntry.Model = c.modelName
 	logEntry.RouteID = c.ruleID
 	logEntry.RouteLabel = c.ruleLabel
-	logEntry.StatusCode = resp.StatusCode
+
+	upstreamStatus := resp.StatusCode
+
+	// Non-2xx: still need to surface the upstream error to the
+	// client. We must read the body (typically small for an error
+	// envelope) and forward it. Not a real "stream" — just one-shot
+	// forwarding.
+	if upstreamStatus >= 400 {
+		upstreamBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			// Body read error after non-2xx headers: treat as
+			// retryable transport error.
+			latencyMs := int(time.Since(attemptStart).Milliseconds())
+			attemptOrder++
+			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+				AttemptOrder: attemptOrder,
+				ProviderID:   c.provider.ID,
+				ProviderName: c.provider.Name,
+				ModelName:    c.modelName,
+				TargetID:     c.targetID,
+				Status:       "retryable",
+				StatusCode:   upstreamStatus,
+				Error:        readErr.Error(),
+				LatencyMs:    latencyMs,
+			})
+			slog.Debug("proxy: stream non-2xx body read error",
+				"provider", c.provider.Name,
+				"model", c.modelName,
+				"status", upstreamStatus,
+				"err", readErr)
+			return streamAttemptResult{
+				Status:     "retryable",
+				StatusCode: upstreamStatus,
+				Error:      readErr.Error(),
+				LatencyMs:  latencyMs,
+			}, attemptOrder
+		}
+
+		cat := CategorizeError(nil, upstreamStatus)
+		errStr := fmt.Sprintf("upstream %s returned status %d", c.provider.Name, upstreamStatus)
+		latencyMs := int(time.Since(attemptStart).Milliseconds())
+		attemptOrder++
+
+		if cat == CategoryNonRetryable || cat == CategoryClientAbort {
+			// 4xx hard stop: write upstream error to client and
+			// return; no further retry/failover.
+			p.writeStreamError(w, upstreamStatus, resp.Header, upstreamBody, logEntry, c, attemptOrder, latencyMs, "non_retryable", errStr)
+			if isCircuitBreakerFailure(nil, upstreamStatus) {
+				p.breakerFor(c.provider.ID).Record(false)
+				if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, errStr); err != nil {
+					slog.Error("proxy: update provider health", "err", err)
+				}
+			}
+			return streamAttemptResult{
+				Status:     "non_retryable",
+				StatusCode: upstreamStatus,
+				Error:      errStr,
+				LatencyMs:  latencyMs,
+			}, attemptOrder
+		}
+
+		// CategoryRetryable: 5xx (or 408/429 etc.). Record chain
+		// entry and return so the caller can retry or fail over.
+		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+			AttemptOrder: attemptOrder,
+			ProviderID:   c.provider.ID,
+			ProviderName: c.provider.Name,
+			ModelName:    c.modelName,
+			TargetID:     c.targetID,
+			Status:       "retryable",
+			StatusCode:   upstreamStatus,
+			Error:        errStr,
+			LatencyMs:    latencyMs,
+		})
+		slog.Debug("proxy: stream upstream non-2xx",
+			"provider", c.provider.Name,
+			"model", c.modelName,
+			"status", upstreamStatus,
+			"category", cat)
+		return streamAttemptResult{
+			Status:     "retryable",
+			StatusCode: upstreamStatus,
+			Error:      errStr,
+			LatencyMs:  latencyMs,
+		}, attemptOrder
+	}
+
+	// 2xx — TRUE PASS-THROUGH STREAMING. No more buffering; chunks
+	// flow upstream → client in real time.
+	slog.Debug("proxy: stream upstream success",
+		"provider", c.provider.Name,
+		"model", c.modelName,
+		"status", upstreamStatus)
 
 	ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 	flusher, _ := ww.(http.Flusher)
-
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			ww.Header().Add(k, v)
 		}
 	}
-	ww.WriteHeader(resp.StatusCode)
+	ww.WriteHeader(upstreamStatus)
 	if flusher != nil {
 		flusher.Flush()
 	}
 
-	// Wrap the body so the first successful Read records TTFT.
-	// firstByteTrackingReadCloser is a pure passthrough — it does not
-	// buffer — so Flush-after-each-Write below preserves SSE real-time
-	// flushing.
-	body := respBody
-	tracker := &firstByteTrackingReadCloser{
-		inner: io.NopCloser(bytes.NewReader(body)),
-		onStart: func() {
-			logEntry.FirstTokenMs = int(time.Now().UnixMilli() - logEntry.Timestamp)
-		},
-	}
-	// Fire onStart eagerly if the body is empty: the streaming contract
-	// says onStart fires on first data or EOF, and io.Read on a
-	// zero-length buffer returns (0, io.EOF) immediately.
-	if len(body) == 0 {
-		tracker.onStart()
-	} else {
-		// Read once to drive the TTFT tracker for the first chunk.
-		buf := make([]byte, 32*1024)
-		n, readErr := tracker.Read(buf)
+	// TTFT is captured inline on the first body Read that returns
+	// n>0. This is the single point of success: breaker Record(true),
+	// hit counter, provider health all fire here. Body reads are
+	// not bounded by any timeout (the per-candidate first-byte
+	// window is enforced via Transport.ResponseHeaderTimeout on the
+	// Do call, not on body reads), so a long LLM stream can run for
+	// arbitrarily long.
+	var firstByteTime time.Duration
+	firstByteRecorded := false
+	usageAcc := &streamUsageAccumulator{}
+
+	buf := make([]byte, 32*1024)
+	var streamErr error
+	var writeErr error
+	for {
+		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if !firstByteRecorded {
+				firstByteTime = time.Since(attemptStart)
+				firstByteRecorded = true
+				p.recordStreamSuccess(c)
+			}
+			usageAcc.Feed(buf[:n])
 			if _, werr := ww.Write(buf[:n]); werr != nil {
-				_ = tracker.Close()
-				return werr
+				writeErr = werr
+				break
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
 		if readErr == io.EOF {
-			logEntry.OutputTokens = inputEstimate
-			p.recordStreamSuccess(c)
-			return nil
+			break
 		}
 		if readErr != nil {
-			_ = tracker.Close()
-			logEntry.OutputTokens = inputEstimate
-			p.recordStreamSuccess(c)
-			return readErr
+			streamErr = readErr
+			break
 		}
-		// Continue draining the rest of the body with the same buffer.
-		for {
-			n, readErr = tracker.Read(buf)
-			if n > 0 {
-				if _, werr := ww.Write(buf[:n]); werr != nil {
-					_ = tracker.Close()
-					return werr
-				}
-				if flusher != nil {
-					flusher.Flush()
-				}
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				_ = tracker.Close()
-				logEntry.Error = readErr.Error()
-				// Mid-stream upstream error: partial response has
-				// already been written; the client may see a
-				// truncated stream. Penalize the provider because
-				// the upstream misbehaved.
-				if isCircuitBreakerFailure(readErr, resp.StatusCode) {
-					p.breakerFor(c.provider.ID).Record(false)
-				}
-				return readErr
-			}
-		}
-		_ = tracker.Close()
 	}
 
-	// Token accounting: try to parse SSE usage from the full buffered
-	// body. Falls back to a coarse heuristic if the upstream omitted
-	// usage information.
-	if it, ot := parseStreamUsage(body); it > 0 || ot > 0 {
-		logEntry.InputTokens, logEntry.OutputTokens = it, ot
-	} else {
-		logEntry.InputTokens = inputEstimate
-		logEntry.OutputTokens = len(body) / 4
+	// End-of-stream handling.
+	attemptLatencyMs := int(time.Since(attemptStart).Milliseconds())
+	attemptOrder++
+
+	// Token accounting from the SSE accumulator. Fall back to the
+	// input estimate if usage was not present; output has no
+	// reliable fallback (no buffered body) so it stays 0.
+	input, output, cacheHit, cacheCreation := usageAcc.Usage()
+	if input == 0 && output == 0 && cacheHit == 0 && cacheCreation == 0 {
+		input = inputEstimate
 	}
-	p.recordStreamSuccess(c)
-	return nil
+	logEntry.InputTokens = input
+	logEntry.OutputTokens = output
+	logEntry.CacheCreation = cacheCreation
+	logEntry.CacheHit = cacheHit
+	logEntry.StatusCode = upstreamStatus
+
+	chainEntry := model.RequestLogChainEntry{
+		AttemptOrder: attemptOrder,
+		ProviderID:   c.provider.ID,
+		ProviderName: c.provider.Name,
+		ModelName:    c.modelName,
+		TargetID:     c.targetID,
+		Status:       "success",
+		StatusCode:   upstreamStatus,
+		LatencyMs:    attemptLatencyMs,
+		FirstTokenMs: int(firstByteTime.Milliseconds()),
+	}
+
+	switch {
+	case writeErr != nil && isClientDisconnect(writeErr):
+		// Client disconnected mid-stream. Do NOT penalize provider.
+		chainEntry.Status = "client_abort"
+		chainEntry.Error = "client disconnected: " + writeErr.Error()
+		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		logEntry.Error = "client disconnected: " + writeErr.Error()
+		slog.Warn("proxy: stream client disconnect",
+			"provider", c.provider.Name,
+			"model", c.modelName,
+			"err", writeErr.Error())
+		return streamAttemptResult{
+			Status:       "client_abort",
+			StatusCode:   statusClientClosed,
+			Error:        "client disconnected: " + writeErr.Error(),
+			LatencyMs:    attemptLatencyMs,
+			FirstTokenMs: int(firstByteTime.Milliseconds()),
+			StreamErr:    writeErr,
+		}, attemptOrder
+	case writeErr != nil:
+		// Other write error (e.g. response writer closed).
+		chainEntry.Error = writeErr.Error()
+		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		logEntry.Error = writeErr.Error()
+		return streamAttemptResult{
+			Status:       "success",
+			StatusCode:   upstreamStatus,
+			Error:        writeErr.Error(),
+			LatencyMs:    attemptLatencyMs,
+			FirstTokenMs: int(firstByteTime.Milliseconds()),
+			StreamErr:    writeErr,
+		}, attemptOrder
+	case streamErr != nil:
+		// Mid-stream read error. Distinguish upstream failure from
+		// client disconnect: a client closing the connection kills
+		// resp.Body.Read via context cancellation, but that is NOT
+		// a provider failure and must not penalize the breaker.
+		if !usageAcc.Done() && !isClientDisconnect(streamErr) {
+			p.breakerFor(c.provider.ID).Record(false)
+			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, streamErr.Error()); err != nil {
+				slog.Error("proxy: update provider health", "err", err)
+			}
+		}
+		if isClientDisconnect(streamErr) {
+			chainEntry.Status = "client_abort"
+			chainEntry.Error = "client disconnected: " + streamErr.Error()
+			slog.Warn("proxy: stream client disconnect (read path)",
+				"provider", c.provider.Name,
+				"model", c.modelName,
+				"err", streamErr.Error())
+		} else {
+			chainEntry.Error = streamErr.Error()
+		}
+		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		logEntry.Error = chainEntry.Error
+		return streamAttemptResult{
+			Status:       "success",
+			StatusCode:   upstreamStatus,
+			Error:        chainEntry.Error,
+			LatencyMs:    attemptLatencyMs,
+			FirstTokenMs: int(firstByteTime.Milliseconds()),
+			StreamErr:    streamErr,
+		}, attemptOrder
+	default:
+		// Clean EOF. If [DONE] was not seen, this is a mid-stream
+		// failure and the provider misbehaved.
+		if !usageAcc.Done() {
+			p.breakerFor(c.provider.ID).Record(false)
+			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, "stream closed without [DONE]"); err != nil {
+				slog.Error("proxy: update provider health", "err", err)
+			}
+		}
+		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		return streamAttemptResult{
+			Status:       "success",
+			StatusCode:   upstreamStatus,
+			LatencyMs:    attemptLatencyMs,
+			FirstTokenMs: int(firstByteTime.Milliseconds()),
+		}, attemptOrder
+	}
 }
 
 // recordStreamSuccess records a successful streaming attempt: hit
@@ -1486,38 +1613,28 @@ type bufferPool struct {
 func (bp *bufferPool) Get() []byte  { return bp.pool.Get().([]byte) }
 func (bp *bufferPool) Put(b []byte) { bp.pool.Put(b) }
 
-// firstByteTrackingReadCloser wraps an io.ReadCloser to record the time of the
-// first successful Read. Used in forwardStream to capture TTFT (time to first
-// token/byte) for streaming responses. It is a pure passthrough — no buffering
-// or transformation — so real-time SSE flushing is preserved.
-//
-// onStart fires after the inner Read returns its first chunk (n > 0 or
-// io.EOF), not when Read is invoked. Capturing before the inner Read would
-// measure dispatch time, not data arrival.
-//
-// ReverseProxy calls Body.Close() before ServeHTTP returns (same goroutine),
-// guaranteeing onStart has fired before the post-ServeHTTP block executes.
-type firstByteTrackingReadCloser struct {
-	inner   io.ReadCloser
-	onStart func()
-	once    sync.Once
+// streamAttemptResult is the outcome of a single streaming HTTP attempt.
+// Status describes the categorical outcome (mirrors the chain entry
+// statuses) and the other fields are the values forwardStream needs to
+// build the top-level log entry, decide retry vs. failover, and compute
+// cumulative latency.
+type streamAttemptResult struct {
+	Status       string // "success", "retryable", "non_retryable", "client_abort"
+	StatusCode   int
+	Error        string
+	LatencyMs    int // attempt wall-clock (for retryable entries; sum from caller)
+	FirstTokenMs int // success only: time from attemptStart to first body byte
+
+	// StreamErr is non-nil when the upstream body broke mid-stream (or
+	// the client disconnected) after at least one byte was committed.
+	// forwardStream uses it to distinguish client-side aborts from
+	// provider-side failures.
+	StreamErr error
 }
 
-func (f *firstByteTrackingReadCloser) Read(p []byte) (int, error) {
-	n, err := f.inner.Read(p)
-	// Fire onStart on the first Read that returns from the inner reader,
-	// including EOF (which is the end of the stream but still a real
-	// arrival event). This guarantees the timestamp reflects actual data
-	// arrival, not the moment Read was called.
-	if n > 0 || err == io.EOF {
-		f.once.Do(f.onStart)
-	}
-	return n, err
-}
-
-func (f *firstByteTrackingReadCloser) Close() error {
-	return f.inner.Close()
-}
+// firstByteTrackingReadCloser removed: TTFT is now captured inline in
+// streamAttempt. The old wrapper buffered nothing, but with the
+// pass-through body Read it is no longer needed at all.
 
 func newUUID() string {
 	var buf [16]byte

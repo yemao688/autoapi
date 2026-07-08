@@ -137,6 +137,7 @@ export namespace model {
 	    status_code: number;
 	    error: string;
 	    latency_ms: number;
+	    first_token_ms: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new RequestLogChainEntry(source);
@@ -153,6 +154,7 @@ export namespace model {
 	        this.status_code = source["status_code"];
 	        this.error = source["error"];
 	        this.latency_ms = source["latency_ms"];
+	        this.first_token_ms = source["first_token_ms"];
 	    }
 	}
 	export class RequestLog {
@@ -521,6 +523,7 @@ export namespace model {
 	    provider_id: string;
 	    model_name: string;
 	    max_retries: number;
+	    timeout_ms: number;
 	    hit_count: number;
 	    failure_count: number;
 	    enabled: boolean;
@@ -536,6 +539,7 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.model_name = source["model_name"];
 	        this.max_retries = source["max_retries"];
+	        this.timeout_ms = source["timeout_ms"];
 	        this.hit_count = source["hit_count"];
 	        this.failure_count = source["failure_count"];
 	        this.enabled = source["enabled"];

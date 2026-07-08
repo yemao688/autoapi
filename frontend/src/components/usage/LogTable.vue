@@ -89,7 +89,7 @@ function chainStatusClass(status: string): string {
 // columns is the table header count. Used by the detail row's
 // :colspan so the row always spans the full width regardless of
 // future column additions. Computed once because it's a literal.
-const columns = 10
+const columns = 8
 
 // showRetryIndicator is true only for rows where multiple attempts
 // happened, which is the only case the user benefits from a "retried"
@@ -139,8 +139,22 @@ function chainArray(log: model.RequestLog): model.RequestLogChainEntry[] {
   return Array.isArray(log.chain) ? log.chain : []
 }
 
-// computedLogCount feeds the "Tried N targets" footer; the loop below
-// iterates the chain entries to render the per-attempt timeline.
+// hitModel finds the last successful chain entry and returns the
+// provider/model that actually served the request. Returns null when
+// no attempt succeeded (e.g. all retries exhausted).
+function hitModel(log: model.RequestLog): { provider: string; model: string } | null {
+  if (!Array.isArray(log.chain) || log.chain.length === 0) return null
+  for (let i = log.chain.length - 1; i >= 0; i--) {
+    if (log.chain[i].status === 'success') {
+      return {
+        provider: log.chain[i].provider_name || '',
+        model: log.chain[i].model_name || '',
+      }
+    }
+  }
+  return null
+}
+
 const columnCount = computed(() => columns)
 </script>
 
@@ -150,14 +164,12 @@ const columnCount = computed(() => columns)
       <tr>
         <th>{{ t('usage.logTable.time') }}</th>
         <th>{{ t('usage.logTable.status') }}</th>
-        <th>{{ t('usage.logTable.provider') }}</th>
-        <th>{{ t('usage.logTable.model') }}</th>
+        <th>{{ t('usage.logTable.requestModel') }}</th>
+        <th>{{ t('usage.logTable.hitModel') }}</th>
         <th class="right">{{ t('usage.logTable.input') }}</th>
         <th class="right">{{ t('usage.logTable.output') }}</th>
-        <th class="right">{{ t('usage.logTable.cost') }}</th>
+        <th class="right">{{ t('usage.logTable.totalCost') }}</th>
         <th class="right">{{ t('usage.logTable.latencyTtft') }}</th>
-        <th>{{ t('usage.logTable.route') }}</th>
-        <th class="right" style="width: 56px;"></th>
       </tr>
     </thead>
     <tbody>
@@ -172,7 +184,10 @@ const columnCount = computed(() => columns)
           @keydown.enter.prevent="toggleRow(log)"
           @keydown.space.prevent="toggleRow(log)"
         >
+          <!-- 1. Time -->
           <td><span class="text-mono" style="font-size: 12.5px;">{{ formatTime(log.timestamp) }}</span></td>
+
+          <!-- 2. Status -->
           <td>
             <span class="badge" :class="statusBadgeClass(log.status_code)">
               <span :class="'dot ' + statusDotClass(log.status_code)"></span>{{ statusText(log.status_code) }}
@@ -184,46 +199,56 @@ const columnCount = computed(() => columns)
               aria-hidden="true"
             >↻</span>
           </td>
+
+          <!-- 3. Request model (rule name → upstream model fallback) -->
           <td>
-            <div class="row" style="gap: 6px;">
-              <div
-                class="list-icon"
-                :style="{
-                  background: providerColor(log.provider_name),
-                  color: providerTextColor(log.provider_name),
-                  width: '22px',
-                  height: '22px',
-                  fontSize: '10px',
-                  borderRadius: '5px',
-                }"
-              >{{ providerInitial(log.provider_name) }}</div>
-              <span style="font-size: 12.5px;">{{ log.provider_name }}</span>
+            <span class="text-mono cell-request-model">{{ log.route_label || log.model }}</span>
+          </td>
+
+          <!-- 4. Hit model (last successful chain entry) -->
+          <td>
+            <template v-for="hit in [hitModel(log)]" :key="'hit'">
+              <div v-if="hit" class="hit-model-cell">
+                <div
+                  class="hit-model-icon"
+                  :style="{
+                    background: providerColor(hit.provider),
+                    color: providerTextColor(hit.provider),
+                  }"
+                >{{ providerInitial(hit.provider) }}</div>
+                <div class="hit-model-text">
+                  <span class="hit-model-provider">{{ hit.provider }}</span>
+                  <span class="hit-model-model text-mono">{{ hit.model }}</span>
+                </div>
+              </div>
+              <span v-else class="text-muted">—</span>
+            </template>
+          </td>
+
+          <!-- 5. Input (with cache sub-line) -->
+          <td class="num">
+            <div class="cell-tokens">
+              <span>{{ log.input_tokens > 0 ? log.input_tokens.toLocaleString() : '—' }}</span>
+              <span v-if="log.cache_hit > 0" class="cache-sub" :title="t('usage.logTable.inputCache')">R{{ log.cache_hit.toLocaleString() }}</span>
             </div>
           </td>
-          <td>
-            <span class="text-mono" style="font-size: 12.5px;">
-              {{ log.model }}
-              <span v-if="log.is_stream" class="text-muted" style="font-size: 10px;" :title="t('usage.logTable.streamHint')">⇄</span>
-            </span>
-          </td>
-          <td class="num">{{ log.input_tokens > 0 ? log.input_tokens : '—' }}</td>
-          <td class="num">{{ log.output_tokens > 0 ? log.output_tokens : '—' }}</td>
+
+          <!-- 6. Output -->
+          <td class="num">{{ log.output_tokens > 0 ? log.output_tokens.toLocaleString() : '—' }}</td>
+
+          <!-- 7. Total cost -->
           <td class="num">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</td>
-          <td class="num">
-            {{ (log.latency_ms / 1000).toFixed(2) }}s
-            <span v-if="log.is_stream && log.first_token_ms > 0" class="text-muted" style="font-size: 11px;">
-              /{{ (log.first_token_ms / 1000).toFixed(2) }}s
-            </span>
-          </td>
-          <td>
-            <span class="badge info" style="font-size: 10px;">{{ log.route_label || t('usage.logTable.defaultRoute') }}</span>
-          </td>
-          <td class="right">
-            <span
-              v-if="!log.is_stream"
-              class="non-stream-badge"
-              :title="t('usage.logTable.streamHint')"
-            >{{ t('usage.logTable.nonStreamBadge') }}</span>
+
+          <!-- 8. TTFT / Latency + stream suffix + expand chevron -->
+          <td class="right cell-timing">
+            <div class="timing-values">
+              <template v-if="log.first_token_ms > 0">
+                <span class="timing-ttft">{{ (log.first_token_ms / 1000).toFixed(2) }}s</span>
+                <span class="timing-sep">/</span>
+              </template>
+              <span class="timing-latency">{{ (log.latency_ms / 1000).toFixed(2) }}s</span>
+              <span class="stream-suffix" :class="log.is_stream ? 'stream' : 'nostream'">{{ log.is_stream ? t('usage.logTable.streamSuffix') : t('usage.logTable.nonStreamSuffix') }}</span>
+            </div>
             <span
               class="expand-chevron"
               :class="{ 'expand-chevron-open': isExpanded(log) }"
@@ -263,6 +288,7 @@ const columnCount = computed(() => columns)
                     <span class="log-detail-chain-model text-mono">{{ entry.model_name || '—' }}</span>
                     <span class="badge" :class="chainStatusClass(entry.status)">{{ chainStatusLabel(entry.status) }}</span>
                     <span class="log-detail-chain-latency text-muted">{{ formatLatency(entry.latency_ms) }}</span>
+                    <span v-if="entry.first_token_ms > 0" class="log-detail-chain-latency text-muted" style="margin-left: 2px;">· {{ t('usage.logTable.ttft') }} {{ formatLatency(entry.first_token_ms) }}</span>
                     <span v-if="entry.error" class="log-detail-chain-error text-mono">{{ entry.error }}</span>
                   </li>
                 </ol>
@@ -272,7 +298,7 @@ const columnCount = computed(() => columns)
         </tr>
       </template>
       <tr v-if="props.logs.length === 0" class="logs-empty-row">
-        <td colspan="10" style="padding: 56px 20px;">
+        <td :colspan="columnCount" style="padding: 56px 20px;">
           <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;">
             <div style="width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; color: var(--muted);">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
@@ -301,6 +327,8 @@ const columnCount = computed(() => columns)
 .log-row-expanded {
   background: var(--row-active, rgba(0, 0, 0, 0.04));
 }
+
+/* ── Retry indicator (↻ circle) ── */
 .retry-indicator {
   display: inline-flex;
   align-items: center;
@@ -314,22 +342,115 @@ const columnCount = computed(() => columns)
   background: var(--bg, rgba(0, 0, 0, 0.04));
   vertical-align: middle;
 }
-.non-stream-badge {
+
+/* ── Column 3: Request model ── */
+.cell-request-model {
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+/* ── Column 4: Hit model (provider / model) ── */
+.hit-model-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hit-model-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.hit-model-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.hit-model-provider {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hit-model-model {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Column 5: Input tokens + cache sub-line ── */
+.cell-tokens {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.cache-sub {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+/* ── Column 8: TTFT / Latency + stream suffix ── */
+.cell-timing {
+  white-space: nowrap;
+}
+.timing-values {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+.timing-ttft {
+  font-weight: 500;
+  color: var(--fg);
+}
+.timing-sep {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0 1px;
+}
+.timing-latency {
+  color: var(--muted);
+}
+.stream-suffix {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 4px;
-  border-radius: 50%;
+  font-family: var(--font-body);
   font-size: 10px;
   font-weight: 500;
-  color: var(--muted, #6e6e73);
-  background: var(--bg, rgba(0, 0, 0, 0.05));
-  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  vertical-align: middle;
-  user-select: none;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs, 5px);
+  margin-left: 4px;
+  line-height: 1;
+  vertical-align: baseline;
 }
+.stream-suffix.stream {
+  color: var(--accent, #0071e3);
+  background: rgba(0, 113, 227, 0.08);
+}
+.stream-suffix.nostream {
+  color: var(--muted, #6e6e73);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* ── Expand chevron ── */
 .expand-chevron {
   display: inline-block;
   margin-left: 6px;
@@ -342,6 +463,8 @@ const columnCount = computed(() => columns)
 .expand-chevron-open {
   transform: rotate(-90deg);
 }
+
+/* ── Detail row ── */
 .log-detail-row td {
   background: var(--row-detail-bg, rgba(0, 0, 0, 0.02));
   border-top: 1px solid var(--border, rgba(0, 0, 0, 0.06));

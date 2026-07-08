@@ -306,6 +306,19 @@ ALTER TABLE request_logs ADD COLUMN client_ip TEXT NOT NULL DEFAULT '';
 ALTER TABLE request_logs ADD COLUMN request_id TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// Per-target first-byte timeout. Defaults to 0 so existing rows
+		// continue to use the proxy-wide default timeout; non-zero values
+		// override it on a per-target basis. Safe schema bump: the new
+		// column is added with a default of 0, and the SkipIfRedundant
+		// predicate below makes this idempotent against pre-existing DBs
+		// that may have picked up the same column under an older ID.
+		ID:              "013_rule_target_timeout",
+		SkipIfRedundant: ruleTargetsHasTimeout,
+		SQL: `
+ALTER TABLE rule_targets ADD COLUMN timeout_ms INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have
@@ -367,6 +380,42 @@ func routeTargetsHasEnabled(tx *sql.Tx) (bool, error) {
 				return false, fmt.Errorf("store: scan pragma table_info: %w", err)
 			}
 			if name == "enabled" {
+				rows.Close()
+				return true, nil
+			}
+		}
+		rows.Close()
+	}
+	return false, nil
+}
+
+// ruleTargetsHasTimeout reports whether the `timeout_ms` column already
+// exists on the per-target table. Used as a SkipIfRedundant predicate so
+// the 013_rule_target_timeout migration is safe to ship on DBs that
+// picked up the same schema change under an earlier ID or branch (the
+// _migrations row would otherwise be missing and the rename would
+// re-run the ADD COLUMN and fail with "duplicate column name").
+//
+// As with routeTargetsHasEnabled, we inspect both rule_targets and the
+// legacy route_targets table name so pre-Phase-4 DBs are also covered.
+func ruleTargetsHasTimeout(tx *sql.Tx) (bool, error) {
+	for _, table := range []string{"rule_targets", "route_targets"} {
+		rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+		if err != nil {
+			// PRAGMA errors when the table doesn't exist; treat that as
+			// "not yet present" and continue to the next candidate.
+			continue
+		}
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltValue sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+				rows.Close()
+				return false, fmt.Errorf("store: scan pragma table_info: %w", err)
+			}
+			if name == "timeout_ms" {
 				rows.Close()
 				return true, nil
 			}

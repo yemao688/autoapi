@@ -189,7 +189,7 @@ func (s *Store) ReorderModelRules(orderedIDs []string) error {
 
 func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
 	rows, err := s.db.Query(`
-		SELECT id, rule_id, provider_id, model_name, max_retries, hit_count, failure_count, enabled
+		SELECT id, rule_id, provider_id, model_name, max_retries, timeout_ms, hit_count, failure_count, enabled
 		FROM rule_targets WHERE rule_id = ? ORDER BY tier ASC`, ruleID)
 	if err != nil {
 		return nil, err
@@ -199,7 +199,7 @@ func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
 	var out []model.ModelRuleTarget
 	for rows.Next() {
 		var t model.ModelRuleTarget
-		if err := rows.Scan(&t.ID, &t.RuleID, &t.ProviderID, &t.ModelName, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
+		if err := rows.Scan(&t.ID, &t.RuleID, &t.ProviderID, &t.ModelName, &t.MaxRetries, &t.TimeoutMs, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -244,9 +244,9 @@ func (s *Store) insertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 		// hit_count/failure_count are managed by IncrementTargetStats and
 		// default to 0 on insert.
 		if _, err := tx.Exec(`
-			INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, enabled)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+			INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, timeout_ms, enabled)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, t.TimeoutMs, boolInt(t.Enabled)); err != nil {
 			return nil, err
 		}
 		out[i] = t
@@ -326,9 +326,9 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 			}
 			t.ID = makeID()
 			if _, err := tx.Exec(`
-				INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, enabled)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+				INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, timeout_ms, enabled)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, t.TimeoutMs, boolInt(t.Enabled)); err != nil {
 				return nil, err
 			}
 		} else {
@@ -340,9 +340,9 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 			// only applies to NEW targets (the ID=="" branch above).
 			if _, err := tx.Exec(`
 				UPDATE rule_targets
-				SET provider_id = ?, model_name = ?, tier = ?, max_retries = ?, enabled = ?
+				SET provider_id = ?, model_name = ?, tier = ?, max_retries = ?, timeout_ms = ?, enabled = ?
 				WHERE id = ? AND rule_id = ?`,
-				t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled), t.ID, t.RuleID); err != nil {
+				t.ProviderID, t.ModelName, i, t.MaxRetries, t.TimeoutMs, boolInt(t.Enabled), t.ID, t.RuleID); err != nil {
 				return nil, err
 			}
 		}

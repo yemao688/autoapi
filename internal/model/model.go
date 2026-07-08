@@ -106,6 +106,7 @@ type ModelRuleTarget struct {
 	ProviderID   string `json:"provider_id"`
 	ModelName    string `json:"model_name"`
 	MaxRetries   int    `json:"max_retries"`   // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
+	TimeoutMs    int    `json:"timeout_ms"`    // 0 = use the default first-byte timeout; otherwise the per-target budget in milliseconds covering headers arrival + first response byte
 	HitCount     int64  `json:"hit_count"`     // incremented once on successful dispatch
 	FailureCount int64  `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
 	Enabled      bool   `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
@@ -166,6 +167,7 @@ type RequestLogChainEntry struct {
 	StatusCode   int    `json:"status_code"`
 	Error        string `json:"error"`
 	LatencyMs    int    `json:"latency_ms"`
+	FirstTokenMs int    `json:"first_token_ms"` // TTFT for this chain entry (streaming); 0 for non-streaming or failed attempts
 }
 
 // ----- Aggregation DTOs (dashboard / usage-stats) -----

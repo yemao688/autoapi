@@ -6,9 +6,16 @@ package proxy
 
 import (
 	"fmt"
+	"time"
 
 	"autoapi/internal/model"
 )
+
+// defaultFirstByteTimeout is the budget for receiving the first response
+// byte from an upstream provider when no per-target override is set. It
+// covers both headers arrival and first byte read. LLMs can legitimately
+// take 30-60s post-header on large prompts, so 60s is conservative.
+const defaultFirstByteTimeout = 60 * time.Second
 
 // InboundRequest carries the request context used for model-rule lookup.
 // Header / EstimatedTokens / Task / TimeHour are preserved on the struct
@@ -30,6 +37,7 @@ type candidate struct {
 	ruleLabel  string
 	targetID   string
 	maxRetries int
+	timeout    time.Duration // 0 = use default first-byte timeout; otherwise per-target budget
 }
 
 // selectCandidates picks the enabled model rule whose Name equals req.Model
@@ -59,7 +67,7 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, defaultProvi
 		if defaultModel != "" {
 			outName = defaultModel
 		}
-		return []candidate{{provider: p, modelName: outName, ruleID: "", ruleLabel: ""}}, nil
+		return []candidate{{provider: p, modelName: outName, ruleID: "", ruleLabel: "", timeout: 0}}, nil
 	}
 
 	var out []candidate
@@ -84,6 +92,7 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, defaultProvi
 			ruleLabel:  rule.Name,
 			targetID:   t.ID,
 			maxRetries: t.MaxRetries,
+			timeout:    targetTimeout(t.TimeoutMs),
 		})
 	}
 
@@ -99,7 +108,7 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, defaultProvi
 		if defaultModel != "" {
 			outName = defaultModel
 		}
-		out = append(out, candidate{provider: p, modelName: outName, ruleID: "", ruleLabel: ""})
+		out = append(out, candidate{provider: p, modelName: outName, ruleID: "", ruleLabel: "", timeout: 0})
 	}
 
 	if len(out) == 0 {
@@ -135,4 +144,16 @@ func modelNameForTarget(targetModel, requestModel string) string {
 		return targetModel
 	}
 	return requestModel
+}
+
+// targetTimeout converts a per-target timeout_ms setting (0 = use default)
+// into a time.Duration for the candidate. A zero return value means
+// "use the default first-byte timeout"; the actual default is resolved
+// at the call site in forwardStream so this constant is only referenced
+// once.
+func targetTimeout(timeoutMs int) time.Duration {
+	if timeoutMs > 0 {
+		return time.Duration(timeoutMs) * time.Millisecond
+	}
+	return 0 // 0 signals "use defaultFirstByteTimeout"; resolved in forwardStream
 }

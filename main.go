@@ -47,6 +47,21 @@ func main() {
 		app.Quit()
 	})
 
+	// Edit menu: Wails v2 on macOS requires a native Edit submenu bound to
+	// the standard edit accelerators for Cmd+C/Cmd+V/Cmd+X/Cmd+A/Cmd+Z to
+	// reach the webview's text fields. The webview handles the actual edit
+	// operations itself; the menu items only need to exist so the
+	// accelerators route through the native menu chain. Do not remove.
+	editMenu := trayMenu.AddSubmenu("Edit")
+	editMenu.AddText("Undo", keys.CmdOrCtrl("z"), func(_ *menu.CallbackData) {})
+	editMenu.AddText("Redo", keys.CmdOrCtrl("shift+z"), func(_ *menu.CallbackData) {})
+	editMenu.AddSeparator()
+	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), func(_ *menu.CallbackData) {})
+	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {})
+	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(_ *menu.CallbackData) {})
+	editMenu.AddSeparator()
+	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), func(_ *menu.CallbackData) {})
+
 	err := wails.Run(&options.App{
 		Title:     "Autoapi",
 		Width:     1280,

@@ -495,6 +495,7 @@ onMounted(() => {
                       <span class="target-provider">{{ targetProviderName(target) }}</span>
                       <span class="target-model">{{ target.model_name || t('modelRules.targetDefault') }}</span>
                       <span v-if="target.max_retries > 0" class="badge mono">{{ t('modelRules.targetRetries', { count: target.max_retries }) }}</span>
+                      <span v-if="target.timeout_ms > 0" class="badge mono">{{ t('modelRules.targetTimeout', { ms: target.timeout_ms }) }}</span>
                       <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">{{ t('modelRules.targetDisabled') }}</span>
                     </div>
                     <div class="target-counters">
