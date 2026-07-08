@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import type { model } from '../../wailsjs/go/models'
+import { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
@@ -46,6 +46,13 @@ const logs = ref<model.RequestLog[]>([])
 const logPage = ref(1)
 const logPageSize = ref(50)
 const logTotal = ref(0)
+const chartData = ref<model.ChartAggregates>(new model.ChartAggregates({
+  range: '',
+  bucket_size: 'day',
+  buckets: [],
+  status_breakdown: [],
+  provider_shares: [],
+}))
 
 const providerOptions = computed<ProviderOption[]>(() => {
   const list = usageData.value?.providers || []
@@ -153,9 +160,37 @@ async function queryLogs() {
   }
 }
 
+async function loadCharts() {
+  const { start_date, end_date } = selectedRange.value
+  const provider = selectedProviderId.value
+  const route_id = selectedRouteId.value
+  const modelName = modelFilter.value.trim()
+  const search = searchText.value.trim()
+  try {
+    const result = await api.chartAggregates({
+      start_date,
+      end_date,
+      provider,
+      route_id,
+      model: modelName,
+      search,
+    })
+    chartData.value = result || new model.ChartAggregates({
+      range: '',
+      bucket_size: 'day',
+      buckets: [],
+      status_breakdown: [],
+      provider_shares: [],
+    })
+  } catch (e: any) {
+    toast.push(e?.message || String(e), 'error')
+  }
+}
+
 async function refreshAll() {
   await fetchUsage().catch((e) => toast.push(e?.message || String(e), 'error'))
   await queryLogs()
+  await loadCharts()
 }
 
 function startLive() {
@@ -190,6 +225,7 @@ function switchPane(paneId: 'logs' | 'tokens') {
 async function applyFilters() {
   logPage.value = 1
   await queryLogs()
+  await loadCharts()
 }
 
 async function clearFilters() {
@@ -200,6 +236,7 @@ async function clearFilters() {
   searchText.value = ''
   logPage.value = 1
   await queryLogs()
+  await loadCharts()
 }
 
 async function purgeLogs() {
@@ -268,10 +305,9 @@ onMounted(() => {
   void refreshAll()
   void fetchRoutes().catch((e) => toast.push(e?.message || String(e), 'error'))
   EventsOn('log:new', () => {
-    // Only refresh if the user is currently viewing the logs pane.
-    // This avoids unnecessary fetches when on the tokens pane.
     if (activePane.value === 'logs') {
       void queryLogs()
+      void loadCharts()
     }
   })
 })
@@ -392,9 +428,8 @@ watch([modelFilter, searchText], () => {
       <TokensPane
         v-show="activePane === 'tokens'"
         :tokenStats="tokenStats"
-        :providerShares="providerShares"
         :modelRanking="modelRanking"
-        :totalTokens="totalTokens"
+        :chartData="chartData"
       />
 
       <!-- ================== LOGS VIEW ================== -->
@@ -405,6 +440,7 @@ watch([modelFilter, searchText], () => {
         :logTotal="logTotal"
         :logPage="logPage"
         :logPageSize="logPageSize"
+        :chartData="chartData"
         @first="goFirstPage"
         @prev="goPrevPage"
         @goto="(p: number) => goToPage(p)"

@@ -19,6 +19,8 @@ export function ExportData(arg1:model.ExportFormat):Promise<api.ExportResult>;
 
 export function FetchUpstreamModels(arg1:string):Promise<Array<model.Model>>;
 
+export function GetChartAggregates(arg1:model.ChartQuery):Promise<model.ChartAggregates>;
+
 export function GetDashboard():Promise<model.DashboardData>;
 
 export function GetProvider(arg1:string):Promise<model.Provider>;

@@ -34,6 +34,10 @@ export function FetchUpstreamModels(arg1) {
   return window['go']['api']['App']['FetchUpstreamModels'](arg1);
 }
 
+export function GetChartAggregates(arg1) {
+  return window['go']['api']['App']['GetChartAggregates'](arg1);
+}
+
 export function GetDashboard() {
   return window['go']['api']['App']['GetDashboard']();
 }

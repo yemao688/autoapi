@@ -343,6 +343,56 @@ type LogQueryResult struct {
 	Total int64        `json:"total"`
 }
 
+// ----- Chart aggregation DTOs (Phase 4 — request-log charts) -----
+
+// TimeBucket is one slice of the time-series chart. The Bucket label is a
+// locale-neutral ISO string that the frontend can format as needed: "YYYY-MM-DD"
+// for daily, "YYYY-MM-DD HH:00" for hourly.
+type TimeBucket struct {
+	Bucket       string  `json:"bucket"`         // "YYYY-MM-DD" or "YYYY-MM-DD HH:00"
+	Success      int64   `json:"success"`        // status 2xx with no error
+	RateLimited  int64   `json:"rate_limited"`   // status == 429
+	Error        int64   `json:"error"`          // status >= 400 (excluding 429) or error != ''
+	InputTokens  int64   `json:"input_tokens"`   // sum
+	OutputTokens int64   `json:"output_tokens"`  // sum
+	Cost         float64 `json:"cost"`           // sum
+	AvgLatencyMs int64   `json:"avg_latency_ms"` // AVG(latency_ms)
+	AvgTTFTMs    int64   `json:"avg_ttft_ms"`    // AVG(first_token_ms) over streamed rows
+}
+
+// StatusBreakdown is one slice of the status-code donut chart. Percent is
+// rounded to 2 decimal places out of 100. Labels are "2xx", "429", "错误",
+// or "其他" for statuses that do not fit the above classes.
+type StatusBreakdown struct {
+	Label   string  `json:"label"`   // "2xx" | "4xx" | "5xx" | "429"
+	Count   int64   `json:"count"`   // request count in this class
+	Percent float64 `json:"percent"` // share of the filtered set, 0..100
+}
+
+// ChartAggregates is the response for a single chart-data fetch. Range is a
+// free-form description (e.g. "last_24h") so the frontend can show a label
+// without re-formatting start/end itself; BucketSize is the resolution used.
+type ChartAggregates struct {
+	Range           string           `json:"range"`            // e.g. "2024-01-01..2024-01-31"
+	BucketSize      string           `json:"bucket_size"`      // "hour" | "day"
+	Buckets         []TimeBucket     `json:"buckets"`          // time series, ordered ascending
+	StatusBreakdown []StatusBreakdown `json:"status_breakdown"` // status-code donut
+	ProviderShares  []ProviderShare   `json:"provider_shares"`  // reused pie series
+}
+
+// ChartQuery is the filter for GetChartAggregates. Same semantics as LogQuery
+// but without pagination — chart data always includes the full filtered range.
+// Status, Page, and PageSize are intentionally omitted because the chart
+// surface does not need them.
+type ChartQuery struct {
+	StartDate int64  `json:"start_date"` // ms; 0 = no lower bound
+	EndDate   int64  `json:"end_date"`   // ms; 0 = no upper bound
+	Provider  string `json:"provider"`   // exact match on provider_id; "" = all
+	RouteID   string `json:"route_id"`   // exact match on route_id; "" = all
+	Model     string `json:"model"`      // exact match on model; "" = all
+	Search    string `json:"search"`     // LIKE %term% across model/route_label/error
+}
+
 // ExportFormat selects the export payload type.
 type ExportFormat string
 
