@@ -5,6 +5,7 @@ import { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
+import { useLiveSync } from '@/composables/useLiveSync'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -25,8 +26,20 @@ const confirm = useConfirm()
 const { data: usageData, loading, execute: fetchUsage } = useApi(api.usageStats)
 
 const activePane = ref<'logs' | 'tokens'>('logs')
-const liveSync = ref(false)
-let liveTimer: ReturnType<typeof setInterval> | null = null
+// liveSync is shared via localStorage so the toggle survives tab switches
+// and Vue reloads. The composable owns the read/write logic.
+const { liveSync } = useLiveSync()
+// isRefreshing guards against overlapping refreshes from the realtime
+// 'log:new' event handler when multiple writes flush in quick succession.
+// Without this guard the second handler can race the first and the user
+// sees stale data flicker as the two responses land in different order.
+const isRefreshing = ref(false)
+// eventsOff is the unsubscribe function returned by EventsOn. Stored so
+// onUnmounted can remove the listener exactly once — EventsOff('log:new')
+// is the legacy removal that worked without a handle, but the explicit
+// handle-based unsubscribe is more reliable if the runtime ever batches
+// multiple subscriptions to the same event name.
+let eventsOff: (() => void) | null = null
 
 const selectedProviderId = ref('')
 // Use stable internal keys for the v-model so changing the active locale does
@@ -198,37 +211,42 @@ async function loadCharts() {
 }
 
 async function refreshAll() {
-  await fetchUsage().catch((e) => toast.push(e?.message || String(e), 'error'))
-  await queryLogs()
-  await loadCharts()
-}
-
-function startLive() {
-  if (liveTimer) return
-  liveTimer = setInterval(() => {
-    void refreshAll()
-  }, 2000)
-}
-
-function stopLive() {
-  if (liveTimer) {
-    clearInterval(liveTimer)
-    liveTimer = null
+  // Guard against overlapping refreshes. The Wails runtime fires
+  // 'log:new' once per batch flush, and during a burst of traffic the
+  // second event can land before the first refreshAll's await chain
+  // finishes. The flag is read+written in the same microtask so a
+  // concurrent caller will see `true` and bail out.
+  if (isRefreshing.value) return
+  isRefreshing.value = true
+  try {
+    await fetchUsage().catch((e) => toast.push(e?.message || String(e), 'error'))
+    await queryLogs()
+    await loadCharts()
+  } finally {
+    isRefreshing.value = false
   }
 }
 
 function toggleLive() {
+  // The shared composable persists the value, so the new state survives
+  // tab switches and reloads automatically — no start/stop timer needed.
+  // The realtime refresh is event-driven (see onMounted) so it works
+  // regardless of which pane is active and regardless of the toggle
+  // state at the time the component mounts.
   liveSync.value = !liveSync.value
-  if (liveSync.value) startLive()
-  else stopLive()
 }
 
 function switchPane(paneId: 'logs' | 'tokens') {
+  // Tab switches are now decoupled from the live-sync toggle. Previously
+  // this function turned liveSync off and stopped a polling timer on
+  // every switch, which left the user with the "live sync on" button
+  // stale until they re-clicked it. Now switching tabs only refreshes
+  // the data the new pane needs.
   activePane.value = paneId
-  liveSync.value = false
-  stopLive()
   if (paneId === 'logs') {
     void queryLogs()
+  } else if (paneId === 'tokens') {
+    void loadCharts()
   }
 }
 
@@ -314,17 +332,32 @@ const { handleKeydown: handleTabKeydown } = useTabKeyboard(
 onMounted(() => {
   void refreshAll()
   void fetchModelRules().catch((e) => toast.push(e?.message || String(e), 'error'))
-  EventsOn('log:new', () => {
-    if (activePane.value === 'logs') {
-      void queryLogs()
-      void loadCharts()
+  // Subscribe to the proxy's "log:new" event. The Wails runtime invokes
+  // the callback on the goroutine that fired the event; the handler
+  // itself just calls refreshAll which is debounced via the isRefreshing
+  // guard above. Refreshing when liveSync is on keeps the log table and
+  // token trend chart in sync without a polling timer; when the toggle
+  // is off the user keeps control of refresh cadence (e.g. via the
+  // clearFilters / pagination actions).
+  const off = EventsOn('log:new', () => {
+    if (liveSync.value) {
+      void refreshAll()
     }
   })
+  // EventsOn returns an unsubscribe function in current Wails runtime
+  // versions. Fall back to EventsOff if it doesn't so we still clean up.
+  if (typeof off === 'function') {
+    eventsOff = off
+  }
 })
 
 onUnmounted(() => {
-  stopLive()
-  EventsOff('log:new')
+  if (eventsOff) {
+    eventsOff()
+    eventsOff = null
+  } else {
+    EventsOff('log:new')
+  }
   if (searchDebounce) clearTimeout(searchDebounce)
 })
 

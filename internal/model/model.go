@@ -131,6 +131,41 @@ type RequestLog struct {
 	RouteLabel    string  `json:"route_label"`
 	APIKeyID      string  `json:"api_key_id"`
 	Error         string  `json:"error,omitempty"`
+
+	// Request context captured by the proxy for diagnostics and the
+	// expanded log row UI. UserAgent and ClientIP may be empty when the
+	// upstream is not a real HTTP call (e.g. internal admin endpoints) or
+	// when the request did not reach the proxy. RequestID is the chi
+	// middleware.RequestID value so the same identifier appears in
+	// slogMiddleware output and any frontend error reports.
+	UserAgent string `json:"user_agent"`
+	ClientIP  string `json:"client_ip"`
+	RequestID string `json:"request_id"`
+
+	// Chain captures the per-attempt history of a single proxied request.
+	// Non-streaming requests with failover may have multiple entries; a
+	// single successful attempt produces one entry; preflight failures
+	// (invalid key, bad URL) are recorded as well so the UI can show
+	// "tried N targets" when failover kicked in. Chain is persisted as
+	// JSON in SQLite (see migration 012_request_log_details) and
+	// marshalled by the store on insert / scan.
+	Chain []RequestLogChainEntry `json:"chain"`
+}
+
+// RequestLogChainEntry is one attempt recorded in a RequestLog.Chain slice.
+// Status describes the categorical outcome of the attempt (success,
+// retryable failure, etc.) and is rendered as a small badge in the log
+// detail row.
+type RequestLogChainEntry struct {
+	AttemptOrder int    `json:"attempt_order"`
+	ProviderID   string `json:"provider_id"`
+	ProviderName string `json:"provider_name"`
+	ModelName    string `json:"model_name"`
+	TargetID     string `json:"target_id"`
+	Status       string `json:"status"` // success, retryable, non_retryable, circuit_open, preflight_error, client_abort
+	StatusCode   int    `json:"status_code"`
+	Error        string `json:"error"`
+	LatencyMs    int    `json:"latency_ms"`
 }
 
 // ----- Aggregation DTOs (dashboard / usage-stats) -----
@@ -188,7 +223,7 @@ type ServiceHealth struct {
 	ActiveConnections int     `json:"active_connections"`
 	WebSocketCount    int     `json:"websocket_count"`
 	HTTPCount         int     `json:"http_count"`
-	ProxyURL          string  `json:"proxy_url"`  // e.g. "http://0.0.0.0:8344" — bind URL reported by the proxy
+	ProxyURL          string  `json:"proxy_url"`   // e.g. "http://0.0.0.0:8344" — bind URL reported by the proxy
 	APIAddress        string  `json:"api_address"` // e.g. "http://192.168.1.5:8344" — host-reachable URL with the local IPv4; empty when proxy is not running
 }
 
@@ -310,8 +345,8 @@ type ProviderInput struct {
 }
 
 type ModelRuleInput struct {
-	Name    string           `json:"name"`
-	Enabled bool             `json:"enabled"`
+	Name    string            `json:"name"`
+	Enabled bool              `json:"enabled"`
 	Targets []ModelRuleTarget `json:"targets"`
 }
 

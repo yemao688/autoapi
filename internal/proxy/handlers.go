@@ -9,13 +9,47 @@ package proxy
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
 	"autoapi/internal/model"
+
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 const maxBodySize = 10 << 20 // 10 MiB
+
+// clientIPFromAddr extracts the host portion of an HTTP RemoteAddr value
+// ("host:port" or, in pathological cases, "host"). It returns "" when
+// RemoteAddr is empty or the host cannot be parsed at all — these cases
+// are logged as empty in the request log rather than producing a bogus
+// value (or panic). Proxies typically inject X-Forwarded-For headers, but
+// autoapi runs behind the loopback for local clients, so the raw
+// RemoteAddr is the source of truth here.
+func clientIPFromAddr(remoteAddr string) string {
+	if remoteAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		// Either it was bare host (no port) or something exotic. Fall back
+		// to the raw string — it's better than dropping the IP entirely.
+		return remoteAddr
+	}
+	return host
+}
+
+// enrichLogFromRequest captures the per-request context fields that the
+// proxy stores on every RequestLog: chi's middleware RequestID, the
+// User-Agent header, and the client IP (host portion of RemoteAddr). It
+// is a no-op for fields that have no source (empty User-Agent, etc.) so
+// the JSON omitempty-ish behaviour of the SQL layer is preserved.
+func enrichLogFromRequest(r *http.Request, logEntry *model.RequestLog) {
+	logEntry.RequestID = middleware.GetReqID(r.Context())
+	logEntry.UserAgent = r.UserAgent()
+	logEntry.ClientIP = clientIPFromAddr(r.RemoteAddr)
+}
 
 type chatRequest struct {
 	Model    string            `json:"model"`
@@ -41,6 +75,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		CacheCreation: 0,
 		CacheHit:      0,
 	}
+	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 
 	apiKeyID, ok, err := p.authenticate(r)
@@ -104,6 +139,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		CacheCreation: 0,
 		CacheHit:      0,
 	}
+	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 
 	apiKeyID, ok, err := p.authenticate(r)
@@ -176,6 +212,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		CacheCreation: 0,
 		CacheHit:      0,
 	}
+	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 
 	apiKeyID, ok, err := p.authenticate(r)

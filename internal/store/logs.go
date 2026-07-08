@@ -2,11 +2,43 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"autoapi/internal/model"
 )
+
+// chainJSONFor serialises a Chain slice to the persisted JSON blob. Returns
+// an empty string for nil/empty slices so the column stores a stable
+// sentinel ("") rather than "null" — the scan side uses the same convention
+// to round-trip cleanly.
+func chainJSONFor(chain []model.RequestLogChainEntry) string {
+	if len(chain) == 0 {
+		return ""
+	}
+	buf, err := json.Marshal(chain)
+	if err != nil {
+		// Encoding an in-memory struct should never fail; fall back to the
+		// empty sentinel so we don't lose the log row.
+		return ""
+	}
+	return string(buf)
+}
+
+// chainFromJSON deserialises a stored chain_json blob. An empty string or
+// any parse error yields a nil slice — the UI treats nil/empty Chain as
+// "no per-attempt history" (older rows from before migration 012).
+func chainFromJSON(raw string) []model.RequestLogChainEntry {
+	if raw == "" {
+		return nil
+	}
+	var out []model.RequestLogChainEntry
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
 
 // QueryLogs filters request_logs by the given parameters with pagination.
 // Returns the rows, total count, and any error.
@@ -84,7 +116,8 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		       input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 		       route_id, route_label,
 		       api_key_id, COALESCE(error, ''),
-		       cache_creation, cache_hit
+		       cache_creation, cache_hit,
+		       COALESCE(chain_json, ''), user_agent, client_ip, request_id
 		FROM request_logs %s
 		ORDER BY timestamp_ms DESC
 		LIMIT ? OFFSET ?`, where)
@@ -98,16 +131,21 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 
 	var logs []model.RequestLog
 	for rows.Next() {
-		var l model.RequestLog
+		var (
+			l       model.RequestLog
+			chainJS string
+		)
 		if err := rows.Scan(
 			&l.ID, &l.Timestamp, &l.StatusCode,
 			&l.ProviderID, &l.ProviderName, &l.Model,
 			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
 			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error,
 			&l.CacheCreation, &l.CacheHit,
+			&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID,
 		); err != nil {
 			return nil, 0, fmt.Errorf("store: scan log: %w", err)
 		}
+		l.Chain = chainFromJSON(chainJS)
 		logs = append(logs, l)
 	}
 	if err := rows.Err(); err != nil {
@@ -126,23 +164,27 @@ func (s *Store) InsertRequestLog(l model.RequestLog) error {
 	if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
 		l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
 	}
+	chainJSON := chainJSONFor(l.Chain)
 	return s.execTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
 			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
 			                          api_key_id, error,
-			                          cache_creation, cache_hit)
+			                          cache_creation, cache_hit,
+			                          chain_json, user_agent, client_ip, request_id)
 			VALUES (?, ?, ?, ?, ?, ?,
 			        ?, ?, ?, ?, ?, ?,
 			        ?, ?,
 			        ?, ?,
-			        ?, ?)`,
+			        ?, ?,
+			        ?, ?, ?, ?)`,
 			l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
 			l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 			l.RouteID, l.RouteLabel,
 			l.APIKeyID, l.Error,
-			l.CacheCreation, l.CacheHit)
+			l.CacheCreation, l.CacheHit,
+			chainJSON, l.UserAgent, l.ClientIP, l.RequestID)
 		return err
 	})
 }
@@ -155,12 +197,14 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
 			                          api_key_id, error,
-			                          cache_creation, cache_hit)
+			                          cache_creation, cache_hit,
+			                          chain_json, user_agent, client_ip, request_id)
 			VALUES (?, ?, ?, ?, ?, ?,
 			        ?, ?, ?, ?, ?, ?,
 			        ?, ?,
 			        ?, ?,
-			        ?, ?)`)
+			        ?, ?,
+			        ?, ?, ?, ?)`)
 		if err != nil {
 			return err
 		}
@@ -169,12 +213,14 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 			if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
 				l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
 			}
+			chainJSON := chainJSONFor(l.Chain)
 			if _, err := stmt.Exec(
 				l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
 				l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 				l.RouteID, l.RouteLabel,
 				l.APIKeyID, l.Error,
 				l.CacheCreation, l.CacheHit,
+				chainJSON, l.UserAgent, l.ClientIP, l.RequestID,
 			); err != nil {
 				return err
 			}
