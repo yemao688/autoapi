@@ -5,12 +5,12 @@ import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useToast } from '@/composables/useToast'
-import { useTheme, type ThemeValue } from '@/composables/useTheme'
+import { useTheme } from '@/composables/useTheme'
 
 const { download } = useExportDownload()
 const { data: fetchedSettings, loading, execute: fetchSettings } = useApi(api.getSettings)
 const toast = useToast()
-const { activeTheme } = useTheme()
+const { activeTheme, saveTheme } = useTheme()
 
 const isDirty = ref(false)
 const activeSection = ref('general')
@@ -26,7 +26,7 @@ function defaultSettings(): model.Settings {
       close_action: 'background',
     },
     appearance: {
-      theme: 'light',
+      theme: 'system',
       density: '标准',
       accent_color: '#0071e3',
     },
@@ -53,10 +53,10 @@ function defaultSettings(): model.Settings {
 }
 
 const settings = ref<model.Settings>(defaultSettings())
-const selectedTheme = computed<'light' | 'dark' | 'auto'>(() => {
+const selectedTheme = computed<'light' | 'dark' | 'system'>(() => {
   const t = settings.value.appearance.theme
-  if (t === 'light' || t === 'dark' || t === 'auto') return t
-  return 'light'
+  if (t === 'light' || t === 'dark' || t === 'system') return t
+  return 'system'
 })
 const storagePath = computed(() => settings.value.data.storage_path || defaultStoragePath)
 
@@ -101,15 +101,9 @@ async function restoreDefaults() {
   }
 }
 
-async function selectTheme(theme: 'light' | 'dark' | 'auto') {
+async function selectTheme(theme: 'light' | 'dark' | 'system') {
   settings.value.appearance.theme = theme
-  activeTheme.value = theme
-  try {
-    await api.saveSettings(settings.value)
-    toast.push('主题已保存', 'success')
-  } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
-  }
+  await saveTheme(theme)
 }
 
 async function selectAccent(color: string) {
@@ -170,6 +164,10 @@ function notImplemented() {
 
 onMounted(() => {
   void fetchSettings().then(loadSettings)
+})
+
+watch(activeTheme, (t) => {
+  if (settings.value.appearance.theme !== t) settings.value.appearance.theme = t as any
 })
 
 watch(fetchedSettings, loadSettings, { once: true })
@@ -352,6 +350,20 @@ watch(fetchedSettings, loadSettings, { once: true })
               <div class="row" style="gap: 10px;">
                 <label
                   class="theme-card"
+                  :class="{ active: selectedTheme === 'system' }"
+                  @click="selectTheme('system')"
+                >
+                  <div class="theme-preview split">
+                    <div class="tp-side" style="background: #ececef; border-right: 1px solid rgba(0,0,0,0.08);"></div>
+                    <div class="tp-body">
+                      <div class="tp-line" style="background: #1d1d1f;"></div>
+                      <div class="tp-line short" style="background: #d2d2d7;"></div>
+                    </div>
+                  </div>
+                  <div style="font-size: 12.5px; font-weight: 500;">跟随系统</div>
+                </label>
+                <label
+                  class="theme-card"
                   :class="{ active: selectedTheme === 'light' }"
                   @click="selectTheme('light')"
                 >
@@ -379,20 +391,6 @@ watch(fetchedSettings, loadSettings, { once: true })
                     </div>
                   </div>
                   <div style="font-size: 12.5px; font-weight: 500;">深色</div>
-                </label>
-                <label
-                  class="theme-card"
-                  :class="{ active: selectedTheme === 'auto' }"
-                  @click="selectTheme('auto')"
-                >
-                  <div class="theme-preview split">
-                    <div class="tp-side" style="background: #ececef; border-right: 1px solid rgba(0,0,0,0.08);"></div>
-                    <div class="tp-body">
-                      <div class="tp-line" style="background: #1d1d1f;"></div>
-                      <div class="tp-line short" style="background: #d2d2d7;"></div>
-                    </div>
-                  </div>
-                  <div style="font-size: 12.5px; font-weight: 500;">跟随系统</div>
                 </label>
               </div>
             </div>
