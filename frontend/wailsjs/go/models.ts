@@ -99,130 +99,6 @@ export namespace model {
 	        this.accent_color = source["accent_color"];
 	    }
 	}
-	export class ProviderShare {
-	    provider_id: string;
-	    provider_name: string;
-	    tokens: number;
-	    cost: number;
-	    percent: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProviderShare(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.provider_id = source["provider_id"];
-	        this.provider_name = source["provider_name"];
-	        this.tokens = source["tokens"];
-	        this.cost = source["cost"];
-	        this.percent = source["percent"];
-	    }
-	}
-	export class StatusBreakdown {
-	    label: string;
-	    count: number;
-	    percent: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new StatusBreakdown(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.label = source["label"];
-	        this.count = source["count"];
-	        this.percent = source["percent"];
-	    }
-	}
-	export class TimeBucket {
-	    bucket: string;
-	    success: number;
-	    rate_limited: number;
-	    error: number;
-	    input_tokens: number;
-	    output_tokens: number;
-	    cost: number;
-	    avg_latency_ms: number;
-	    avg_ttft_ms: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new TimeBucket(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.bucket = source["bucket"];
-	        this.success = source["success"];
-	        this.rate_limited = source["rate_limited"];
-	        this.error = source["error"];
-	        this.input_tokens = source["input_tokens"];
-	        this.output_tokens = source["output_tokens"];
-	        this.cost = source["cost"];
-	        this.avg_latency_ms = source["avg_latency_ms"];
-	        this.avg_ttft_ms = source["avg_ttft_ms"];
-	    }
-	}
-	export class ChartAggregates {
-	    range: string;
-	    bucket_size: string;
-	    buckets: TimeBucket[];
-	    status_breakdown: StatusBreakdown[];
-	    provider_shares: ProviderShare[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ChartAggregates(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.range = source["range"];
-	        this.bucket_size = source["bucket_size"];
-	        this.buckets = this.convertValues(source["buckets"], TimeBucket);
-	        this.status_breakdown = this.convertValues(source["status_breakdown"], StatusBreakdown);
-	        this.provider_shares = this.convertValues(source["provider_shares"], ProviderShare);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class ChartQuery {
-	    start_date: number;
-	    end_date: number;
-	    provider: string;
-	    route_id: string;
-	    model: string;
-	    search: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ChartQuery(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.start_date = source["start_date"];
-	        this.end_date = source["end_date"];
-	        this.provider = source["provider"];
-	        this.route_id = source["route_id"];
-	        this.model = source["model"];
-	        this.search = source["search"];
-	    }
-	}
 	export class ServiceHealth {
 	    status: string;
 	    uptime_seconds: number;
@@ -258,6 +134,8 @@ export namespace model {
 	    model: string;
 	    input_tokens: number;
 	    output_tokens: number;
+	    cache_creation: number;
+	    cache_hit: number;
 	    cost: number;
 	    latency_ms: number;
 	    first_token_ms: number;
@@ -281,6 +159,8 @@ export namespace model {
 	        this.model = source["model"];
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
+	        this.cache_creation = source["cache_creation"];
+	        this.cache_hit = source["cache_hit"];
 	        this.cost = source["cost"];
 	        this.latency_ms = source["latency_ms"];
 	        this.first_token_ms = source["first_token_ms"];
@@ -594,7 +474,26 @@ export namespace model {
 	        this.is_custom = source["is_custom"];
 	    }
 	}
+	export class ProviderShare {
+	    provider_id: string;
+	    provider_name: string;
+	    tokens: number;
+	    cost: number;
+	    percent: number;
 	
+	    static createFrom(source: any = {}) {
+	        return new ProviderShare(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.provider_name = source["provider_name"];
+	        this.tokens = source["tokens"];
+	        this.cost = source["cost"];
+	        this.percent = source["percent"];
+	    }
+	}
 	export class ProviderTestResult {
 	    ok: boolean;
 	    latency_ms: number;
@@ -821,8 +720,6 @@ export namespace model {
 	}
 	
 	
-	
-	
 	export class UsageStats {
 	    token_stats: Stat[];
 	    token_trend_30: TokenTrendPoint[];
@@ -864,6 +761,84 @@ export namespace model {
 		    }
 		    return a;
 		}
+	}
+	export class UsageTrendBucket {
+	    bucket: string;
+	    cost: number;
+	    cache_creation: number;
+	    cache_hit: number;
+	    input: number;
+	    output: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageTrendBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bucket = source["bucket"];
+	        this.cost = source["cost"];
+	        this.cache_creation = source["cache_creation"];
+	        this.cache_hit = source["cache_hit"];
+	        this.input = source["input"];
+	        this.output = source["output"];
+	    }
+	}
+	export class UsageTrends {
+	    range: string;
+	    bucket_size: string;
+	    buckets: UsageTrendBucket[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageTrends(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.range = source["range"];
+	        this.bucket_size = source["bucket_size"];
+	        this.buckets = this.convertValues(source["buckets"], UsageTrendBucket);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class UsageTrendsQuery {
+	    start_date: number;
+	    end_date: number;
+	    provider: string;
+	    route_id: string;
+	    model: string;
+	    search: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageTrendsQuery(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start_date = source["start_date"];
+	        this.end_date = source["end_date"];
+	        this.provider = source["provider"];
+	        this.route_id = source["route_id"];
+	        this.model = source["model"];
+	        this.search = source["search"];
+	    }
 	}
 
 }

@@ -2,9 +2,7 @@
 import type { model } from '../../../wailsjs/go/models'
 import LogTable from './LogTable.vue'
 import Pagination from './Pagination.vue'
-import RequestVolumeChart from './RequestVolumeChart.vue'
-import LatencyTrendChart from './LatencyTrendChart.vue'
-import StatusBreakdownChart from './StatusBreakdownChart.vue'
+import UsageTrendChart from './UsageTrendChart.vue'
 
 interface Props {
   logs: model.RequestLog[]
@@ -12,7 +10,7 @@ interface Props {
   logTotal: number
   logPage: number
   logPageSize: number
-  chartData: model.ChartAggregates
+  chartData: model.UsageTrends
 }
 defineProps<Props>()
 
@@ -40,20 +38,14 @@ const emit = defineEmits<{
       </div>
     </section>
 
-    <section class="col-2" style="margin-bottom: 24px;">
-      <div class="card">
-        <div class="card-title">请求量趋势</div>
-        <RequestVolumeChart :data="chartData" />
-      </div>
-      <div class="card">
-        <div class="card-title">状态分布</div>
-        <StatusBreakdownChart :data="chartData" />
-      </div>
-    </section>
-
     <section class="card" style="padding: 24px; margin-bottom: 24px;">
-      <div class="card-title">延迟 / 首字延迟 (TTFT)</div>
-      <LatencyTrendChart :data="chartData" />
+      <div class="row-between" style="margin-bottom: 20px;">
+        <div>
+          <div class="card-title" style="margin: 0;">使用趋势</div>
+          <div class="text-muted" style="font-size: 12px; margin-top: 4px;">输入 / 输出 / 缓存 / 成本 · 按时间聚合</div>
+        </div>
+      </div>
+      <UsageTrendChart :data="chartData" />
     </section>
 
     <section class="card" style="padding: 0; overflow: hidden;">

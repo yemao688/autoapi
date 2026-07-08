@@ -83,7 +83,8 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
 		       input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 		       route_id, route_label,
-		       api_key_id, COALESCE(error, '')
+		       api_key_id, COALESCE(error, ''),
+		       cache_creation, cache_hit
 		FROM request_logs %s
 		ORDER BY timestamp_ms DESC
 		LIMIT ? OFFSET ?`, where)
@@ -103,6 +104,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 			&l.ProviderID, &l.ProviderName, &l.Model,
 			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
 			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error,
+			&l.CacheCreation, &l.CacheHit,
 		); err != nil {
 			return nil, 0, fmt.Errorf("store: scan log: %w", err)
 		}
@@ -129,15 +131,18 @@ func (s *Store) InsertRequestLog(l model.RequestLog) error {
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
 			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
-			                          api_key_id, error)
+			                          api_key_id, error,
+			                          cache_creation, cache_hit)
 			VALUES (?, ?, ?, ?, ?, ?,
 			        ?, ?, ?, ?, ?, ?,
+			        ?, ?,
 			        ?, ?,
 			        ?, ?)`,
 			l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
 			l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 			l.RouteID, l.RouteLabel,
-			l.APIKeyID, l.Error)
+			l.APIKeyID, l.Error,
+			l.CacheCreation, l.CacheHit)
 		return err
 	})
 }
@@ -149,9 +154,11 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
 			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
-			                          api_key_id, error)
+			                          api_key_id, error,
+			                          cache_creation, cache_hit)
 			VALUES (?, ?, ?, ?, ?, ?,
 			        ?, ?, ?, ?, ?, ?,
+			        ?, ?,
 			        ?, ?,
 			        ?, ?)`)
 		if err != nil {
@@ -167,6 +174,7 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 				l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 				l.RouteID, l.RouteLabel,
 				l.APIKeyID, l.Error,
+				l.CacheCreation, l.CacheHit,
 			); err != nil {
 				return err
 			}

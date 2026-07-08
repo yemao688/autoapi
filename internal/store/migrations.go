@@ -202,6 +202,16 @@ ALTER TABLE request_logs ADD COLUMN first_token_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE request_logs ADD COLUMN is_stream INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		ID: "009_request_log_cache",
+		SQL: `
+-- Prompt-cache token counters. The proxy does not yet report them; values are
+-- always 0 until upstream providers expose cache_read_input_tokens / cache_creation_input_tokens
+-- on the request response. New columns default to 0 so historical rows remain valid.
+ALTER TABLE request_logs ADD COLUMN cache_creation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE request_logs ADD COLUMN cache_hit INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have

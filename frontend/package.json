@@ -9,10 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "echarts": "^6.1.0",
+    "chart.js": "^4.4.7",
     "vue": "^3.5.39",
-    "vue-draggable-plus": "^0.6.1",
-    "vue-echarts": "^8.0.1"
+    "vue-chartjs": "^5.3.2",
+    "vue-draggable-plus": "^0.6.1"
   },
   "devDependencies": {
     "@babel/types": "^7.18.10",

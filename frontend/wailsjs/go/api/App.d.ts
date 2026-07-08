@@ -19,8 +19,6 @@ export function ExportData(arg1:model.ExportFormat):Promise<api.ExportResult>;
 
 export function FetchUpstreamModels(arg1:string):Promise<Array<model.Model>>;
 
-export function GetChartAggregates(arg1:model.ChartQuery):Promise<model.ChartAggregates>;
-
 export function GetDashboard():Promise<model.DashboardData>;
 
 export function GetProvider(arg1:string):Promise<model.Provider>;
@@ -34,6 +32,8 @@ export function GetSettings():Promise<model.Settings>;
 export function GetSystemHealth():Promise<model.ServiceHealth>;
 
 export function GetUsageStats():Promise<model.UsageStats>;
+
+export function GetUsageTrends(arg1:model.UsageTrendsQuery):Promise<model.UsageTrends>;
 
 export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
