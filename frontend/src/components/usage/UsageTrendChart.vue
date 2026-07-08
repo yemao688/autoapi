@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Line } from 'vue-chartjs'
 import type { Chart, ChartData, ChartOptions } from 'chart.js'
 import type { model } from '../../../wailsjs/go/models'
 import { chartColors, formatCost, formatTokens } from '@/composables/useChartFormat'
+
+const { t } = useI18n()
 
 interface Props {
   data: model.UsageTrends
@@ -21,7 +24,7 @@ const chartData = computed<ChartData<'line'>>(() => {
     labels,
     datasets: [
       {
-        label: '输入 Token',
+        label: t('usage.chart.series.input'),
         data: buckets.map((b) => b.input),
         borderColor: chartColors.input,
         backgroundColor: makeBackgroundColor(chartColors.input),
@@ -33,7 +36,7 @@ const chartData = computed<ChartData<'line'>>(() => {
         borderWidth: 2,
       },
       {
-        label: '输出 Token',
+        label: t('usage.chart.series.output'),
         data: buckets.map((b) => b.output),
         borderColor: chartColors.output,
         backgroundColor: makeBackgroundColor(chartColors.output),
@@ -45,7 +48,7 @@ const chartData = computed<ChartData<'line'>>(() => {
         borderWidth: 2,
       },
       {
-        label: '缓存写入',
+        label: t('usage.chart.series.cacheCreation'),
         data: buckets.map((b) => b.cache_creation),
         borderColor: chartColors.cacheCreation,
         backgroundColor: makeBackgroundColor(chartColors.cacheCreation),
@@ -57,7 +60,7 @@ const chartData = computed<ChartData<'line'>>(() => {
         borderWidth: 2,
       },
       {
-        label: '缓存命中',
+        label: t('usage.chart.series.cacheHit'),
         data: buckets.map((b) => b.cache_hit),
         borderColor: chartColors.cacheHit,
         backgroundColor: makeBackgroundColor(chartColors.cacheHit),
@@ -69,7 +72,7 @@ const chartData = computed<ChartData<'line'>>(() => {
         borderWidth: 2,
       },
       {
-        label: '成本 (USD)',
+        label: t('usage.chart.series.cost'),
         data: buckets.map((b) => b.cost),
         borderColor: chartColors.cost,
         backgroundColor: chartColors.cost,
@@ -110,7 +113,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
       type: 'linear',
       position: 'left',
       beginAtZero: true,
-      title: { display: true, text: 'Tokens', font: { size: 10 } },
+      title: { display: true, text: t('usage.chart.axis.tokens'), font: { size: 10 } },
       grid: { color: 'rgba(0,0,0,0.05)' },
       ticks: { font: { size: 10 }, callback: (v) => formatTokens(Number(v)) },
     },
@@ -118,7 +121,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
       type: 'linear',
       position: 'right',
       beginAtZero: true,
-      title: { display: true, text: 'Cost', font: { size: 10 } },
+      title: { display: true, text: t('usage.chart.axis.cost'), font: { size: 10 } },
       grid: { display: false },
       ticks: { font: { size: 10 }, callback: (v) => formatCost(Number(v)) },
     },
@@ -201,7 +204,7 @@ function hexAlpha(hex: string, alpha: number): string {
       :options="chartOptions"
     />
     <div v-else class="trend-chart__empty">
-      <span>暂无数据</span>
+      <span>{{ t('usage.chart.empty') }}</span>
     </div>
   </div>
 </template>

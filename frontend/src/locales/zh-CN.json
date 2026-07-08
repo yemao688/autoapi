@@ -213,6 +213,75 @@
       "modelPlaceholder": "例如 gpt-4o-mini"
     }
   },
+  "providers": {
+    "title": "Provider 管理",
+    "subtitle": "{count} 个连接 · {models} 个模型",
+    "testAll": "测试全部",
+    "testing": "测试中…",
+    "add": "添加 Provider",
+    "searchPlaceholder": "搜索 Provider 或模型",
+    "sort": "排序：",
+    "sortBy": {
+      "usage": "用量",
+      "name": "名称",
+      "lastTested": "最近测试"
+    },
+    "tabs": {
+      "all": "全部",
+      "connected": "已连接",
+      "error": "异常"
+    },
+    "empty": "暂无数据",
+    "addCustom": "添加自定义 Provider",
+    "addCustomHint": "OpenAI 兼容 / 自部署网关",
+    "monthlyUsage": "本月用量",
+    "avgLatency": "平均延迟",
+    "lastError": "最后错误",
+    "modelCount": "{count} 个模型",
+    "testedAt": "测试于",
+    "failedAt": "失败于",
+    "test": "测试",
+    "reconnect": "重新连接",
+    "more": "更多",
+    "moreActions": "更多操作：{name}",
+    "loading": "加载中…",
+    "loadFailed": "加载失败：{error}",
+    "status": {
+      "connected": "已连接",
+      "error": "异常",
+      "notConnected": "未连接"
+    },
+    "testResult": {
+      "success": "测试成功：延迟 {ms}ms，模型 {count} 个",
+      "failed": "测试失败：{error}",
+      "failedUnknown": "测试失败：未知错误",
+      "allDone": "全部测试完成",
+      "allFailed": "全部测试失败：{error}",
+      "latency": "{name} 延迟 {ms} ms"
+    },
+    "modal": {
+      "edit": "编辑 Provider",
+      "add": "添加 Provider",
+      "addCustom": "添加自定义 Provider",
+      "name": "名称",
+      "namePlaceholder": "例如 OpenAI",
+      "baseUrl": "Base URL",
+      "baseUrlPlaceholder": "https://api.example.com",
+      "upstreamKey": "上游密钥",
+      "upstreamKeyCurrent": "当前：{key}",
+      "upstreamKeyHelp": "用于向该 Provider 转发请求的加密密钥。编辑时留空可保持现有密钥不变。",
+      "customProvider": "自定义 Provider",
+      "model": "模型",
+      "fetchModels": "获取上游模型",
+      "fetching": "获取中…",
+      "empty": "暂无模型，点击右上角获取",
+      "loading": "获取上游模型列表…",
+      "context": "上下文",
+      "latency": "延迟",
+      "enabled": "启用",
+      "testLatency": "测试延迟"
+    }
+  },
   "targets": {
     "edit": "编辑目标",
     "add": "添加目标",
@@ -226,6 +295,181 @@
     "cancel": "取消",
     "save": "保存",
     "saving": "保存中…"
+  },
+  "dashboard": {
+    "title": "总览",
+    "subtitle": "关键指标与最近活动",
+    "exportReport": "导出报告",
+    "loading": "加载中…",
+    "chart": {
+      "title": "Token 用量趋势 · 近 7 日",
+      "subtitle": "按输入 / 输出 Token 拆分",
+      "ariaLabel": "7 日 Token 用量趋势",
+      "inputSwatch": "输入",
+      "outputSwatch": "输出",
+      "weekday": {
+        "mon": "周一",
+        "tue": "周二",
+        "wed": "周三",
+        "thu": "周四",
+        "fri": "周五",
+        "sat": "周六",
+        "today": "今天"
+      },
+      "highlight": "532K · 周五"
+    },
+    "providersCard": "Provider 状态",
+    "manage": "管理",
+    "modelCount": "{count} 模型",
+    "notConnected": "未连接",
+    "recentActivity": "最近活动",
+    "viewAll": "查看全部",
+    "activityLine": "{provider} · 输入 {input} / 输出 {output}",
+    "approxCost": "约 {cost}",
+    "health": {
+      "cpu": "CPU 占用",
+      "cpuSub": "近 1 小时均值",
+      "mem": "内存",
+      "memSub": "本机 · {percent}",
+      "connections": "活动连接",
+      "connectionsSub": "WebSocket {ws} · HTTP {http}"
+    },
+    "uptime": {
+      "days": "Uptime {days}d {hours}h · {mins}m",
+      "hours": "Uptime {hours}h {mins}m",
+      "minutes": "Uptime {mins}m",
+      "zero": "0 秒"
+    }
+  },
+  "apiKeys": {
+    "title": "API 密钥",
+    "subtitle": "{count} 个令牌 · 存储于本地加密库",
+    "add": "添加令牌",
+    "loading": "加载中…",
+    "loadFailed": "加载失败：{error}",
+    "empty": "暂无数据",
+    "searchPlaceholder": "搜索令牌名称",
+    "activeTokens": "活跃令牌",
+    "activeTokensSub": "全部可用",
+    "expiringSoon": "即将过期",
+    "withinDays": "{days} 天内",
+    "columns": {
+      "name": "名称",
+      "token": "访问令牌",
+      "expires": "有效期至",
+      "actions": "操作"
+    },
+    "noExpiry": "不过期",
+    "moreActions": "更多操作：{name}",
+    "modal": {
+      "saveTitle": "保存您的访问令牌",
+      "edit": "编辑令牌",
+      "add": "添加令牌",
+      "accessToken": "访问令牌",
+      "tokenHelp": "这是您的访问令牌 ID，可在列表中随时复制。",
+      "name": "名称",
+      "namePlaceholder": "例如 生产环境",
+      "expires": "过期时间",
+      "expiresHelp": "本地时间，留空表示不过期",
+      "done": "完成"
+    }
+  },
+  "usage": {
+    "title": "使用统计",
+    "subtitle": "请求日志与 Token 用量 · 单页切换",
+    "export": "导出",
+    "liveLabel": "实时同步",
+    "liveAria": "切换实时同步",
+    "loading": "加载中…",
+    "ariaLabel": "使用统计视图",
+    "tabs": {
+      "logs": "请求日志",
+      "tokens": "Token 用量"
+    },
+    "custom": {
+      "start": "自定义起",
+      "end": "自定义止",
+      "startAria": "自定义起始时间",
+      "endAria": "自定义结束时间"
+    },
+    "filters": {
+      "presetAria": "选择时间范围",
+      "providerAria": "按 Provider 筛选",
+      "routeAria": "按路由筛选",
+      "modelAria": "按模型筛选",
+      "searchAria": "搜索",
+      "statusAria": "按状态筛选",
+      "modelPlaceholder": "模型",
+      "searchPlaceholder": "搜索 模型 / 路由 / 错误",
+      "providerOption": "Provider · {name}",
+      "routeOption": "路由 · {name}",
+      "clear": "清除筛选"
+    },
+    "presets": {
+      "today": "今天",
+      "day": "近 24 小时",
+      "week": "近 7 天",
+      "month": "本月",
+      "custom": "自定义"
+    },
+    "status": {
+      "all": "全部",
+      "success": "成功",
+      "failed": "失败",
+      "rateLimited": "限流"
+    },
+    "chart": {
+      "title": "使用趋势",
+      "subtitle": "输入 / 输出 / 缓存 / 成本 · 按时间聚合",
+      "empty": "暂无数据",
+      "series": {
+        "input": "输入 Token",
+        "output": "输出 Token",
+        "cacheCreation": "缓存写入",
+        "cacheHit": "缓存命中",
+        "cost": "成本 (USD)"
+      },
+      "axis": {
+        "tokens": "Tokens",
+        "cost": "Cost"
+      }
+    },
+    "providerShares": {
+      "title": "Provider 占比",
+      "month": "本月",
+      "tokensWithCost": "{tokens} tokens · ${cost}"
+    },
+    "modelRanking": {
+      "title": "模型用量排行",
+      "detail": "详情",
+      "requests": "{count} 请求"
+    },
+    "logTable": {
+      "time": "时间",
+      "status": "状态",
+      "provider": "Provider",
+      "model": "Model",
+      "input": "输入",
+      "output": "输出",
+      "cost": "成本",
+      "latencyTtft": "延迟/首字",
+      "route": "路由",
+      "defaultRoute": "默认",
+      "streamHint": "流式请求",
+      "empty": "暂无匹配日志",
+      "emptyHint": "尝试调整时间范围或清除筛选条件",
+      "clear": "清除筛选"
+    },
+    "pagination": {
+      "summary": "显示 {start}–{end} / 共 {total} 条",
+      "summaryEmpty": "显示 0–0 / 共 0 条",
+      "nav": "分页",
+      "first": "首页",
+      "prev": "上一页",
+      "next": "下一页",
+      "last": "末页",
+      "pageN": "第 {n} 页"
+    }
   },
   "common": {
     "save": "保存",
@@ -278,7 +522,15 @@
     "exported": "规则已导出",
     "invalidJson": "JSON 应为规则数组",
     "invalidItem": "规则对象缺少 name 字段",
-    "loadFailed": "加载失败"
+    "loadFailed": "加载失败",
+    "providerSaved": "Provider 已保存",
+    "providerDeleted": "Provider 已删除",
+    "apiKeyCreated": "令牌已创建，请复制保存",
+    "apiKeyUpdated": "令牌已更新",
+    "apiKeyDeleted": "令牌已删除",
+    "copiedToClipboard": "已复制到剪贴板",
+    "copyFailed": "复制失败",
+    "logsPurged": "已清理 {count} 条日志"
   },
   "confirm": {
     "defaultTitle": "确认",
@@ -289,7 +541,14 @@
     "deleteTargetTitle": "删除目标",
     "deleteTargetMessage": "确定删除目标「{target}」？此操作不可撤销。",
     "restoreDefaultsTitle": "恢复默认设置",
-    "restoreDefaultsMessage": "确定将常规设置恢复为默认值？"
+    "restoreDefaultsMessage": "确定将常规设置恢复为默认值？",
+    "deleteProviderTitle": "删除 Provider",
+    "deleteProviderMessage": "确定删除 Provider「{name}」？该 Provider 下的所有模型与路由引用都将被清理，此操作不可撤销。",
+    "deleteApiKeyTitle": "删除令牌",
+    "deleteApiKeyMessage": "确定删除令牌「{name}」？此操作不可撤销。",
+    "purgeLogsTitle": "清理历史日志",
+    "purgeLogsMessage": "确定清理 90 天前的请求日志？此操作不可撤销。",
+    "purgeConfirm": "清理"
   },
   "theme": {
     "light": "浅色",

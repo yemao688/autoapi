@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
@@ -9,6 +10,7 @@ import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
 import type { model } from '../../wailsjs/go/models'
 
+const { t } = useI18n()
 const { format } = useRelativeTime()
 const toast = useToast()
 const confirm = useConfirm()
@@ -58,16 +60,16 @@ function tokenDisplay(id: string): string {
 }
 
 function formatExpiresAt(ms: number): string {
-  if (!ms || ms <= 0) return '不过期'
+  if (!ms || ms <= 0) return t('apiKeys.noExpiry')
   return new Date(ms).toLocaleString()
 }
 
 async function copyToken(token: string) {
   try {
     await navigator.clipboard.writeText(token)
-    toast.push('已复制到剪贴板', 'success')
+    toast.push(t('toast.copiedToClipboard'), 'success')
   } catch (e: any) {
-    toast.push('复制失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.copyFailed') + ': ' + (e?.message || String(e)), 'error')
   }
 }
 
@@ -77,9 +79,9 @@ async function copyKey(key: model.ApiKey) {
 
 async function deleteKey(id: string, name: string) {
   const ok = await confirm.open({
-    title: '删除令牌',
-    message: `确定删除令牌「${name}」？此操作不可撤销。`,
-    confirmText: '删除',
+    title: t('confirm.deleteApiKeyTitle'),
+    message: t('confirm.deleteApiKeyMessage', { name }),
+    confirmText: t('common.delete'),
     danger: true,
   })
   if (!ok) return
@@ -87,9 +89,9 @@ async function deleteKey(id: string, name: string) {
   try {
     await api.deleteApiKey(id)
     await loadKeys()
-    toast.push('令牌已删除', 'success')
+    toast.push(t('toast.apiKeyDeleted'), 'success')
   } catch (e: any) {
-    toast.push('删除失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.deleteFailed') + ': ' + (e?.message || String(e)), 'error')
   } finally {
     deleting.value = false
   }
@@ -129,15 +131,15 @@ async function saveKey() {
       await api.updateApiKey(editingId.value, form.value)
       modalOpen.value = false
       await loadKeys()
-      toast.push('令牌已更新', 'success')
+      toast.push(t('toast.apiKeyUpdated'), 'success')
     } else {
       const created = await api.createApiKey(form.value)
       revealedToken.value = created.id
       await loadKeys()
-      toast.push('令牌已创建，请复制保存', 'success')
+      toast.push(t('toast.apiKeyCreated'), 'success')
     }
   } catch (e: any) {
-    toast.push('保存失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.saveFailed') + ': ' + (e?.message || String(e)), 'error')
   } finally {
     saving.value = false
   }
@@ -151,13 +153,13 @@ onMounted(() => {
 <template>
   <header class="main-header">
     <div class="main-title-group">
-      <h1 class="main-title">API 密钥</h1>
-      <span class="main-subtitle">{{ activeCount }} 个令牌 · 存储于本地加密库</span>
+      <h1 class="main-title">{{ t('apiKeys.title') }}</h1>
+      <span class="main-subtitle">{{ t('apiKeys.subtitle', { count: activeCount }) }}</span>
     </div>
     <div class="main-actions">
       <button class="btn btn-primary" @click="openCreateModal">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-        添加令牌
+        {{ t('apiKeys.add') }}
       </button>
     </div>
   </header>
@@ -165,21 +167,21 @@ onMounted(() => {
   <div class="main-content">
     <div class="main-content-inner stack-loose">
       <!-- Loading / error -->
-      <div v-if="keysLoading && !keys" class="text-muted" style="padding: 40px 0; text-align: center;">加载中…</div>
-      <div v-else-if="keysError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">加载失败：{{ keysError }}</div>
+      <div v-if="keysLoading && !keys" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('apiKeys.loading') }}</div>
+      <div v-else-if="keysError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('apiKeys.loadFailed', { error: keysError }) }}</div>
       <template v-else>
         <!-- summary stats -->
         <div class="stat-grid">
           <div class="stat-card">
-            <div class="stat-label">活跃令牌</div>
+            <div class="stat-label">{{ t('apiKeys.activeTokens') }}</div>
             <div class="stat-value">{{ activeCount }}</div>
-            <div class="stat-meta"><span>全部可用</span></div>
+            <div class="stat-meta"><span>{{ t('apiKeys.activeTokensSub') }}</span></div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">即将过期</div>
+            <div class="stat-label">{{ t('apiKeys.expiringSoon') }}</div>
             <div class="stat-value">{{ expiringCount }}</div>
             <div class="stat-meta">
-              <span v-if="expiringCount" class="delta negative">14 天内</span>
+              <span v-if="expiringCount" class="delta negative">{{ t('apiKeys.withinDays', { days: 14 }) }}</span>
               <span v-else>—</span>
             </div>
           </div>
@@ -189,22 +191,22 @@ onMounted(() => {
         <div class="row" style="gap: 8px;">
           <div class="row" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; gap: 6px; flex: 1; max-width: 360px;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;color:var(--muted);"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-            <input v-model="search" class="input" style="border: none; padding: 0; font-size: 13px;" placeholder="搜索令牌名称">
+            <input v-model="search" class="input" style="border: none; padding: 0; font-size: 13px;" :placeholder="t('apiKeys.searchPlaceholder')">
           </div>
         </div>
 
         <!-- Empty state -->
-        <div v-if="!filteredKeys.length" class="text-muted" style="padding: 40px 0; text-align: center;">暂无数据</div>
+        <div v-if="!filteredKeys.length" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('apiKeys.empty') }}</div>
 
         <!-- keys table -->
         <div v-else class="card" style="padding: 0; overflow: hidden;">
           <table class="tbl">
             <thead>
               <tr>
-                <th>名称</th>
-                <th>访问令牌</th>
-                <th>有效期至</th>
-                <th class="right">操作</th>
+                <th>{{ t('apiKeys.columns.name') }}</th>
+                <th>{{ t('apiKeys.columns.token') }}</th>
+                <th>{{ t('apiKeys.columns.expires') }}</th>
+                <th class="right">{{ t('apiKeys.columns.actions') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -216,7 +218,7 @@ onMounted(() => {
                 <td>
                   <div class="row" style="gap: 6px;">
                     <span class="text-mono" style="font-size: 12.5px; color: var(--muted);">{{ tokenDisplay(key.id) }}</span>
-                    <button class="btn btn-icon" style="width: 22px; height: 22px;" title="复制" @click="copyKey(key)">
+                    <button class="btn btn-icon" style="width: 22px; height: 22px;" :title="t('common.copy')" @click="copyKey(key)">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
                   </div>
@@ -231,16 +233,16 @@ onMounted(() => {
                         class="btn btn-icon"
                         :aria-expanded="open"
                         aria-haspopup="menu"
-                        :aria-label="`更多操作：${key.name}`"
+                        :aria-label="t('apiKeys.moreActions', { name: key.name })"
                         @click="toggle"
                       >
                         <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                       </button>
                     </template>
                     <template #menu="{ close }">
-                      <button class="dropdown-item" role="menuitem" @click="openEditModal(key); close()">编辑</button>
-                      <button class="dropdown-item" role="menuitem" @click="copyKey(key); close()">复制</button>
-                      <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteKey(key.id, key.name); close()">删除</button>
+                      <button class="dropdown-item" role="menuitem" @click="openEditModal(key); close()">{{ t('common.edit') }}</button>
+                      <button class="dropdown-item" role="menuitem" @click="copyKey(key); close()">{{ t('common.copy') }}</button>
+                      <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteKey(key.id, key.name); close()">{{ t('common.delete') }}</button>
                     </template>
                   </DropdownMenu>
                 </td>
@@ -256,12 +258,12 @@ onMounted(() => {
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
       <div class="modal-card">
-        <div v-if="revealedToken" class="modal-title">保存您的访问令牌</div>
-        <div v-else class="modal-title">{{ modalMode === 'edit' ? '编辑令牌' : '添加令牌' }}</div>
+        <div v-if="revealedToken" class="modal-title">{{ t('apiKeys.modal.saveTitle') }}</div>
+        <div v-else class="modal-title">{{ modalMode === 'edit' ? t('apiKeys.modal.edit') : t('apiKeys.modal.add') }}</div>
 
         <template v-if="revealedToken">
           <div class="field">
-            <label class="field-label">访问令牌</label>
+            <label class="field-label">{{ t('apiKeys.modal.accessToken') }}</label>
             <div class="row" style="gap: 6px;">
               <input
                 :value="revealedToken"
@@ -269,33 +271,33 @@ onMounted(() => {
                 class="input mono"
                 style="flex: 1;"
               >
-              <button class="btn btn-secondary" @click="copyToken(revealedToken)">复制</button>
+              <button class="btn btn-secondary" @click="copyToken(revealedToken)">{{ t('common.copy') }}</button>
             </div>
-            <div class="field-help">这是您的访问令牌 ID，可在列表中随时复制。</div>
+            <div class="field-help">{{ t('apiKeys.modal.tokenHelp') }}</div>
           </div>
           <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-            <button class="btn btn-primary" @click="closeModal">完成</button>
+            <button class="btn btn-primary" @click="closeModal">{{ t('apiKeys.modal.done') }}</button>
           </div>
         </template>
 
         <template v-else>
           <div class="field">
-            <label class="field-label">名称</label>
-            <input v-model="form.name" class="input" placeholder="例如 生产环境">
+            <label class="field-label">{{ t('apiKeys.modal.name') }}</label>
+            <input v-model="form.name" class="input" :placeholder="t('apiKeys.modal.namePlaceholder')">
           </div>
           <div class="field">
-            <label class="field-label">过期时间</label>
+            <label class="field-label">{{ t('apiKeys.modal.expires') }}</label>
             <input
               :value="toDateTimeLocal(form.expires_at)"
               type="datetime-local"
               class="input input-datetime"
               @input="form.expires_at = fromDateTimeLocal(($event.target as HTMLInputElement).value)"
             >
-            <div class="field-help">本地时间，留空表示不过期</div>
+            <div class="field-help">{{ t('apiKeys.modal.expiresHelp') }}</div>
           </div>
           <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-            <button class="btn btn-secondary" @click="closeModal">取消</button>
-            <button class="btn btn-primary" :disabled="saving" @click="saveKey">{{ saving ? '保存中…' : '保存' }}</button>
+            <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
+            <button class="btn btn-primary" :disabled="saving" @click="saveKey">{{ saving ? t('common.processing') : t('common.save') }}</button>
           </div>
         </template>
       </div>
