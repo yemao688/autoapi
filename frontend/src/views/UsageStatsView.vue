@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
@@ -14,6 +15,8 @@ import TokensPane from '@/components/usage/TokensPane.vue'
 import LogsPane from '@/components/usage/LogsPane.vue'
 import LogFilters, { type DateRangePreset, type RouteOption } from '@/components/usage/LogFilters.vue'
 
+const { t } = useI18n()
+
 useRelativeTime()
 const { download } = useExportDownload()
 const toast = useToast()
@@ -26,12 +29,16 @@ const liveSync = ref(false)
 let liveTimer: ReturnType<typeof setInterval> | null = null
 
 const selectedProviderId = ref('')
-const statusFilter = ref('全部')
-const statusMap: Record<string, string> = {
-  '全部': '',
-  '成功': 'success',
-  '失败': 'failed',
-  '限流': 'rate_limited',
+// Use stable internal keys for the v-model so changing the active locale does
+// not break the selected option (the dropdown text is translated, the value
+// stays the same).
+type StatusFilterKey = 'all' | 'success' | 'failed' | 'rate_limited'
+const statusFilter = ref<StatusFilterKey>('all')
+const statusMap: Record<StatusFilterKey, string> = {
+  all: '',
+  success: 'success',
+  failed: 'failed',
+  rate_limited: 'rate_limited',
 }
 
 const selectedRouteId = ref('')
@@ -54,13 +61,13 @@ const chartData = ref<model.UsageTrends>(new model.UsageTrends({
 
 const providerOptions = computed<ProviderOption[]>(() => {
   const list = usageData.value?.providers || []
-  return [{ name: '全部', id: '' }, ...list.map(p => ({ name: p.provider_name, id: p.provider_id }))]
+  return [{ name: t('usage.status.all'), id: '' }, ...list.map(p => ({ name: p.provider_name, id: p.provider_id }))]
 })
 
 const { data: routesData, execute: fetchRoutes } = useApi(api.routes)
 const routeOptions = computed<RouteOption[]>(() => {
   const list = routesData.value || []
-  return [{ name: '全部', id: '' }, ...list.map(r => ({ name: r.name || r.id, id: r.id }))]
+  return [{ name: t('usage.status.all'), id: '' }, ...list.map(r => ({ name: r.name || r.id, id: r.id }))]
 })
 
 const tokenStats = computed(() => (usageData.value?.token_stats || []).slice(0, 4))
@@ -233,7 +240,7 @@ async function applyFilters() {
 
 async function clearFilters() {
   selectedProviderId.value = ''
-  statusFilter.value = '全部'
+  statusFilter.value = 'all'
   selectedRouteId.value = ''
   modelFilter.value = ''
   searchText.value = ''
@@ -244,15 +251,15 @@ async function clearFilters() {
 
 async function purgeLogs() {
   const ok = await confirm.open({
-    title: '清理历史日志',
-    message: '确定清理 90 天前的请求日志？此操作不可撤销。',
-    confirmText: '清理',
+    title: t('confirm.purgeLogsTitle'),
+    message: t('confirm.purgeLogsMessage'),
+    confirmText: t('confirm.purgeConfirm'),
     danger: true,
   })
   if (!ok) return
   try {
     const deleted = await api.purgeLogs(90)
-    toast.push(`已清理 ${deleted} 条日志`, 'success')
+    toast.push(t('toast.logsPurged', { count: deleted }), 'success')
     await refreshAll()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
@@ -343,28 +350,28 @@ watch([modelFilter, searchText], () => {
 <template>
   <header class="main-header">
     <div class="main-title-group">
-      <h1 class="main-title">使用统计</h1>
-      <span class="main-subtitle">请求日志与 Token 用量 · 单页切换</span>
+      <h1 class="main-title">{{ t('usage.title') }}</h1>
+      <span class="main-subtitle">{{ t('usage.subtitle') }}</span>
     </div>
     <div class="main-actions">
       <button class="btn btn-secondary" @click="exportLogs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-        导出
+        {{ t('usage.export') }}
       </button>
       <button
         class="btn btn-primary"
         :class="{ active: liveSync }"
         :aria-pressed="liveSync"
-        aria-label="切换实时同步"
+        :aria-label="t('usage.liveAria')"
         @click="toggleLive"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9M3 12a9 9 0 0 1 9-9M12 3v9l5 3"/></svg>
-        <span class="live-label">实时同步</span>
+        <span class="live-label">{{ t('usage.liveLabel') }}</span>
       </button>
     </div>
   </header>
 
-  <div class="tabs-strip" role="tablist" aria-label="使用统计视图" id="usage-tab-strip" @keydown="handleTabKeydown">
+  <div class="tabs-strip" role="tablist" :aria-label="t('usage.ariaLabel')" id="usage-tab-strip" @keydown="handleTabKeydown">
     <button
       class="tab"
       :class="{ active: activePane === 'logs' }"
@@ -375,7 +382,7 @@ watch([modelFilter, searchText], () => {
       data-pane-id="logs"
       @click="switchPane('logs')"
     >
-      请求日志<span class="tab-meta" aria-hidden="true">{{ logTotalValue.toLocaleString() }}</span>
+      {{ t('usage.tabs.logs') }}<span class="tab-meta" aria-hidden="true">{{ logTotalValue.toLocaleString() }}</span>
     </button>
     <button
       class="tab"
@@ -387,7 +394,7 @@ watch([modelFilter, searchText], () => {
       data-pane-id="tokens"
       @click="switchPane('tokens')"
     >
-      Token 用量<span class="tab-meta" aria-hidden="true">{{ totalTokenValue }}</span>
+      {{ t('usage.tabs.tokens') }}<span class="tab-meta" aria-hidden="true">{{ totalTokenValue }}</span>
     </button>
   </div>
 
@@ -405,26 +412,26 @@ watch([modelFilter, searchText], () => {
   />
 
   <div v-if="dateRangePreset === 'custom'" class="filter-bar" style="margin-top: 8px;">
-    <label class="text-muted" style="font-size: 12px;">自定义起</label>
+    <label class="text-muted" style="font-size: 12px;">{{ t('usage.custom.start') }}</label>
     <input
       v-model="customStart"
       type="datetime-local"
       class="input"
       style="width: auto; padding: 5px 10px; font-size: 12.5px;"
-      aria-label="自定义起始时间"
+      :aria-label="t('usage.custom.startAria')"
     />
-    <label class="text-muted" style="font-size: 12px;">自定义止</label>
+    <label class="text-muted" style="font-size: 12px;">{{ t('usage.custom.end') }}</label>
     <input
       v-model="customEnd"
       type="datetime-local"
       class="input"
       style="width: auto; padding: 5px 10px; font-size: 12.5px;"
-      aria-label="自定义结束时间"
+      :aria-label="t('usage.custom.endAria')"
     />
   </div>
 
   <div class="main-content">
-    <div v-if="loading && !usageData" class="loading-overlay">加载中…</div>
+    <div v-if="loading && !usageData" class="loading-overlay">{{ t('usage.loading') }}</div>
     <div class="main-content-inner stack-loose">
 
       <!-- ================== TOKENS VIEW ================== -->

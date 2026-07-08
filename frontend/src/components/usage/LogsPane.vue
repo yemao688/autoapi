@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { model } from '../../../wailsjs/go/models'
 import LogTable from './LogTable.vue'
 import Pagination from './Pagination.vue'
 import UsageTrendChart from './UsageTrendChart.vue'
+
+const { t } = useI18n()
 
 interface Props {
   logs: model.RequestLog[]
@@ -41,8 +44,8 @@ const emit = defineEmits<{
     <section class="card" style="padding: 24px; margin-bottom: 24px;">
       <div class="row-between" style="margin-bottom: 20px;">
         <div>
-          <div class="card-title" style="margin: 0;">使用趋势</div>
-          <div class="text-muted" style="font-size: 12px; margin-top: 4px;">输入 / 输出 / 缓存 / 成本 · 按时间聚合</div>
+          <div class="card-title" style="margin: 0;">{{ t('usage.chart.title') }}</div>
+          <div class="text-muted" style="font-size: 12px; margin-top: 4px;">{{ t('usage.chart.subtitle') }}</div>
         </div>
       </div>
       <UsageTrendChart :data="chartData" />

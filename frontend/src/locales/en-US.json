@@ -213,6 +213,75 @@
       "modelPlaceholder": "e.g. gpt-4o-mini"
     }
   },
+  "providers": {
+    "title": "Providers",
+    "subtitle": "{count} connections · {models} models",
+    "testAll": "Test all",
+    "testing": "Testing…",
+    "add": "Add provider",
+    "searchPlaceholder": "Search providers or models",
+    "sort": "Sort:",
+    "sortBy": {
+      "usage": "Usage",
+      "name": "Name",
+      "lastTested": "Last tested"
+    },
+    "tabs": {
+      "all": "All",
+      "connected": "Connected",
+      "error": "Error"
+    },
+    "empty": "No data yet",
+    "addCustom": "Add custom provider",
+    "addCustomHint": "OpenAI compatible / self-hosted gateway",
+    "monthlyUsage": "Monthly usage",
+    "avgLatency": "Avg latency",
+    "lastError": "Last error",
+    "modelCount": "{count} models",
+    "testedAt": "Tested",
+    "failedAt": "Failed at",
+    "test": "Test",
+    "reconnect": "Reconnect",
+    "more": "More",
+    "moreActions": "More actions: {name}",
+    "loading": "Loading…",
+    "loadFailed": "Load failed: {error}",
+    "status": {
+      "connected": "Connected",
+      "error": "Error",
+      "notConnected": "Not connected"
+    },
+    "testResult": {
+      "success": "Test succeeded: {ms}ms latency, {count} models",
+      "failed": "Test failed: {error}",
+      "failedUnknown": "Test failed: Unknown error",
+      "allDone": "All tests done",
+      "allFailed": "All tests failed: {error}",
+      "latency": "{name} latency {ms} ms"
+    },
+    "modal": {
+      "edit": "Edit provider",
+      "add": "Add provider",
+      "addCustom": "Add custom provider",
+      "name": "Name",
+      "namePlaceholder": "e.g. OpenAI",
+      "baseUrl": "Base URL",
+      "baseUrlPlaceholder": "https://api.example.com",
+      "upstreamKey": "Upstream key",
+      "upstreamKeyCurrent": "Current: {key}",
+      "upstreamKeyHelp": "Encrypted key used to forward requests to this provider. Leave empty in edit mode to keep the existing key.",
+      "customProvider": "Custom provider",
+      "model": "Models",
+      "fetchModels": "Fetch upstream models",
+      "fetching": "Fetching…",
+      "empty": "No models. Click the button above to fetch.",
+      "loading": "Fetching upstream model list…",
+      "context": "Context",
+      "latency": "Latency",
+      "enabled": "Enabled",
+      "testLatency": "Test latency"
+    }
+  },
   "targets": {
     "edit": "Edit target",
     "add": "Add target",
@@ -226,6 +295,181 @@
     "cancel": "Cancel",
     "save": "Save",
     "saving": "Saving…"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Key metrics and recent activity",
+    "exportReport": "Export report",
+    "loading": "Loading…",
+    "chart": {
+      "title": "Token usage trend · last 7 days",
+      "subtitle": "Split by input / output tokens",
+      "ariaLabel": "7-day token usage trend",
+      "inputSwatch": "Input",
+      "outputSwatch": "Output",
+      "weekday": {
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat",
+        "today": "Today"
+      },
+      "highlight": "532K · Fri"
+    },
+    "providersCard": "Providers",
+    "manage": "Manage",
+    "modelCount": "{count} models",
+    "notConnected": "Not connected",
+    "recentActivity": "Recent activity",
+    "viewAll": "View all",
+    "activityLine": "{provider} · {input} in / {output} out",
+    "approxCost": "≈ {cost}",
+    "health": {
+      "cpu": "CPU usage",
+      "cpuSub": "1-hour average",
+      "mem": "Memory",
+      "memSub": "Local · {percent}",
+      "connections": "Active connections",
+      "connectionsSub": "WebSocket {ws} · HTTP {http}"
+    },
+    "uptime": {
+      "days": "Uptime {days}d {hours}h · {mins}m",
+      "hours": "Uptime {hours}h {mins}m",
+      "minutes": "Uptime {mins}m",
+      "zero": "0 sec"
+    }
+  },
+  "apiKeys": {
+    "title": "API keys",
+    "subtitle": "{count} tokens · stored in local encrypted vault",
+    "add": "Add token",
+    "loading": "Loading…",
+    "loadFailed": "Load failed: {error}",
+    "empty": "No data yet",
+    "searchPlaceholder": "Search tokens by name",
+    "activeTokens": "Active tokens",
+    "activeTokensSub": "All usable",
+    "expiringSoon": "Expiring soon",
+    "withinDays": "Within {days} days",
+    "columns": {
+      "name": "Name",
+      "token": "Access token",
+      "expires": "Expires",
+      "actions": "Actions"
+    },
+    "noExpiry": "Never expires",
+    "moreActions": "More actions: {name}",
+    "modal": {
+      "saveTitle": "Save your access token",
+      "edit": "Edit token",
+      "add": "Add token",
+      "accessToken": "Access token",
+      "tokenHelp": "This is your access token ID. You can copy it any time from the list.",
+      "name": "Name",
+      "namePlaceholder": "e.g. production",
+      "expires": "Expires",
+      "expiresHelp": "Local time. Leave empty to never expire.",
+      "done": "Done"
+    }
+  },
+  "usage": {
+    "title": "Usage",
+    "subtitle": "Request logs and token usage · single-page switch",
+    "export": "Export",
+    "liveLabel": "Live sync",
+    "liveAria": "Toggle live sync",
+    "loading": "Loading…",
+    "ariaLabel": "Usage stats view",
+    "tabs": {
+      "logs": "Request logs",
+      "tokens": "Token usage"
+    },
+    "custom": {
+      "start": "Start",
+      "end": "End",
+      "startAria": "Custom start time",
+      "endAria": "Custom end time"
+    },
+    "filters": {
+      "presetAria": "Select time range",
+      "providerAria": "Filter by provider",
+      "routeAria": "Filter by route",
+      "modelAria": "Filter by model",
+      "searchAria": "Search",
+      "statusAria": "Filter by status",
+      "modelPlaceholder": "Model",
+      "searchPlaceholder": "Search model / route / error",
+      "providerOption": "Provider · {name}",
+      "routeOption": "Route · {name}",
+      "clear": "Clear filters"
+    },
+    "presets": {
+      "today": "Today",
+      "day": "Last 24 hours",
+      "week": "Last 7 days",
+      "month": "This month",
+      "custom": "Custom"
+    },
+    "status": {
+      "all": "All",
+      "success": "Success",
+      "failed": "Failed",
+      "rateLimited": "Rate limited"
+    },
+    "chart": {
+      "title": "Usage trend",
+      "subtitle": "Input / output / cache / cost · aggregated over time",
+      "empty": "No data",
+      "series": {
+        "input": "Input tokens",
+        "output": "Output tokens",
+        "cacheCreation": "Cache write",
+        "cacheHit": "Cache hit",
+        "cost": "Cost (USD)"
+      },
+      "axis": {
+        "tokens": "Tokens",
+        "cost": "Cost"
+      }
+    },
+    "providerShares": {
+      "title": "Provider share",
+      "month": "This month",
+      "tokensWithCost": "{tokens} tokens · ${cost}"
+    },
+    "modelRanking": {
+      "title": "Model usage ranking",
+      "detail": "Details",
+      "requests": "{count} requests"
+    },
+    "logTable": {
+      "time": "Time",
+      "status": "Status",
+      "provider": "Provider",
+      "model": "Model",
+      "input": "Input",
+      "output": "Output",
+      "cost": "Cost",
+      "latencyTtft": "Latency/TTFT",
+      "route": "Route",
+      "defaultRoute": "Default",
+      "streamHint": "Streaming request",
+      "empty": "No matching logs",
+      "emptyHint": "Try adjusting the time range or clearing filters",
+      "clear": "Clear filters"
+    },
+    "pagination": {
+      "summary": "Showing {start}–{end} of {total}",
+      "summaryEmpty": "Showing 0–0 of 0",
+      "nav": "Pagination",
+      "first": "First",
+      "prev": "Previous",
+      "next": "Next",
+      "last": "Last",
+      "pageN": "Page {n}"
+    }
   },
   "common": {
     "save": "Save",
@@ -278,7 +522,15 @@
     "exported": "Rules exported",
     "invalidJson": "JSON must be an array of rules",
     "invalidItem": "Rule object is missing the name field",
-    "loadFailed": "Load failed"
+    "loadFailed": "Load failed",
+    "providerSaved": "Provider saved",
+    "providerDeleted": "Provider deleted",
+    "apiKeyCreated": "Token created. Please copy and save it.",
+    "apiKeyUpdated": "Token updated",
+    "apiKeyDeleted": "Token deleted",
+    "copiedToClipboard": "Copied to clipboard",
+    "copyFailed": "Copy failed",
+    "logsPurged": "Purged {count} logs"
   },
   "confirm": {
     "defaultTitle": "Confirm",
@@ -289,7 +541,14 @@
     "deleteTargetTitle": "Delete target",
     "deleteTargetMessage": "Delete target \"{target}\"? This cannot be undone.",
     "restoreDefaultsTitle": "Restore default settings",
-    "restoreDefaultsMessage": "Reset general settings to defaults?"
+    "restoreDefaultsMessage": "Reset general settings to defaults?",
+    "deleteProviderTitle": "Delete provider",
+    "deleteProviderMessage": "Delete provider \"{name}\"? All models and route references under this provider will be cleaned up. This cannot be undone.",
+    "deleteApiKeyTitle": "Delete token",
+    "deleteApiKeyMessage": "Delete token \"{name}\"? This cannot be undone.",
+    "purgeLogsTitle": "Purge old logs",
+    "purgeLogsMessage": "Delete request logs older than 90 days? This cannot be undone.",
+    "purgeConfirm": "Purge"
   },
   "theme": {
     "light": "Light",

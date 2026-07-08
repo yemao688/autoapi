@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
@@ -10,6 +11,7 @@ import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
 import type { model } from '../../wailsjs/go/models'
 
+const { t } = useI18n()
 const { format } = useRelativeTime()
 const { color: providerColor, initial: providerLetter } = useProviderStyle()
 const { tokens: fmtTokens, latency: fmtLatency } = useFormatters()
@@ -74,9 +76,9 @@ const totalModelCount = computed(() =>
 )
 
 function statusLabel(status: string): string {
-  if (status === 'connected') return '已连接'
-  if (status === 'error') return '异常'
-  return '未连接'
+  if (status === 'connected') return t('providers.status.connected')
+  if (status === 'error') return t('providers.status.error')
+  return t('providers.status.notConnected')
 }
 
 function statusBadgeClass(status: string): string {
@@ -115,12 +117,12 @@ async function testOne(id: string) {
     const res = await api.testProvider(id)
     toast.push(
       res.ok
-        ? `测试成功：延迟 ${res.latency_ms}ms，模型 ${res.models.length} 个`
-        : `测试失败：${res.error || '未知错误'}`,
+        ? t('providers.testResult.success', { ms: res.latency_ms, count: res.models.length })
+        : t('providers.testResult.failed', { error: res.error || t('providers.testResult.failedUnknown') }),
       res.ok ? 'success' : 'error'
     )
   } catch (e: any) {
-    toast.push('测试失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.saveFailed') + ': ' + (e?.message || String(e)), 'error')
   } finally {
     testingIds.value.delete(id)
   }
@@ -130,9 +132,9 @@ async function testOne(id: string) {
 async function testAll() {
   try {
     await api.testAllProviders()
-    toast.push('全部测试完成', 'success')
+    toast.push(t('providers.testResult.allDone'), 'success')
   } catch (e: any) {
-    toast.push('全部测试失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('providers.testResult.allFailed', { error: e?.message || String(e) }), 'error')
   }
   await refresh()
 }
@@ -172,9 +174,9 @@ async function testModelLatency(m: model.Model) {
     const result = await api.testModelLatency(editingId.value, m.name)
     if (result.ok) {
       m.latency_ms = result.latency_ms
-      toast.push(`${m.name} 延迟 ${result.latency_ms} ms`, 'success')
+      toast.push(t('providers.testResult.latency', { name: m.name, ms: result.latency_ms }), 'success')
     } else {
-      toast.push(result.error || '测试失败', 'error')
+      toast.push(result.error || t('providers.testResult.failedUnknown'), 'error')
     }
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
@@ -214,9 +216,9 @@ async function saveProvider() {
     }
     modalOpen.value = false
     await refresh()
-    toast.push('Provider 已保存', 'success')
+    toast.push(t('toast.providerSaved'), 'success')
   } catch (e: any) {
-    toast.push('保存失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.saveFailed') + ': ' + (e?.message || String(e)), 'error')
   } finally {
     saving.value = false
   }
@@ -231,9 +233,9 @@ function closeModal() {
 
 async function deleteProvider(id: string, name: string) {
   const ok = await confirm.open({
-    title: '删除 Provider',
-    message: `确定删除 Provider「${name}」？该 Provider 下的所有模型与路由引用都将被清理，此操作不可撤销。`,
-    confirmText: '删除',
+    title: t('confirm.deleteProviderTitle'),
+    message: t('confirm.deleteProviderMessage', { name }),
+    confirmText: t('common.delete'),
     danger: true,
   })
   if (!ok) return
@@ -241,9 +243,9 @@ async function deleteProvider(id: string, name: string) {
   try {
     await api.deleteProvider(id)
     await refresh()
-    toast.push('Provider 已删除', 'success')
+    toast.push(t('toast.providerDeleted'), 'success')
   } catch (e: any) {
-    toast.push('删除失败：' + (e?.message || String(e)), 'error')
+    toast.push(t('toast.deleteFailed') + ': ' + (e?.message || String(e)), 'error')
   } finally {
     deleting.value = false
   }
@@ -289,16 +291,16 @@ onMounted(() => {
 <template>
   <header class="main-header">
     <div class="main-title-group">
-      <h1 class="main-title">Provider 管理</h1>
-      <span class="main-subtitle">{{ providers?.length ?? 0 }} 个连接 · {{ totalModelCount }} 个模型</span>
+      <h1 class="main-title">{{ t('providers.title') }}</h1>
+      <span class="main-subtitle">{{ t('providers.subtitle', { count: providers?.length ?? 0, models: totalModelCount }) }}</span>
     </div>
     <div class="main-actions">
       <button class="btn btn-secondary" :disabled="providersLoading" @click="testAll">
-        {{ providersLoading ? '测试中…' : '测试全部' }}
+        {{ providersLoading ? t('providers.testing') : t('providers.testAll') }}
       </button>
       <button class="btn btn-primary" @click="openAdd(false)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-        添加 Provider
+        {{ t('providers.add') }}
       </button>
     </div>
   </header>
@@ -306,33 +308,33 @@ onMounted(() => {
   <div class="main-content">
     <div class="main-content-inner stack-loose">
       <!-- Loading / error -->
-      <div v-if="providersLoading && !providers" class="text-muted" style="padding: 40px 0; text-align: center;">加载中…</div>
-      <div v-else-if="providersError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">加载失败：{{ providersError }}</div>
+      <div v-if="providersLoading && !providers" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('providers.loading') }}</div>
+      <div v-else-if="providersError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('providers.loadFailed', { error: providersError }) }}</div>
       <template v-else>
         <!-- Filter bar -->
         <div class="row" style="gap: 8px; flex-wrap: wrap;">
           <div class="row" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; gap: 6px; flex: 1; max-width: 360px;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;color:var(--muted);"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-            <input v-model="search" class="input" style="border: none; padding: 0; font-size: 13px;" placeholder="搜索 Provider 或模型">
+            <input v-model="search" class="input" style="border: none; padding: 0; font-size: 13px;" :placeholder="t('providers.searchPlaceholder')">
           </div>
           <div class="tabs" tabindex="0" @keydown="handleTabKeydown" style="outline: none;">
-            <button class="tab" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部</button>
-            <button class="tab" :class="{ active: activeTab === 'connected' }" @click="activeTab = 'connected'">已连接</button>
-            <button class="tab" :class="{ active: activeTab === 'error' }" @click="activeTab = 'error'">异常</button>
+            <button class="tab" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">{{ t('providers.tabs.all') }}</button>
+            <button class="tab" :class="{ active: activeTab === 'connected' }" @click="activeTab = 'connected'">{{ t('providers.tabs.connected') }}</button>
+            <button class="tab" :class="{ active: activeTab === 'error' }" @click="activeTab = 'error'">{{ t('providers.tabs.error') }}</button>
           </div>
           <div class="spacer"></div>
           <div class="row" style="font-size: 12px; color: var(--muted);">
-            排序：
+            {{ t('providers.sort') }}
             <select v-model="sortBy" class="select" style="width: auto; padding: 5px 10px; font-size: 12px;">
-              <option value="usage">用量</option>
-              <option value="name">名称</option>
-              <option value="last_tested">最近测试</option>
+              <option value="usage">{{ t('providers.sortBy.usage') }}</option>
+              <option value="name">{{ t('providers.sortBy.name') }}</option>
+              <option value="last_tested">{{ t('providers.sortBy.lastTested') }}</option>
             </select>
           </div>
         </div>
 
         <!-- Empty state -->
-        <div v-if="!filteredProviders.length" class="text-muted" style="padding: 40px 0; text-align: center;">暂无数据</div>
+        <div v-if="!filteredProviders.length" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('providers.empty') }}</div>
 
         <!-- Provider cards grid -->
         <section v-else class="col-2">
@@ -354,11 +356,11 @@ onMounted(() => {
             </div>
             <div class="h-divider" style="margin: 0 0 14px;"></div>
             <div class="row-between" style="margin-bottom: 10px;">
-              <span class="text-muted" style="font-size: 12px;">本月用量</span>
+              <span class="text-muted" style="font-size: 12px;">{{ t('providers.monthlyUsage') }}</span>
               <span class="text-mono" style="font-size: 13px; font-weight: 500;">{{ fmtTokens(provider.monthly_tokens) }} tokens</span>
             </div>
             <div class="row-between" style="margin-bottom: 14px;">
-              <span class="text-muted" style="font-size: 12px;">{{ provider.status === 'connected' ? '平均延迟' : '最后错误' }}</span>
+              <span class="text-muted" style="font-size: 12px;">{{ provider.status === 'connected' ? t('providers.avgLatency') : t('providers.lastError') }}</span>
               <span class="text-mono" :style="{ fontSize: '13px', fontWeight: 500, color: provider.status === 'connected' ? 'inherit' : 'var(--negative)' }">
                 {{ provider.status === 'connected' ? fmtLatency(provider.avg_latency_ms) : (provider.error_message || '—') }}
               </span>
@@ -367,10 +369,10 @@ onMounted(() => {
               <template v-if="modelsMap[provider.id]?.length">
                 <span v-for="m in modelsMap[provider.id]" :key="m.id" class="badge mono">{{ m.name }}</span>
               </template>
-              <span v-else class="badge mono" style="color: var(--muted);">{{ provider.models_count }} 个模型</span>
+              <span v-else class="badge mono" style="color: var(--muted);">{{ t('providers.modelCount', { count: provider.models_count }) }}</span>
             </div>
             <div class="row-between">
-              <span class="text-muted" style="font-size: 11px;" :data-time="provider.last_tested_at">{{ provider.status === 'connected' ? '测试于' : '失败于' }} {{ format(provider.last_tested_at) }}</span>
+              <span class="text-muted" style="font-size: 11px;" :data-time="provider.last_tested_at">{{ provider.status === 'connected' ? t('providers.testedAt') : t('providers.failedAt') }} {{ format(provider.last_tested_at) }}</span>
               <div class="row" style="gap: 4px;">
                 <button
                   class="btn"
@@ -379,27 +381,27 @@ onMounted(() => {
                   :disabled="testingIds.has(provider.id)"
                   @click="testOne(provider.id)"
                 >
-                  {{ testingIds.has(provider.id) ? '测试中…' : (provider.status === 'connected' ? '测试' : '重新连接') }}
+                  {{ testingIds.has(provider.id) ? t('providers.testing') : (provider.status === 'connected' ? t('providers.test') : t('providers.reconnect')) }}
                 </button>
-                <button class="btn btn-icon" title="编辑" @click="openEdit(provider)">
+                <button class="btn btn-icon" :title="t('common.edit')" @click="openEdit(provider)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
                 </button>
                 <DropdownMenu :menu-id="provider.id">
                   <template #trigger="{ toggle, open }">
                     <button
                       class="btn btn-icon"
-                      title="更多"
+                      :title="t('providers.more')"
                       :aria-expanded="open"
                       aria-haspopup="menu"
-                      :aria-label="`更多操作：${provider.name}`"
+                      :aria-label="t('providers.moreActions', { name: provider.name })"
                       @click="toggle"
                     >
                       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
                     </button>
                   </template>
                   <template #menu="{ close }">
-                    <button class="dropdown-item" role="menuitem" @click="openEdit(provider); close()">编辑</button>
-                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteProvider(provider.id, provider.name); close()">删除</button>
+                    <button class="dropdown-item" role="menuitem" @click="openEdit(provider); close()">{{ t('common.edit') }}</button>
+                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteProvider(provider.id, provider.name); close()">{{ t('common.delete') }}</button>
                   </template>
                 </DropdownMenu>
               </div>
@@ -411,8 +413,8 @@ onMounted(() => {
               <div style="width: 48px; height: 48px; border-radius: 24px; background: rgba(0, 113, 227, 0.08); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px;">
                 <svg viewBox="0 0 24 24" fill="none" stroke="#0071e3" stroke-width="1.6" stroke-linecap="round" style="width:22px;height:22px;"><path d="M12 5v14M5 12h14"/></svg>
               </div>
-              <div style="font-size: 14px; font-weight: 500; color: var(--fg);">添加自定义 Provider</div>
-              <div style="font-size: 12px; margin-top: 4px;">OpenAI 兼容 / 自部署网关</div>
+              <div style="font-size: 14px; font-weight: 500; color: var(--fg);">{{ t('providers.addCustom') }}</div>
+              <div style="font-size: 12px; margin-top: 4px;">{{ t('providers.addCustomHint') }}</div>
             </div>
           </article>
         </section>
@@ -424,26 +426,26 @@ onMounted(() => {
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
       <div class="modal-card wide">
-        <div class="modal-title">{{ modalMode === 'edit' ? '编辑 Provider' : (form.is_custom ? '添加自定义 Provider' : '添加 Provider') }}</div>
+        <div class="modal-title">{{ modalMode === 'edit' ? t('providers.modal.edit') : (form.is_custom ? t('providers.modal.addCustom') : t('providers.modal.add')) }}</div>
         <div class="field">
-          <label class="field-label">名称</label>
-          <input v-model="form.name" class="input" placeholder="例如 OpenAI">
+          <label class="field-label">{{ t('providers.modal.name') }}</label>
+          <input v-model="form.name" class="input" :placeholder="t('providers.modal.namePlaceholder')">
         </div>
         <div class="field">
-          <label class="field-label">Base URL</label>
-          <input v-model="form.base_url" class="input mono" placeholder="https://api.example.com">
+          <label class="field-label">{{ t('providers.modal.baseUrl') }}</label>
+          <input v-model="form.base_url" class="input mono" :placeholder="t('providers.modal.baseUrlPlaceholder')">
         </div>
         <div class="field">
-          <label class="field-label">上游密钥</label>
+          <label class="field-label">{{ t('providers.modal.upstreamKey') }}</label>
           <div v-if="modalMode === 'edit' && (providers || []).find((p) => p.id === editingId)?.key_masked" class="text-mono" style="font-size: 12px; color: var(--muted); margin-bottom: 6px;">
-            当前：{{ (providers || []).find((p) => p.id === editingId)?.key_masked }}
+            {{ t('providers.modal.upstreamKeyCurrent', { key: (providers || []).find((p) => p.id === editingId)?.key_masked }) }}
           </div>
           <input v-model="form.upstream_key" type="password" class="input mono" placeholder="sk-...">
-          <div class="field-help">用于向该 Provider 转发请求的加密密钥。编辑时留空可保持现有密钥不变。</div>
+          <div class="field-help">{{ t('providers.modal.upstreamKeyHelp') }}</div>
         </div>
         <div v-if="modalMode === 'add'" class="field">
           <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">自定义 Provider</label>
+            <label class="field-label">{{ t('providers.modal.customProvider') }}</label>
             <label class="toggle">
               <input v-model="form.is_custom" type="checkbox">
               <span class="toggle-slider"></span>
@@ -453,22 +455,22 @@ onMounted(() => {
 
         <div v-if="modalMode === 'edit'" class="field">
           <div class="row-between" style="margin-bottom: 8px;">
-            <label class="field-label">模型</label>
+            <label class="field-label">{{ t('providers.modal.model') }}</label>
             <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" :disabled="fetchingModels" @click="fetchModels">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
-              {{ fetchingModels ? '获取中…' : '获取上游模型' }}
+              {{ fetchingModels ? t('providers.modal.fetching') : t('providers.modal.fetchModels') }}
             </button>
           </div>
           <div class="model-list">
-            <div v-if="fetchingModels" class="model-empty">获取上游模型列表…</div>
-            <div v-else-if="!models.length" class="model-empty">暂无模型，点击右上角获取</div>
+            <div v-if="fetchingModels" class="model-empty">{{ t('providers.modal.loading') }}</div>
+            <div v-else-if="!models.length" class="model-empty">{{ t('providers.modal.empty') }}</div>
             <table v-else class="model-table">
               <thead>
                 <tr>
-                  <th>模型</th>
-                  <th class="right">上下文</th>
-                  <th class="right">延迟</th>
-                  <th class="right">启用</th>
+                  <th>{{ t('providers.modal.model') }}</th>
+                  <th class="right">{{ t('providers.modal.context') }}</th>
+                  <th class="right">{{ t('providers.modal.latency') }}</th>
+                  <th class="right">{{ t('providers.modal.enabled') }}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -490,7 +492,7 @@ onMounted(() => {
                     </label>
                   </td>
                   <td class="right">
-                    <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" title="测试延迟" @click="testModelLatency(m)">
+                    <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" :title="t('providers.modal.testLatency')" @click="testModelLatency(m)">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
                     </button>
                   </td>
@@ -501,8 +503,8 @@ onMounted(() => {
         </div>
 
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeModal">取消</button>
-          <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? '保存中…' : '保存' }}</button>
+          <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? t('common.processing') : t('common.save') }}</button>
         </div>
       </div>
     </div>

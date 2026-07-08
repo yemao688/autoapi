@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { ProviderOption } from '@/types/usage'
+
+const { t } = useI18n()
 
 export interface RouteOption {
   id: string
@@ -56,11 +59,11 @@ function onDateRangeChange(e: Event) {
 }
 
 const presetOptions: { value: DateRangePreset; label: string }[] = [
-  { value: 'today', label: '今天' },
-  { value: 'day', label: '近 24 小时' },
-  { value: 'week', label: '近 7 天' },
-  { value: 'month', label: '本月' },
-  { value: 'custom', label: '自定义' },
+  { value: 'today', label: t('usage.presets.today') },
+  { value: 'day', label: t('usage.presets.day') },
+  { value: 'week', label: t('usage.presets.week') },
+  { value: 'month', label: t('usage.presets.month') },
+  { value: 'custom', label: t('usage.presets.custom') },
 ]
 </script>
 
@@ -70,7 +73,7 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       :value="dateRangePreset"
       class="select"
       style="width: auto; padding: 5px 10px; font-size: 12.5px;"
-      aria-label="选择时间范围"
+      :aria-label="t('usage.filters.presetAria')"
       @change="onDateRangeChange"
     >
       <option v-for="opt in presetOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -79,27 +82,27 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       :value="provider"
       class="select"
       style="width: auto; padding: 5px 10px; font-size: 12.5px;"
-      aria-label="按 Provider 筛选"
+      :aria-label="t('usage.filters.providerAria')"
       @change="onProviderChange"
     >
-      <option v-for="opt in providerOptions" :key="opt.id" :value="opt.id">Provider · {{ opt.name }}</option>
+      <option v-for="opt in providerOptions" :key="opt.id" :value="opt.id">{{ t('usage.filters.providerOption', { name: opt.name }) }}</option>
     </select>
     <select
       :value="route"
       class="select"
       style="width: auto; padding: 5px 10px; font-size: 12.5px;"
-      aria-label="按路由筛选"
+      :aria-label="t('usage.filters.routeAria')"
       @change="onRouteChange"
     >
-      <option v-for="opt in routeOptions" :key="opt.id" :value="opt.id">路由 · {{ opt.name }}</option>
+      <option v-for="opt in routeOptions" :key="opt.id" :value="opt.id">{{ t('usage.filters.routeOption', { name: opt.name }) }}</option>
     </select>
     <input
       :value="model"
       type="text"
       class="input"
       style="width: auto; padding: 5px 10px; font-size: 12.5px; min-width: 140px;"
-      placeholder="模型"
-      aria-label="按模型筛选"
+      :placeholder="t('usage.filters.modelPlaceholder')"
+      :aria-label="t('usage.filters.modelAria')"
       @input="onModelInput"
     />
     <input
@@ -107,8 +110,8 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       type="text"
       class="input"
       style="width: auto; padding: 5px 10px; font-size: 12.5px; min-width: 160px;"
-      placeholder="搜索 模型 / 路由 / 错误"
-      aria-label="搜索"
+      :placeholder="t('usage.filters.searchPlaceholder')"
+      :aria-label="t('usage.filters.searchAria')"
       @input="onSearchInput"
     />
     <select
@@ -116,15 +119,15 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       :value="status"
       class="select"
       style="width: auto; padding: 5px 10px; font-size: 12.5px;"
-      aria-label="按状态筛选"
+      :aria-label="t('usage.filters.statusAria')"
       @change="onStatusChange"
     >
-      <option>全部</option>
-      <option>成功</option>
-      <option>失败</option>
-      <option>限流</option>
+      <option value="all">{{ t('usage.status.all') }}</option>
+      <option value="success">{{ t('usage.status.success') }}</option>
+      <option value="failed">{{ t('usage.status.failed') }}</option>
+      <option value="rate_limited">{{ t('usage.status.rateLimited') }}</option>
     </select>
     <div class="filter-spacer"></div>
-    <button class="btn btn-ghost" style="font-size: 12.5px; padding: 5px 10px;" @click="emit('clear')">清除筛选</button>
+    <button class="btn btn-ghost" style="font-size: 12.5px; padding: 5px 10px;" @click="emit('clear')">{{ t('usage.filters.clear') }}</button>
   </div>
 </template>

@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { model } from '../../../wailsjs/go/models'
 
 import { useProviderStyle } from '@/composables/useProviderStyle'
+
+const { t } = useI18n()
 
 interface Props {
   logs: model.RequestLog[]
@@ -46,15 +49,15 @@ function statusText(statusCode: number): string {
   <table class="tbl">
     <thead>
       <tr>
-        <th>时间</th>
-        <th>状态</th>
-        <th>Provider</th>
-        <th>Model</th>
-        <th class="right">输入</th>
-        <th class="right">输出</th>
-        <th class="right">成本</th>
-        <th class="right">延迟/首字</th>
-        <th>路由</th>
+        <th>{{ t('usage.logTable.time') }}</th>
+        <th>{{ t('usage.logTable.status') }}</th>
+        <th>{{ t('usage.logTable.provider') }}</th>
+        <th>{{ t('usage.logTable.model') }}</th>
+        <th class="right">{{ t('usage.logTable.input') }}</th>
+        <th class="right">{{ t('usage.logTable.output') }}</th>
+        <th class="right">{{ t('usage.logTable.cost') }}</th>
+        <th class="right">{{ t('usage.logTable.latencyTtft') }}</th>
+        <th>{{ t('usage.logTable.route') }}</th>
       </tr>
     </thead>
     <tbody>
@@ -84,7 +87,7 @@ function statusText(statusCode: number): string {
         <td>
           <span class="text-mono" style="font-size: 12.5px;">
             {{ log.model }}
-            <span v-if="log.is_stream" class="text-muted" style="font-size: 10px;" title="流式请求">⇄</span>
+            <span v-if="log.is_stream" class="text-muted" style="font-size: 10px;" :title="t('usage.logTable.streamHint')">⇄</span>
           </span>
         </td>
         <td class="num">{{ log.input_tokens > 0 ? log.input_tokens : '—' }}</td>
@@ -96,7 +99,7 @@ function statusText(statusCode: number): string {
             /{{ (log.first_token_ms / 1000).toFixed(2) }}s
           </span>
         </td>
-        <td><span class="badge info" style="font-size: 10px;">{{ log.route_label || '默认' }}</span></td>
+        <td><span class="badge info" style="font-size: 10px;">{{ log.route_label || t('usage.logTable.defaultRoute') }}</span></td>
       </tr>
       <tr v-if="logs.length === 0" class="logs-empty-row">
         <td colspan="9" style="padding: 56px 20px;">
@@ -104,9 +107,9 @@ function statusText(statusCode: number): string {
             <div style="width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; color: var(--muted);">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
             </div>
-            <div style="font-size: 14px; font-weight: 500; color: var(--fg);">暂无匹配日志</div>
-            <div style="font-size: 12.5px; color: var(--muted);">尝试调整时间范围或清除筛选条件</div>
-            <button class="btn btn-secondary" style="font-size: 12.5px; padding: 5px 12px; margin-top: 4px;" @click="emit('clearFilters')">清除筛选</button>
+            <div style="font-size: 14px; font-weight: 500; color: var(--fg);">{{ t('usage.logTable.empty') }}</div>
+            <div style="font-size: 12.5px; color: var(--muted);">{{ t('usage.logTable.emptyHint') }}</div>
+            <button class="btn btn-secondary" style="font-size: 12.5px; padding: 5px 12px; margin-top: 4px;" @click="emit('clearFilters')">{{ t('usage.logTable.clear') }}</button>
           </div>
         </td>
       </tr>

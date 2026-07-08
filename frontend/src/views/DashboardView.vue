@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
+
+const { t } = useI18n()
 
 useRelativeTime()
 const { download } = useExportDownload()
@@ -52,13 +55,13 @@ function formatNumber(n: number): string {
 }
 
 function formatUptime(seconds: number): string {
-  if (!seconds) return '0 秒'
+  if (!seconds) return t('dashboard.uptime.zero')
   const days = Math.floor(seconds / 86400)
   const hours = Math.floor((seconds % 86400) / 3600)
   const mins = Math.floor((seconds % 3600) / 60)
-  if (days > 0) return `Uptime ${days}d ${hours}h · ${mins}m`
-  if (hours > 0) return `Uptime ${hours}h ${mins}m`
-  return `Uptime ${mins}m`
+  if (days > 0) return t('dashboard.uptime.days', { days, hours, mins })
+  if (hours > 0) return t('dashboard.uptime.hours', { hours, mins })
+  return t('dashboard.uptime.minutes', { mins })
 }
 
 const { format: relativeFormat } = useRelativeTime()
@@ -99,20 +102,20 @@ onUnmounted(() => {
 <template>
   <header class="main-header">
     <div class="main-title-group">
-      <h1 class="main-title">总览</h1>
-      <span class="main-subtitle">关键指标与最近活动</span>
+      <h1 class="main-title">{{ t('dashboard.title') }}</h1>
+      <span class="main-subtitle">{{ t('dashboard.subtitle') }}</span>
     </div>
     <div class="main-actions">
-      <span class="badge success"><span :class="proxyRunning ? 'dot green' : 'dot red'"></span>{{ proxyRunning ? '服务运行中' : '服务已停止' }}</span>
+      <span class="badge success"><span :class="proxyRunning ? 'dot green' : 'dot red'"></span>{{ proxyRunning ? t('status.serviceRunning') : t('status.serviceStopped') }}</span>
       <button class="btn btn-secondary" @click="exportReport">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-        导出报告
+        {{ t('dashboard.exportReport') }}
       </button>
     </div>
   </header>
 
   <div class="main-content">
-    <div v-if="loading && !dashboardData" class="loading-overlay">加载中…</div>
+    <div v-if="loading && !dashboardData" class="loading-overlay">{{ t('dashboard.loading') }}</div>
     <div class="main-content-inner stack-loose">
       <!-- Stat row -->
       <section class="stat-grid">
@@ -120,7 +123,7 @@ onUnmounted(() => {
           v-for="(stat, idx) in stats"
           :key="stat.label + idx"
           class="stat-card"
-          :class="{ dark: stat.label.includes('服务状态') }"
+          :class="{ dark: stat.label === 'Active Providers' }"
         >
           <div class="stat-label">{{ stat.label }}</div>
           <div class="stat-value">{{ stat.value }}</div>
@@ -141,17 +144,17 @@ onUnmounted(() => {
       <section class="card">
         <div class="row-between" style="margin-bottom: 16px;">
           <div>
-            <div class="card-title" style="margin: 0;">Token 用量趋势 · 近 7 日</div>
-            <div class="text-muted" style="font-size: 12px; margin-top: 4px;">按输入 / 输出 Token 拆分</div>
+            <div class="card-title" style="margin: 0;">{{ t('dashboard.chart.title') }}</div>
+            <div class="text-muted" style="font-size: 12px; margin-top: 4px;">{{ t('dashboard.chart.subtitle') }}</div>
           </div>
           <div class="chart-legend">
-            <span class="chart-legend-item"><span class="chart-legend-swatch" style="background: #0071e3;"></span>输入</span>
-            <span class="chart-legend-item"><span class="chart-legend-swatch" style="background: rgba(0, 113, 227, 0.32);"></span>输出</span>
+            <span class="chart-legend-item"><span class="chart-legend-swatch" style="background: #0071e3;"></span>{{ t('dashboard.chart.inputSwatch') }}</span>
+            <span class="chart-legend-item"><span class="chart-legend-swatch" style="background: rgba(0, 113, 227, 0.32);"></span>{{ t('dashboard.chart.outputSwatch') }}</span>
           </div>
         </div>
 
         <div class="chart-wrap">
-          <svg class="chart-svg" viewBox="0 0 800 220" preserveAspectRatio="none" role="img" aria-label="7 日 Token 用量趋势">
+          <svg class="chart-svg" viewBox="0 0 800 220" preserveAspectRatio="none" role="img" :aria-label="t('dashboard.chart.ariaLabel')">
             <defs>
               <linearGradient id="areaInput" x1="0" x2="0" y1="0" y2="1">
                 <stop offset="0%" stop-color="#0071e3" stop-opacity="0.22"/>
@@ -197,17 +200,17 @@ onUnmounted(() => {
             <g>
               <line x1="512" y1="46" x2="512" y2="14" stroke="rgba(0,113,227,0.4)" stroke-width="1" stroke-dasharray="2 2"/>
               <rect x="470" y="0" width="84" height="22" rx="11" fill="#0071e3"/>
-              <text x="512" y="15" text-anchor="middle" font-family="SF Mono, monospace" font-size="11" font-weight="500" fill="#fff">532K · 周五</text>
+              <text x="512" y="15" text-anchor="middle" font-family="SF Mono, monospace" font-size="11" font-weight="500" fill="#fff">{{ t('dashboard.chart.highlight') }}</text>
             </g>
 
             <g font-family="SF Pro Text, sans-serif" font-size="11" fill="#6e6e73" text-anchor="middle">
-              <text x="80" y="218">周一</text>
-              <text x="188" y="218">周二</text>
-              <text x="296" y="218">周三</text>
-              <text x="404" y="218">周四</text>
-              <text x="512" y="218">周五</text>
-              <text x="620" y="218">周六</text>
-              <text x="728" y="218">今天</text>
+              <text x="80" y="218">{{ t('dashboard.chart.weekday.mon') }}</text>
+              <text x="188" y="218">{{ t('dashboard.chart.weekday.tue') }}</text>
+              <text x="296" y="218">{{ t('dashboard.chart.weekday.wed') }}</text>
+              <text x="404" y="218">{{ t('dashboard.chart.weekday.thu') }}</text>
+              <text x="512" y="218">{{ t('dashboard.chart.weekday.fri') }}</text>
+              <text x="620" y="218">{{ t('dashboard.chart.weekday.sat') }}</text>
+              <text x="728" y="218">{{ t('dashboard.chart.weekday.today') }}</text>
             </g>
           </svg>
         </div>
@@ -217,8 +220,8 @@ onUnmounted(() => {
       <section class="col-2-3-7">
         <div class="card">
           <div class="card-title">
-            <span>Provider 状态</span>
-            <RouterLink class="card-title-link" to="/providers">管理</RouterLink>
+            <span>{{ t('dashboard.providersCard') }}</span>
+            <RouterLink class="card-title-link" to="/providers">{{ t('dashboard.manage') }}</RouterLink>
           </div>
           <div class="stack-tight">
             <div
@@ -235,7 +238,7 @@ onUnmounted(() => {
                 <div class="list-title">{{ p.name }}</div>
                 <div class="list-sub">
                    <span v-if="p.status !== 'connected'" class="dot red" style="margin-right: 4px;"></span>
-                   {{ p.status === 'connected' ? `${p.models_count} 模型` : (p.error_message || '未连接') }}
+                   {{ p.status === 'connected' ? t('dashboard.modelCount', { count: p.models_count }) : (p.error_message || t('dashboard.notConnected')) }}
                 </div>
               </div>
               <div class="list-meta">{{ p.monthly_tokens ? formatNumber(p.monthly_tokens) : '—' }}</div>
@@ -245,8 +248,8 @@ onUnmounted(() => {
 
         <div class="card">
           <div class="card-title">
-            <span>最近活动</span>
-            <RouterLink class="card-title-link" to="/usage-stats">查看全部</RouterLink>
+            <span>{{ t('dashboard.recentActivity') }}</span>
+            <RouterLink class="card-title-link" to="/usage-stats">{{ t('dashboard.viewAll') }}</RouterLink>
           </div>
           <div class="stack-tight">
             <div
@@ -258,8 +261,8 @@ onUnmounted(() => {
               <span class="text-mono text-muted" style="width: 60px;">{{ formatTime(log.timestamp) }}</span>
               <span class="badge mono">{{ log.model }}</span>
               <div class="list-main">
-                <div class="list-title">{{ log.provider_name }} · 输入 {{ log.input_tokens }} / 输出 {{ log.output_tokens }}</div>
-                <div class="list-sub">约 {{ formatCost(log.cost) }}</div>
+                <div class="list-title">{{ t('dashboard.activityLine', { provider: log.provider_name, input: log.input_tokens, output: log.output_tokens }) }}</div>
+                <div class="list-sub">{{ t('dashboard.approxCost', { cost: formatCost(log.cost) }) }}</div>
               </div>
               <span class="text-mono text-muted">{{ (log.latency_ms / 1000).toFixed(1) }}s</span>
             </div>
@@ -270,19 +273,19 @@ onUnmounted(() => {
       <!-- Service health -->
       <section class="col-3">
         <div class="card">
-          <div class="card-title">CPU 占用</div>
+          <div class="card-title">{{ t('dashboard.health.cpu') }}</div>
           <div class="stat-value" style="font-size: 24px;">{{ health ? health.cpu_percent.toFixed(1) : '—' }}%</div>
-          <div class="stat-meta"><span class="delta positive">−1.8%</span><span>近 1 小时均值</span></div>
+          <div class="stat-meta"><span class="delta positive">−1.8%</span><span>{{ t('dashboard.health.cpuSub') }}</span></div>
         </div>
         <div class="card">
-          <div class="card-title">内存</div>
+          <div class="card-title">{{ t('dashboard.health.mem') }}</div>
           <div class="stat-value" style="font-size: 24px;">{{ health ? Math.round(health.memory_mb) : '—' }} MB</div>
-          <div class="stat-meta"><span>本机 · 4.2%</span></div>
+          <div class="stat-meta"><span>{{ t('dashboard.health.memSub', { percent: '4.2%' }) }}</span></div>
         </div>
         <div class="card">
-          <div class="card-title">活动连接</div>
+          <div class="card-title">{{ t('dashboard.health.connections') }}</div>
           <div class="stat-value" style="font-size: 24px;">{{ health ? health.active_connections : '—' }}</div>
-          <div class="stat-meta"><span>WebSocket {{ health ? health.websocket_count : '—' }} · HTTP {{ health ? health.http_count : '—' }}</span></div>
+          <div class="stat-meta"><span>{{ t('dashboard.health.connectionsSub', { ws: health ? health.websocket_count : '—', http: health ? health.http_count : '—' }) }}</span></div>
         </div>
       </section>
     </div>

@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface Props {
   page: number
@@ -77,23 +80,28 @@ function onGoto(p: number) {
 <template>
   <div class="row-between" style="padding: 12px 16px; border-top: 1px solid rgba(0, 0, 0, 0.05);">
     <div class="text-muted" style="font-size: 12px;">
-      显示 {{ total ? paginationStart : 0 }}–{{ total ? paginationEnd : 0 }} / 共 {{ total.toLocaleString() }} 条
+      <template v-if="total">
+        {{ t('usage.pagination.summary', { start: paginationStart, end: paginationEnd, total: total.toLocaleString() }) }}
+      </template>
+      <template v-else>
+        {{ t('usage.pagination.summaryEmpty') }}
+      </template>
     </div>
-    <div class="row" style="gap: 4px;" role="group" aria-label="分页">
+    <div class="row" style="gap: 4px;" role="group" :aria-label="t('usage.pagination.nav')">
       <button
         class="btn btn-secondary"
         style="padding: 4px 10px; font-size: 12px;"
         :disabled="!hasPrevPage"
-        aria-label="首页"
+        :aria-label="t('usage.pagination.first')"
         @click="emit('first')"
-      >« 首页</button>
+      >« {{ t('usage.pagination.first') }}</button>
       <button
         class="btn btn-secondary"
         style="padding: 4px 10px; font-size: 12px;"
         :disabled="!hasPrevPage"
-        aria-label="上一页"
+        :aria-label="t('usage.pagination.prev')"
         @click="emit('prev')"
-      >‹ 上一页</button>
+      >‹ {{ t('usage.pagination.prev') }}</button>
       <template v-for="item in visiblePages" :key="item.kind === 'page' ? item.page : item.key">
         <span
           v-if="item.kind === 'ellipsis'"
@@ -107,7 +115,7 @@ function onGoto(p: number) {
           :class="item.page === safePage ? 'btn-primary' : 'btn-secondary'"
           style="padding: 4px 10px; font-size: 12px; min-width: 30px;"
           :aria-current="item.page === safePage ? 'page' : undefined"
-          :aria-label="`第 ${item.page} 页`"
+          :aria-label="t('usage.pagination.pageN', { n: item.page })"
           @click="onGoto(item.page)"
         >{{ item.page }}</button>
       </template>
@@ -115,16 +123,16 @@ function onGoto(p: number) {
         class="btn btn-secondary"
         style="padding: 4px 10px; font-size: 12px;"
         :disabled="!hasNextPage"
-        aria-label="下一页"
+        :aria-label="t('usage.pagination.next')"
         @click="emit('next')"
-      >下一页 ›</button>
+      >{{ t('usage.pagination.next') }} ›</button>
       <button
         class="btn btn-secondary"
         style="padding: 4px 10px; font-size: 12px;"
         :disabled="!hasNextPage"
-        aria-label="末页"
+        :aria-label="t('usage.pagination.last')"
         @click="emit('last')"
-      >末页 »</button>
+      >{{ t('usage.pagination.last') }} »</button>
     </div>
   </div>
 </template>
