@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
+import i18n from './locales'
 import './styles.css'
 
 // Chart.js: register only what UsageTrendChart consumes (line/area, dual-axis,
@@ -29,4 +30,4 @@ ChartJS.register(
   Legend,
 )
 
-createApp(App).use(router).mount('#app')
+createApp(App).use(router).use(i18n).mount('#app')

@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
+
+const { t } = useI18n()
 
 const { data: health, execute: loadHealth } = useApi(api.systemHealth)
 
@@ -13,8 +16,8 @@ const copyState = ref<'idle' | 'copied'>('idle')
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 
 const displayAddress = computed(() => {
-  if (!proxyRunning.value) return '未启动'
-  return apiAddress.value || proxyURL.value || '未启动'
+  if (!proxyRunning.value) return t('status.serviceNotStarted')
+  return apiAddress.value || proxyURL.value || t('status.serviceNotStarted')
 })
 
 async function copyApiAddress() {
@@ -67,7 +70,7 @@ onUnmounted(() => {
           boxShadow: proxyRunning ? '0 0 0 3px rgba(40, 167, 69, 0.18)' : '0 0 0 3px rgba(217, 48, 37, 0.18)',
         }"
       ></span>
-      <span>{{ proxyRunning ? '服务运行中' : '服务已停止' }}</span>
+      <span>{{ proxyRunning ? t('status.serviceRunning') : t('status.serviceStopped') }}</span>
       <span class="status-divider" aria-hidden="true"></span>
       <span class="status-address" :class="{ 'is-empty': !proxyRunning || !apiAddress }">
         {{ displayAddress }}
@@ -76,8 +79,8 @@ onUnmounted(() => {
         v-if="proxyRunning && apiAddress"
         class="status-copy"
         type="button"
-        :title="copyState === 'copied' ? '已复制' : '复制地址'"
-        :aria-label="copyState === 'copied' ? '已复制' : '复制地址'"
+        :title="copyState === 'copied' ? t('status.copied') : t('status.copyAddress')"
+        :aria-label="copyState === 'copied' ? t('status.copied') : t('status.copyAddress')"
         @click="copyApiAddress"
       >
         <svg
@@ -113,7 +116,7 @@ onUnmounted(() => {
           />
         </svg>
       </button>
-      <span class="sr-only" role="status" aria-live="polite">{{ copyState === 'copied' ? '已复制' : '' }}</span>
+      <span class="sr-only" role="status" aria-live="polite">{{ copyState === 'copied' ? t('status.copied') : '' }}</span>
     </div>
   </footer>
 </template>

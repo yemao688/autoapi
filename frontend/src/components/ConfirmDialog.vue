@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useConfirm } from '@/composables/useConfirm'
 
 const { state, resolve } = useConfirm()
+const { t } = useI18n()
 
 const titleId = computed(() => `confirm-dialog-title-${state.id}`)
 const bodyId = computed(() => `confirm-dialog-body-${state.id}`)
@@ -48,7 +50,7 @@ function onConfirm() {
               :disabled="state.busy"
               @click="onConfirm"
             >
-              {{ state.busy ? '处理中…' : state.confirmText }}
+              {{ state.busy ? t('common.processing') : state.confirmText }}
             </button>
           </div>
         </div>

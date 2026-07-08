@@ -1,4 +1,5 @@
 import { onMounted, onUnmounted, ref } from 'vue'
+import i18n from '@/locales'
 
 export function useRelativeTime() {
   const tick = ref(0)
@@ -10,16 +11,17 @@ export function useRelativeTime() {
     const now = Date.now()
     const diff = now - ts
     const seconds = Math.floor(diff / 1000)
-    if (seconds < 5) return '刚刚'
-    if (seconds < 60) return `${seconds} 秒前`
+    const t = (key: string, params?: Record<string, unknown>) => i18n.global.t(key, params ?? {})
+    if (seconds < 5) return t('relativeTime.justNow')
+    if (seconds < 60) return t('relativeTime.secondsAgo', { n: seconds })
     const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes} 分钟前`
+    if (minutes < 60) return t('relativeTime.minutesAgo', { n: minutes })
     const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours} 小时前`
+    if (hours < 24) return t('relativeTime.hoursAgo', { n: hours })
     const days = Math.floor(hours / 24)
-    if (days < 30) return `${days} 天前`
+    if (days < 30) return t('relativeTime.daysAgo', { n: days })
     const months = Math.floor(days / 30)
-    return `${months} 个月前`
+    return t('relativeTime.monthsAgo', { n: months })
   }
 
   function refreshAll() {
