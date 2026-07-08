@@ -45,6 +45,8 @@ export function ListProviders():Promise<Array<model.Provider>>;
 
 export function ListRoutes():Promise<Array<model.Route>>;
 
+export function OpenStorageFolder():Promise<void>;
+
 export function PurgeLogs(arg1:number):Promise<number>;
 
 export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;

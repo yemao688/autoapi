@@ -154,4 +154,8 @@ export const api = {
     ensureWails()
     return (wails.ExportData as (f: string) => Promise<apiModels.ExportResult>)(format)
   },
+  openStorageFolder: (): Promise<void> => {
+    ensureWails()
+    return wails.OpenStorageFolder() as Promise<void>
+  },
 }

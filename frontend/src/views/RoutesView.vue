@@ -4,14 +4,14 @@ import { VueDraggable } from 'vue-draggable-plus'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
-import { useProviderMeta } from '../composables/useProviderMeta'
+import { useProviderStyle } from '../composables/useProviderStyle'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import { model } from '../../wailsjs/go/models'
 
 const { format } = useRelativeTime()
-const { color: providerColor, letter: providerLetter } = useProviderMeta()
+const { color: providerColor, initial: providerLetter } = useProviderStyle()
 const { currency: fmtCurrency } = useFormatters()
 const toast = useToast()
 const confirm = useConfirm()
@@ -27,6 +27,8 @@ const {
   data: providers,
   execute: loadProviders,
 } = useApi(() => api.providers())
+
+const { data: settings, execute: loadSettings } = useApi(api.getSettings)
 
 const modalOpen = ref(false)
 const editingId = ref('')
@@ -88,7 +90,15 @@ const providerNameMap = computed(() => {
   return map
 })
 
-const defaultFallback = computed(() => ({ provider: 'OpenAI', model: 'gpt-4o-mini' }))
+const defaultFallback = computed(() => ({
+  provider: providerNameMap.value[settings.value?.routing?.default_provider_id || ''] || 'OpenAI',
+  model: settings.value?.routing?.default_model || 'gpt-4o-mini',
+  providerId: settings.value?.routing?.default_provider_id || '',
+}))
+
+const fallbackModalOpen = ref(false)
+const fallbackProviderId = ref('')
+const fallbackModel = ref('')
 
 function operatorLabel(op: string): string {
   const map: Record<string, string> = {
@@ -231,20 +241,101 @@ async function deleteRoute(id: string, name: string) {
 }
 
 function editDefault() {
-  toast.push('暂未实现', 'warning')
+  fallbackProviderId.value = settings.value?.routing?.default_provider_id || ''
+  fallbackModel.value = settings.value?.routing?.default_model || ''
+  fallbackModalOpen.value = true
+}
+
+async function saveDefaultFallback() {
+  try {
+    const s = settings.value ? new model.Settings(JSON.parse(JSON.stringify(settings.value))) : await api.getSettings()
+    if (!s) {
+      toast.push('设置加载失败', 'error')
+      return
+    }
+    s.routing.default_provider_id = fallbackProviderId.value
+    s.routing.default_model = fallbackModel.value
+    await api.saveSettings(s)
+    await loadSettings()
+    fallbackModalOpen.value = false
+    toast.push('默认兜底已更新', 'success')
+  } catch (e: any) {
+    toast.push('保存失败：' + (e?.message || String(e)), 'error')
+  }
 }
 
 function importJSON() {
-  toast.push('暂未实现', 'warning')
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.json,application/json'
+  input.onchange = async (e: Event) => {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      const inputs: model.RouteInput[] = []
+      if (!Array.isArray(parsed)) {
+        throw new Error('JSON 应为规则数组')
+      }
+      for (const item of parsed) {
+        if (!item || typeof item.name !== 'string') {
+          throw new Error('规则对象缺少 name 字段')
+        }
+        const conditions = Array.isArray(item.conditions) ? item.conditions : []
+        const targets = Array.isArray(item.targets) ? item.targets : []
+        inputs.push(new model.RouteInput({
+          name: item.name || '',
+          description: item.description || '',
+          enabled: item.enabled !== false,
+          conditions: conditions.map((c: any) => new model.RouteCondition({
+            field: c.field || 'model',
+            operator: c.operator || 'matches',
+            value: c.value || '',
+          })),
+          targets: targets.map((t: any) => new model.RouteTarget({
+            provider_id: t.provider_id || '',
+            model_name: t.model_name || '',
+            max_retries: typeof t.max_retries === 'number' ? t.max_retries : 0,
+          })),
+        }))
+      }
+      for (const input of inputs) {
+        await api.createRoute(input)
+      }
+      await loadRoutes()
+      toast.push(`已导入 ${inputs.length} 条规则`, 'success')
+    } catch (e: any) {
+      toast.push('导入失败：' + (e?.message || String(e)), 'error')
+    }
+  }
+  input.click()
+}
+
+function exportJSON() {
+  const data = routes.value || []
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `autoapi-routes-${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+  toast.push('规则已导出', 'success')
 }
 
 function closeModal() {
   modalOpen.value = false
 }
 
+function closeFallbackModal() {
+  fallbackModalOpen.value = false
+}
+
 onMounted(() => {
   loadRoutes()
   loadProviders()
+  loadSettings().catch((e: any) => toast.push('加载设置失败：' + (e?.message || String(e)), 'error'))
 })
 </script>
 
@@ -255,7 +346,8 @@ onMounted(() => {
       <span class="main-subtitle">{{ ruleList.length ?? 0 }} 条规则 · 拖动排序，越靠前优先级越高</span>
     </div>
     <div class="main-actions">
-      <button class="btn btn-secondary" @click="importJSON">从 JSON 导入</button>
+      <button class="btn btn-secondary" @click="importJSON">导入 JSON</button>
+      <button class="btn btn-secondary" @click="exportJSON">导出 JSON</button>
       <button class="btn btn-primary" @click="openCreate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         新建规则
@@ -464,6 +556,29 @@ onMounted(() => {
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">取消</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveRoute">{{ saving ? '保存中…' : '保存' }}</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Default fallback modal -->
+  <Teleport to="body">
+    <div v-if="fallbackModalOpen" class="modal-overlay" @click.self="closeFallbackModal">
+      <div class="modal-card">
+        <div class="modal-title">修改默认兜底</div>
+        <div class="field">
+          <label class="field-label">Provider</label>
+          <select v-model="fallbackProviderId" class="select">
+            <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label">模型</label>
+          <input v-model="fallbackModel" class="input" placeholder="例如 gpt-4o-mini">
+        </div>
+        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
+          <button class="btn btn-secondary" @click="closeFallbackModal">取消</button>
+          <button class="btn btn-primary" @click="saveDefaultFallback">保存</button>
         </div>
       </div>
     </div>

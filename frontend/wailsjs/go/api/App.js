@@ -86,6 +86,10 @@ export function ListRoutes() {
   return window['go']['api']['App']['ListRoutes']();
 }
 
+export function OpenStorageFolder() {
+  return window['go']['api']['App']['OpenStorageFolder']();
+}
+
 export function PurgeLogs(arg1) {
   return window['go']['api']['App']['PurgeLogs'](arg1);
 }
