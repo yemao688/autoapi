@@ -45,7 +45,7 @@ export function ListRoutes():Promise<Array<model.Route>>;
 
 export function PurgeLogs(arg1:number):Promise<number>;
 
-export function QueryLogs(arg1:model.LogQuery):Promise<Array<model.RequestLog>>;
+export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;
 
 export function ReorderRoutes(arg1:Array<string>):Promise<void>;
 

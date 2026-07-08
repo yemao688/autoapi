@@ -10,8 +10,15 @@ import (
 
 // QueryLogs filters request_logs by the given parameters with pagination.
 // Returns the rows, total count, and any error.
+//
+// All filters compose with AND. The same WHERE clause is reused for the COUNT(*)
+// query so the reported total always matches the filtered set. Search uses a
+// single LIKE %term% clause matched against model, route_label, and error to
+// keep the index plan simple; the parameterised placeholder protects against
+// SQL injection regardless of the user-supplied content.
 func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
-	// Build dynamic WHERE clause.
+	// Build dynamic WHERE clause. args is shared between the COUNT and DATA
+	// queries so both apply identical filters.
 	where := "WHERE 1=1"
 	args := []interface{}{}
 
@@ -27,6 +34,14 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		where += " AND provider_id = ?"
 		args = append(args, q.Provider)
 	}
+	if q.RouteID != "" {
+		where += " AND route_id = ?"
+		args = append(args, q.RouteID)
+	}
+	if q.Model != "" {
+		where += " AND model = ?"
+		args = append(args, q.Model)
+	}
 	if q.Status != "" {
 		switch q.Status {
 		case "success":
@@ -36,6 +51,14 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		case "rate_limited":
 			where += " AND status_code = 429"
 		}
+	}
+	if q.Search != "" {
+		// LIKE is case-insensitive for ASCII by default in SQLite. The
+		// pattern is fully parameterised so user input cannot escape the
+		// literal context.
+		where += " AND (model LIKE ? OR route_label LIKE ? OR error LIKE ?)"
+		pattern := "%" + q.Search + "%"
+		args = append(args, pattern, pattern, pattern)
 	}
 
 	// Total count

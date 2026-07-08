@@ -112,9 +112,9 @@ export const api = {
     ensureWails()
     return wails.GetUsageStats() as Promise<model.UsageStats>
   },
-  queryLogs: (query: model.LogQuery): Promise<model.RequestLog[]> => {
+  queryLogs: (query: model.LogQuery): Promise<model.LogQueryResult> => {
     ensureWails()
-    return wails.QueryLogs(query) as Promise<model.RequestLog[]>
+    return wails.QueryLogs(query) as Promise<model.LogQueryResult>
   },
   purgeLogs: (days: number): Promise<number> => {
     ensureWails()
