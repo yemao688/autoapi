@@ -123,7 +123,9 @@ const modelRanking = computed(() =>
 // cost stat (token_stats[2] is "Estimated Cost" since the backend reordered
 // the KPI cards to Total Requests / Total Tokens / Estimated Cost).
 const totalTokenValue = computed(() => {
-  const stat = tokenStats.value.find((s) => s.label === "Total Tokens");
+  const stat = tokenStats.value.find(
+    (s) => s.label === "usage.stats.totalTokens",
+  );
   if (stat?.value) return stat.value;
   // Fallback: derive from provider shares if the stat isn't present yet
   // (e.g. before the first refresh completes).
@@ -259,7 +261,6 @@ async function refreshAll() {
     console.warn("[sync] refreshAll skipped (already refreshing)");
     return;
   }
-  console.log("[sync] refreshAll triggered");
   isRefreshing.value = true;
   if (refreshTimeout) clearTimeout(refreshTimeout);
   refreshTimeout = setTimeout(() => {
@@ -274,7 +275,6 @@ async function refreshAll() {
     );
     await queryLogs();
     await loadCharts();
-    console.log("[sync] refreshAll complete");
   } finally {
     if (refreshTimeout) {
       clearTimeout(refreshTimeout);
@@ -288,7 +288,6 @@ function stopPolling() {
   if (pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
-    console.log("[sync] stopPolling");
   }
 }
 
@@ -299,24 +298,17 @@ function stopRealtime() {
   }
   sseState.value = "connected";
   lastEventAt.value = null;
-  console.log("[sync] stopRealtime");
 }
 
 function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
   stopPolling();
   const ms = POLL_MS[mode];
   if (!ms) return;
-  console.log("[sync] startPolling", mode, "intervalMs=", ms);
 
   function tick() {
     if (liveSync.value !== mode) {
-      console.log(
-        "[sync] polling tick exiting because mode changed to",
-        liveSync.value,
-      );
       return;
     }
-    console.log("[sync] polling tick");
     void refreshAll().finally(() => {
       pollTimer = setTimeout(tick, ms);
     });
@@ -333,7 +325,6 @@ function startRealtime() {
   lastEventAt.value = null;
   const off = EventsOn("log:new", () => {
     try {
-      console.log("[sync] log:new event received");
       lastEventAt.value = Date.now();
       sseState.value = "connected";
       if (liveSync.value === "realtime") {
@@ -349,16 +340,13 @@ function startRealtime() {
   // Mark as 'connected' only after the listener is in place so the UI
   // reflects that the subscription is active, not just the user's intent.
   sseState.value = "connected";
-  console.log("[sync] startRealtime (listener subscribed)");
   // Ping the backend to verify the Wails event channel is alive.
-  console.log("[sync] pinging backend event channel");
   api.pingLogEvent().catch((e: any) => {
     console.warn("[sync] PingLogEvent failed", e);
   });
 }
 
 function applyMode(mode: SyncMode) {
-  console.log("[sync] applyMode", mode);
   stopPolling();
   stopRealtime();
   if (mode === "realtime") {

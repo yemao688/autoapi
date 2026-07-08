@@ -181,7 +181,7 @@ func (a *App) PingLogEvent() {
 		slog.Warn("app: PingLogEvent called with nil context")
 		return
 	}
-	slog.Info("app: PingLogEvent emitted")
+	slog.Debug("app: PingLogEvent emitted")
 	runtime.EventsEmit(a.ctx, "log:new")
 }
 
