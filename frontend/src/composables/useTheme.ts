@@ -1,18 +1,17 @@
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { api } from '@/api/client'
 
-export type ThemeValue = 'light' | 'dark' | 'system' | 'auto'
+export type ThemeValue = 'light' | 'dark' | 'system'
 
-const activeTheme = ref<ThemeValue>('light')
-let mediaListenerAdded = false
+const activeTheme = ref<ThemeValue>('system')
 let mediaQuery: MediaQueryList | null = null
 
 function resolveTheme(t: ThemeValue): 'light' | 'dark' {
   if (t === 'dark') return 'dark'
   if (t === 'light') return 'light'
-  // system / auto
-  if (typeof window !== 'undefined' && window.matchMedia) {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  // system
+  if (mediaQuery) {
+    return mediaQuery.matches ? 'dark' : 'light'
   }
   return 'light'
 }
@@ -24,33 +23,39 @@ function applyTheme() {
 
 watch(activeTheme, applyTheme, { immediate: true })
 
+if (typeof window !== 'undefined' && window.matchMedia) {
+  mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  const handler = () => {
+    if (activeTheme.value === 'system') {
+      applyTheme()
+    }
+  }
+  mediaQuery.addEventListener('change', handler)
+}
+
 export function useTheme() {
   onMounted(() => {
-    if (mediaListenerAdded) return
-    mediaListenerAdded = true
     applyTheme()
-
-    if (typeof window !== 'undefined' && window.matchMedia) {
-      mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-      const handler = () => {
-        if (activeTheme.value === 'system' || activeTheme.value === 'auto') {
-          applyTheme()
-        }
-      }
-      mediaQuery.addEventListener('change', handler)
-      onUnmounted(() => {
-        mediaQuery?.removeEventListener('change', handler)
-      })
-    }
   })
 
   async function loadFromSettings() {
     try {
       const s = await api.getSettings()
       const t = s.appearance.theme
-      if (t === 'light' || t === 'dark' || t === 'system' || t === 'auto') {
+      if (t === 'light' || t === 'dark' || t === 'system') {
         activeTheme.value = t as ThemeValue
       }
+    } catch {
+      // ignore
+    }
+  }
+
+  async function saveTheme(theme: ThemeValue) {
+    activeTheme.value = theme
+    try {
+      const s = await api.getSettings()
+      s.appearance.theme = theme
+      await api.saveSettings(s)
     } catch {
       // ignore
     }
@@ -59,5 +64,6 @@ export function useTheme() {
   return {
     activeTheme,
     loadFromSettings,
+    saveTheme,
   }
 }
