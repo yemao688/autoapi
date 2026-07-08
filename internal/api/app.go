@@ -17,6 +17,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	stdruntime "runtime"
@@ -137,8 +138,13 @@ func NewApp(deps Deps) *App {
 // persisted, without the frontend having to poll QueryLogs.
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	slog.Info("app: starting up")
 	if a.deps.Proxy != nil {
-		_ = a.deps.Proxy.Start() // best-effort; surface via IsRunning()
+		if err := a.deps.Proxy.Start(); err != nil {
+			slog.Error("app: failed to start proxy", "err", err)
+		} else {
+			slog.Info("app: proxy started")
+		}
 		a.wireLogEventEmitter()
 	}
 }
@@ -150,21 +156,38 @@ func (a *App) Startup(ctx context.Context) {
 // QueryLogs and patches the UI.
 func (a *App) wireLogEventEmitter() {
 	var debounce *time.Timer
+	slog.Debug("app: registering OnLogFlush with proxy")
 	a.deps.Proxy.OnLogFlush(func() {
+		slog.Debug("app: log flush received, resetting debounce")
 		if debounce != nil {
 			debounce.Stop()
 		}
 		debounce = time.AfterFunc(200*time.Millisecond, func() {
 			if a.ctx == nil {
+				slog.Debug("app: skipping log:new emit, context nil")
 				return
 			}
+			slog.Debug("app: emitting log:new event")
 			runtime.EventsEmit(a.ctx, "log:new")
 		})
 	})
+	slog.Debug("app: log event emitter wired")
+}
+
+// PingLogEvent immediately emits a log:new Wails event so the frontend can
+// verify the event channel is alive without waiting for a real request log.
+func (a *App) PingLogEvent() {
+	if a.ctx == nil {
+		slog.Warn("app: PingLogEvent called with nil context")
+		return
+	}
+	slog.Info("app: PingLogEvent emitted")
+	runtime.EventsEmit(a.ctx, "log:new")
 }
 
 // Shutdown is invoked by Wails OnShutdown. Stop the proxy cleanly.
 func (a *App) Shutdown(ctx context.Context) {
+	slog.Info("app: shutting down")
 	if a.deps.Proxy != nil {
 		_ = a.deps.Proxy.Stop()
 	}
@@ -289,6 +312,7 @@ func (a *App) CreateProvider(in model.ProviderInput) (*model.Provider, error) {
 			return nil, err
 		}
 	}
+	slog.Info("app: provider created", "id", p.ID, "name", p.Name)
 	return a.deps.Store.GetProvider(p.ID)
 }
 
@@ -313,6 +337,7 @@ func (a *App) UpdateProvider(id string, in model.ProviderInput) (*model.Provider
 			return nil, err
 		}
 	}
+	slog.Info("app: provider updated", "id", id, "name", in.Name)
 	return a.deps.Store.GetProvider(id)
 }
 
@@ -320,7 +345,11 @@ func (a *App) DeleteProvider(id string) error {
 	if a.deps.Store == nil {
 		return errNotImpl
 	}
-	return a.deps.Store.DeleteProvider(id)
+	if err := a.deps.Store.DeleteProvider(id); err != nil {
+		return err
+	}
+	slog.Info("app: provider deleted", "id", id)
+	return nil
 }
 
 func (a *App) TestProvider(id string) (*model.ProviderTestResult, error) {
@@ -531,6 +560,7 @@ func (a *App) SaveSettings(s model.Settings) error {
 
 	// Port/bind changed → restart proxy so it picks up the new listener.
 	if a.deps.Proxy != nil {
+		slog.Info("app: settings saved, restarting proxy")
 		return a.deps.Proxy.Restart()
 	}
 	return nil
@@ -567,6 +597,7 @@ func (a *App) ExportData(format model.ExportFormat) (ExportResult, error) {
 	if a.deps.Store == nil {
 		return ExportResult{}, errNotImpl
 	}
+	slog.Info("app: export triggered", "format", format)
 	data, filename, err := a.deps.Store.Export(format)
 	if err != nil {
 		return ExportResult{}, err
@@ -585,6 +616,7 @@ func (a *App) PurgeLogs(olderThanDays int) (int, error) {
 	if a.deps.Store == nil {
 		return 0, errNotImpl
 	}
+	slog.Info("app: purge logs triggered", "days", olderThanDays)
 	return a.deps.Store.PurgeLogs(olderThanDays)
 }
 

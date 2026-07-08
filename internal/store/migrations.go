@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -327,13 +328,12 @@ func (s *Store) backfillCost() {
 	`)
 	if err != nil {
 		// Non-fatal: best-effort backfill.
+		slog.Error("store: backfillCost failed", "err", err)
 		return
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
-		// One-liner using the precise costTable would require per-row Go logic;
-		// we approximate unknown models with the default pricing here.
-		_ = n
+		slog.Info("store: backfillCost complete", "rows", n)
 	}
 }
 
@@ -411,6 +411,7 @@ func migrate(db *sql.DB) error {
 				return fmt.Errorf("store: skip-if-redundant %q: %w", m.ID, err)
 			}
 			if already {
+				slog.Info("store: migration skipped (already applied)", "id", m.ID)
 				if _, err := tx.Exec(`INSERT INTO _migrations (id, applied_at) VALUES (?, ?)`, m.ID, now); err != nil {
 					return fmt.Errorf("store: record migration %q (redundant skip): %w", m.ID, err)
 				}
@@ -418,12 +419,14 @@ func migrate(db *sql.DB) error {
 			}
 		}
 
+		slog.Info("store: applying migration", "id", m.ID)
 		if _, err := tx.Exec(m.SQL); err != nil {
 			return fmt.Errorf("store: apply migration %q: %w", m.ID, err)
 		}
 		if _, err := tx.Exec(`INSERT INTO _migrations (id, applied_at) VALUES (?, ?)`, m.ID, now); err != nil {
 			return fmt.Errorf("store: record migration %q: %w", m.ID, err)
 		}
+		slog.Info("store: migration applied", "id", m.ID)
 	}
 
 	return tx.Commit()

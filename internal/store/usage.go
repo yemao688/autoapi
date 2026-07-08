@@ -84,9 +84,9 @@ func (s *Store) tokenStats() ([]model.Stat, error) {
 	}
 
 	return []model.Stat{
-		makeStat("Total Requests", fmt.Sprintf("%d", thisRequests), deltaStr(thisRequests, prevRequests), ""),
-		makeStat("Total Tokens", fmt.Sprintf("%d", thisMonth), deltaStr(thisMonth, prevMonth), ""),
-		makeStat("Estimated Cost", fmt.Sprintf("$%.2f", thisCost), deltaCostStr(thisCost, prevCost), ""),
+		makeStat("usage.stats.totalRequests", fmt.Sprintf("%d", thisRequests), deltaStr(thisRequests, prevRequests), ""),
+		makeStat("usage.stats.totalTokens", fmt.Sprintf("%d", thisMonth), deltaStr(thisMonth, prevMonth), ""),
+		makeStat("usage.stats.estimatedCost", fmt.Sprintf("$%.2f", thisCost), deltaCostStr(thisCost, prevCost), ""),
 	}, nil
 }
 
@@ -104,7 +104,9 @@ func (s *Store) sumCostSince(startMs int64) float64 {
 func (s *Store) countRequestsSince(startMs int64) int64 {
 	row := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE timestamp_ms >= ?`, startMs)
 	var n int64
-	row.Scan(&n)
+	if err := row.Scan(&n); err != nil {
+		slog.Error("store: countRequestsSince scan failed", "err", err)
+	}
 	return n
 }
 
@@ -223,10 +225,10 @@ func (s *Store) logStats() ([]model.Stat, error) {
 	p95 := computeP95(latencies)
 
 	return []model.Stat{
-		makeStat("Total Requests (30d)", fmt.Sprintf("%d", total), "", ""),
-		makeStat("Success Rate", fmt.Sprintf("%.1f%%", successRate), "", ""),
-		makeStat("P95 Latency", fmt.Sprintf("%dms", p95), "", ""),
-		makeStat("Errors (30d)", fmt.Sprintf("%d", errCount), "", ""),
+		makeStat("usage.stats.totalRequests30d", fmt.Sprintf("%d", total), "", ""),
+		makeStat("usage.stats.successRate", fmt.Sprintf("%.1f%%", successRate), "", ""),
+		makeStat("usage.stats.p95Latency", fmt.Sprintf("%dms", p95), "", ""),
+		makeStat("usage.stats.errors30d", fmt.Sprintf("%d", errCount), "", ""),
 	}, nil
 }
 

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 )
 
 // GetProviderKeyCiphertext returns the encrypted upstream key material for a
@@ -25,7 +26,7 @@ func (s *Store) GetProviderKeyCiphertext(providerID string) (ciphertext, nonce [
 // encrypting the user's upstream key.
 func (s *Store) UpdateProviderKeyCiphertext(providerID string, ciphertext, nonce []byte, masked string) error {
 	now := nowMs()
-	return s.execTx(func(tx *sql.Tx) error {
+	err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
 			UPDATE providers SET key_ciphertext=?, key_nonce=?, key_masked=?, updated_at=?
 			WHERE id=?`,
@@ -39,4 +40,8 @@ func (s *Store) UpdateProviderKeyCiphertext(providerID string, ciphertext, nonce
 		}
 		return nil
 	})
+	if err == nil {
+		slog.Info("store: provider key updated", "id", providerID)
+	}
+	return err
 }

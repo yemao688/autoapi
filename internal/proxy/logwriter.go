@@ -98,10 +98,10 @@ func (w *logWriter) loop() {
 			return
 		}
 		if err := w.store.InsertRequestLogsBatch(batch); err != nil {
-			slog.Error("proxy: failed to flush request logs",
-				"err", err,
-				"count", len(batch))
+			slog.Error("proxy: log batch insert failed", "err", err)
+			slog.Debug("proxy: onFlush callback will NOT be fired because batch insert failed")
 		} else {
+			slog.Debug("proxy: log batch flushed", "count", len(batch), "err", err)
 			// Fire the real-time UI event after a successful batch write.
 			// Read under muFlush so a concurrent OnLogFlush swap doesn't race
 			// with the in-progress callback dispatch.
@@ -109,7 +109,10 @@ func (w *logWriter) loop() {
 			cb := w.onFlush
 			w.muFlush.Unlock()
 			if cb != nil {
+				slog.Debug("proxy: firing onFlush callback")
 				cb()
+			} else {
+				slog.Debug("proxy: onFlush callback is nil, skipping")
 			}
 		}
 		batch = batch[:0]

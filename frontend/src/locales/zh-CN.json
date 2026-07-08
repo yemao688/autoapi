@@ -318,6 +318,15 @@
     "subtitle": "关键指标与最近活动",
     "exportReport": "导出报告",
     "loading": "加载中…",
+    "stats": {
+      "todayTokens": "今日 Token",
+      "thisWeek": "本周 Token",
+      "thisMonth": "本月 Token",
+      "todayCost": "今日成本",
+      "thisWeekCost": "本周成本",
+      "thisMonthCost": "本月成本",
+      "activeProviders": "可用 Provider"
+    },
     "chart": {
       "title": "Token 用量趋势 · 近 7 日",
       "subtitle": "按输入 / 输出 Token 拆分",
@@ -394,11 +403,31 @@
   "usage": {
     "title": "使用统计",
     "subtitle": "请求日志与 Token 用量 · 单页切换",
+    "sync": {
+      "label": "自动刷新",
+      "realtime": "实时",
+      "seconds5": "每 5 秒",
+      "seconds30": "每 30 秒",
+      "off": "关闭"
+    },
+    "sseStatus": {
+      "connected": "已连接",
+      "idle": "等待中",
+      "error": "异常",
+      "lastEvent": "上次事件"
+    },
     "export": "导出",
-    "liveLabel": "实时同步",
-    "liveAria": "切换实时同步",
     "loading": "加载中…",
     "ariaLabel": "使用统计视图",
+    "stats": {
+      "totalRequests": "总请求数",
+      "totalTokens": "总 Token 数",
+      "estimatedCost": "预估成本",
+      "totalRequests30d": "30 天请求数",
+      "successRate": "成功率",
+      "p95Latency": "P95 延迟",
+      "errors30d": "30 天错误数"
+    },
     "tabs": {
       "logs": "请求日志",
       "tokens": "Token 用量"

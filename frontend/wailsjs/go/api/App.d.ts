@@ -51,6 +51,8 @@ export function NavigateTo(arg1:string):Promise<void>;
 
 export function OpenStorageFolder():Promise<void>;
 
+export function PingLogEvent():Promise<void>;
+
 export function PurgeLogs(arg1:number):Promise<number>;
 
 export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;

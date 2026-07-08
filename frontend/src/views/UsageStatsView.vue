@@ -1,171 +1,208 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { model } from '../../wailsjs/go/models'
-import { api } from '@/api/client'
-import { useApi } from '@/composables/useApi'
-import { useExportDownload } from '@/composables/useExportDownload'
-import { useLiveSync } from '@/composables/useLiveSync'
-import { useRelativeTime } from '@/composables/useRelativeTime'
-import { useToast } from '@/composables/useToast'
-import { useConfirm } from '@/composables/useConfirm'
-import { useTabKeyboard } from '@/composables/useTabKeyboard'
-import type { ProviderOption } from '@/types/usage'
-import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
-import TokensPane from '@/components/usage/TokensPane.vue'
-import LogsPane from '@/components/usage/LogsPane.vue'
-import LogFilters, { type DateRangePreset, type RouteOption } from '@/components/usage/LogFilters.vue'
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { model } from "../../wailsjs/go/models";
+import { api } from "@/api/client";
+import { useApi } from "@/composables/useApi";
+import { useExportDownload } from "@/composables/useExportDownload";
+import { useLiveSync, type SyncMode } from "@/composables/useLiveSync";
+import { useRelativeTime } from "@/composables/useRelativeTime";
+import { useToast } from "@/composables/useToast";
+import { useConfirm } from "@/composables/useConfirm";
+import { useTabKeyboard } from "@/composables/useTabKeyboard";
+import type { ProviderOption } from "@/types/usage";
+import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
+import TokensPane from "@/components/usage/TokensPane.vue";
+import LogsPane from "@/components/usage/LogsPane.vue";
+import LogFilters, {
+  type DateRangePreset,
+  type RouteOption,
+} from "@/components/usage/LogFilters.vue";
 
-const { t } = useI18n()
+const { t } = useI18n();
 
-useRelativeTime()
-const { download } = useExportDownload()
-const toast = useToast()
-const confirm = useConfirm()
+const relativeTime = useRelativeTime();
+const { download } = useExportDownload();
+const toast = useToast();
+const confirm = useConfirm();
 
-const { data: usageData, loading, execute: fetchUsage } = useApi(api.usageStats)
+const {
+  data: usageData,
+  loading,
+  execute: fetchUsage,
+} = useApi(api.usageStats);
 
-const activePane = ref<'logs' | 'tokens'>('logs')
-// liveSync is shared via localStorage so the toggle survives tab switches
-// and Vue reloads. The composable owns the read/write logic.
-const { liveSync } = useLiveSync()
-// isRefreshing guards against overlapping refreshes from the realtime
-// 'log:new' event handler when multiple writes flush in quick succession.
-// Without this guard the second handler can race the first and the user
-// sees stale data flicker as the two responses land in different order.
-const isRefreshing = ref(false)
-// eventsOff is the unsubscribe function returned by EventsOn. Stored so
-// onUnmounted can remove the listener exactly once — EventsOff('log:new')
-// is the legacy removal that worked without a handle, but the explicit
-// handle-based unsubscribe is more reliable if the runtime ever batches
-// multiple subscriptions to the same event name.
-let eventsOff: (() => void) | null = null
+const activePane = ref<"logs" | "tokens">("logs");
+// liveSync is the shared, persisted refresh mode for this view. Allowed
+// values: 'realtime', '5s', '30s', 'off'. The composable owns the
+// localStorage read/write logic.
+const { liveSync } = useLiveSync();
+// isRefreshing guards against overlapping refreshes from realtime events
+// or polling timers when multiple triggers land in quick succession.
+const isRefreshing = ref(false);
+// SSE/polling timers and the Wails event unsubscribe handle.
+let eventsOff: (() => void) | null = null;
+// Polling timer: recursive setTimeout is more robust than setInterval in
+// Wails WebKit because it cannot stack overlapping calls and is less likely
+// to be throttled/suspended.
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
 
-const selectedProviderId = ref('')
+const POLL_MS: Record<Exclude<SyncMode, "realtime" | "off">, number> = {
+  "5s": 5000,
+  "30s": 30000,
+};
+
+// SSE state: 'connected' while the listener is subscribed, 'error' if the
+// handler threw. We intentionally do not use 'idle' based on time, because a
+// quiet period without traffic is normal and was confusing users.
+const sseState = ref<"connected" | "error">("connected");
+const lastEventAt = ref<number | null>(null);
+
+const selectedProviderId = ref("");
 // Use stable internal keys for the v-model so changing the active locale does
 // not break the selected option (the dropdown text is translated, the value
 // stays the same).
-type StatusFilterKey = 'all' | 'success' | 'failed' | 'rate_limited'
-const statusFilter = ref<StatusFilterKey>('all')
+type StatusFilterKey = "all" | "success" | "failed" | "rate_limited";
+const statusFilter = ref<StatusFilterKey>("all");
 const statusMap: Record<StatusFilterKey, string> = {
-  all: '',
-  success: 'success',
-  failed: 'failed',
-  rate_limited: 'rate_limited',
-}
+  all: "",
+  success: "success",
+  failed: "failed",
+  rate_limited: "rate_limited",
+};
 
-const selectedRouteId = ref('')
-const modelFilter = ref('')
-const searchText = ref('')
+const selectedRouteId = ref("");
+const modelFilter = ref("");
+const searchText = ref("");
 
-const dateRangePreset = ref<DateRangePreset>('month')
-const customStart = ref('') // ISO local datetime string from <input type="datetime-local">
-const customEnd = ref('')
+const dateRangePreset = ref<DateRangePreset>("month");
+const customStart = ref(""); // ISO local datetime string from <input type="datetime-local">
+const customEnd = ref("");
 
-const logs = ref<model.RequestLog[]>([])
-const logPage = ref(1)
-const logPageSize = ref(50)
-const logTotal = ref(0)
-const chartData = ref<model.UsageTrends>(new model.UsageTrends({
-  range: '',
-  bucket_size: 'day',
-  buckets: [],
-}))
+const logs = ref<model.RequestLog[]>([]);
+const logPage = ref(1);
+const logPageSize = ref(50);
+const logTotal = ref(0);
+const chartData = ref<model.UsageTrends>(
+  new model.UsageTrends({
+    range: "",
+    bucket_size: "day",
+    buckets: [],
+  }),
+);
 
 const providerOptions = computed<ProviderOption[]>(() => {
-  const list = usageData.value?.providers || []
-  return [{ name: t('usage.status.all'), id: '' }, ...list.map(p => ({ name: p.provider_name, id: p.provider_id }))]
-})
+  const list = usageData.value?.providers || [];
+  return [
+    { name: t("usage.status.all"), id: "" },
+    ...list.map((p) => ({ name: p.provider_name, id: p.provider_id })),
+  ];
+});
 
-const { data: modelRulesData, execute: fetchModelRules } = useApi(api.modelRules)
+const { data: modelRulesData, execute: fetchModelRules } = useApi(
+  api.modelRules,
+);
 const routeOptions = computed<RouteOption[]>(() => {
-  const list = modelRulesData.value || []
-  return [{ name: t('usage.status.all'), id: '' }, ...list.map(r => ({ name: r.name || r.id, id: r.id }))]
-})
+  const list = modelRulesData.value || [];
+  return [
+    { name: t("usage.status.all"), id: "" },
+    ...list.map((r) => ({ name: r.name || r.id, id: r.id })),
+  ];
+});
 
-const tokenStats = computed(() => (usageData.value?.token_stats || []).slice(0, 4))
-const logStats = computed(() => (usageData.value?.log_stats || []).slice(0, 4))
-const providerShares = computed(() => usageData.value?.providers || [])
-const modelRanking = computed(() => (usageData.value?.model_ranking || []).slice(0, 5))
+const tokenStats = computed(() =>
+  (usageData.value?.token_stats || []).slice(0, 4),
+);
+const logStats = computed(() => (usageData.value?.log_stats || []).slice(0, 4));
+const providerShares = computed(() => usageData.value?.providers || []);
+const modelRanking = computed(() =>
+  (usageData.value?.model_ranking || []).slice(0, 5),
+);
 // Badge on the "Token 用量" tab: show the total token count rather than the
 // cost stat (token_stats[2] is "Estimated Cost" since the backend reordered
 // the KPI cards to Total Requests / Total Tokens / Estimated Cost).
 const totalTokenValue = computed(() => {
-  const stat = tokenStats.value.find((s) => s.label === 'Total Tokens')
-  if (stat?.value) return stat.value
+  const stat = tokenStats.value.find((s) => s.label === "Total Tokens");
+  if (stat?.value) return stat.value;
   // Fallback: derive from provider shares if the stat isn't present yet
   // (e.g. before the first refresh completes).
   if (providerShares.value.length > 0) {
-    const total = providerShares.value.reduce((sum, p) => sum + p.tokens, 0)
-    return total > 0 ? total.toLocaleString() : '—'
+    const total = providerShares.value.reduce((sum, p) => sum + p.tokens, 0);
+    return total > 0 ? total.toLocaleString() : "—";
   }
-  return '—'
-})
-const logTotalValue = computed(() => usageData.value?.log_total || 0)
+  return "—";
+});
+const logTotalValue = computed(() => usageData.value?.log_total || 0);
 
 // totalPages is used to bound `goToPage` callers and to gate hasNextPage.
 const totalPages = computed(() => {
-  if (logTotal.value <= 0 || logPageSize.value <= 0) return 0
-  return Math.max(1, Math.ceil(logTotal.value / logPageSize.value))
-})
-const hasNextPage = computed(() => logPage.value < totalPages.value)
-const hasPrevPage = computed(() => logPage.value > 1)
+  if (logTotal.value <= 0 || logPageSize.value <= 0) return 0;
+  return Math.max(1, Math.ceil(logTotal.value / logPageSize.value));
+});
+const hasNextPage = computed(() => logPage.value < totalPages.value);
+const hasPrevPage = computed(() => logPage.value > 1);
 
 const safePage = computed(() => {
-  if (logPage.value < 1) return 1
-  if (logPage.value > totalPages.value) return Math.max(1, totalPages.value)
-  return logPage.value
-})
+  if (logPage.value < 1) return 1;
+  if (logPage.value > totalPages.value) return Math.max(1, totalPages.value);
+  return logPage.value;
+});
 
 function customRangeToMs(iso: string): number {
-  if (!iso) return 0
-  const t = new Date(iso).getTime()
-  return Number.isFinite(t) ? t : 0
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
 }
 
-const selectedRange = computed<{ start_date: number; end_date: number }>(() => {
-  const now = Date.now()
+// getSelectedRange computes the current log query window using a live
+// `Date.now()`. This is intentionally a plain function (not a computed)
+// because the end bound must advance every time queryLogs/loadCharts is
+// called — otherwise realtime/polling refreshes filter out freshly-written
+// logs whose timestamp_ms is greater than the stale cached `end_date`.
+function getSelectedRange(): { start_date: number; end_date: number } {
+  const now = Date.now();
   switch (dateRangePreset.value) {
-    case 'today': {
-      const d = new Date()
-      d.setHours(0, 0, 0, 0)
-      return { start_date: d.getTime(), end_date: now }
+    case "today": {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      return { start_date: d.getTime(), end_date: now };
     }
-    case 'day': {
-      return { start_date: now - 24 * 3600 * 1000, end_date: now }
+    case "day": {
+      return { start_date: now - 24 * 3600 * 1000, end_date: now };
     }
-    case 'week': {
-      return { start_date: now - 7 * 24 * 3600 * 1000, end_date: now }
+    case "week": {
+      return { start_date: now - 7 * 24 * 3600 * 1000, end_date: now };
     }
-    case 'month': {
-      const d = new Date()
+    case "month": {
+      const d = new Date();
       return {
         start_date: new Date(d.getFullYear(), d.getMonth(), 1).getTime(),
         end_date: now,
-      }
+      };
     }
-    case 'custom': {
-      const start = customRangeToMs(customStart.value)
-      const end = customRangeToMs(customEnd.value) || now
+    case "custom": {
+      const start = customRangeToMs(customStart.value);
+      const end = customRangeToMs(customEnd.value) || now;
       // If user only set start, default end to now. If only end, default
       // start to 0 (no lower bound) to avoid silently dropping everything.
       return {
         start_date: start > 0 ? start : 0,
         end_date: end,
-      }
+      };
     }
     default:
-      return { start_date: 0, end_date: now }
+      return { start_date: 0, end_date: now };
   }
-})
+}
 
 async function queryLogs() {
-  const { start_date, end_date } = selectedRange.value
-  const provider = selectedProviderId.value
-  const route_id = selectedRouteId.value
-  const modelName = modelFilter.value.trim()
-  const search = searchText.value.trim()
-  const status = statusMap[statusFilter.value] || ''
+  const { start_date, end_date } = getSelectedRange();
+  const provider = selectedProviderId.value;
+  const route_id = selectedRouteId.value;
+  const modelName = modelFilter.value.trim();
+  const search = searchText.value.trim();
+  const status = statusMap[statusFilter.value] || "";
   try {
     const result = await api.queryLogs({
       start_date,
@@ -177,20 +214,20 @@ async function queryLogs() {
       status,
       page: logPage.value,
       page_size: logPageSize.value,
-    })
-    logs.value = result?.logs || []
-    logTotal.value = result?.total || 0
+    });
+    logs.value = result?.logs || [];
+    logTotal.value = result?.total || 0;
   } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
+    toast.push(e?.message || String(e), "error");
   }
 }
 
 async function loadCharts() {
-  const { start_date, end_date } = selectedRange.value
-  const provider = selectedProviderId.value
-  const route_id = selectedRouteId.value
-  const modelName = modelFilter.value.trim()
-  const search = searchText.value.trim()
+  const { start_date, end_date } = getSelectedRange();
+  const provider = selectedProviderId.value;
+  const route_id = selectedRouteId.value;
+  const modelName = modelFilter.value.trim();
+  const search = searchText.value.trim();
   try {
     const result = await api.usageTrends({
       start_date,
@@ -199,14 +236,16 @@ async function loadCharts() {
       route_id,
       model: modelName,
       search,
-    })
-    chartData.value = result || new model.UsageTrends({
-      range: '',
-      bucket_size: 'day',
-      buckets: [],
-    })
+    });
+    chartData.value =
+      result ||
+      new model.UsageTrends({
+        range: "",
+        bucket_size: "day",
+        buckets: [],
+      });
   } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
+    toast.push(e?.message || String(e), "error");
   }
 }
 
@@ -216,195 +255,313 @@ async function refreshAll() {
   // second event can land before the first refreshAll's await chain
   // finishes. The flag is read+written in the same microtask so a
   // concurrent caller will see `true` and bail out.
-  if (isRefreshing.value) return
-  isRefreshing.value = true
+  if (isRefreshing.value) {
+    console.warn("[sync] refreshAll skipped (already refreshing)");
+    return;
+  }
+  console.log("[sync] refreshAll triggered");
+  isRefreshing.value = true;
+  if (refreshTimeout) clearTimeout(refreshTimeout);
+  refreshTimeout = setTimeout(() => {
+    if (isRefreshing.value) {
+      console.error("[sync] refreshAll timed out after 15s, resetting guard");
+      isRefreshing.value = false;
+    }
+  }, 15000);
   try {
-    await fetchUsage().catch((e) => toast.push(e?.message || String(e), 'error'))
-    await queryLogs()
-    await loadCharts()
+    await fetchUsage().catch((e) =>
+      toast.push(e?.message || String(e), "error"),
+    );
+    await queryLogs();
+    await loadCharts();
+    console.log("[sync] refreshAll complete");
   } finally {
-    isRefreshing.value = false
+    if (refreshTimeout) {
+      clearTimeout(refreshTimeout);
+      refreshTimeout = null;
+    }
+    isRefreshing.value = false;
   }
 }
 
-function toggleLive() {
-  // The shared composable persists the value, so the new state survives
-  // tab switches and reloads automatically — no start/stop timer needed.
-  // The realtime refresh is event-driven (see onMounted) so it works
-  // regardless of which pane is active and regardless of the toggle
-  // state at the time the component mounts.
-  liveSync.value = !liveSync.value
+function stopPolling() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    console.log("[sync] stopPolling");
+  }
 }
 
-function switchPane(paneId: 'logs' | 'tokens') {
-  // Tab switches are now decoupled from the live-sync toggle. Previously
-  // this function turned liveSync off and stopped a polling timer on
-  // every switch, which left the user with the "live sync on" button
-  // stale until they re-clicked it. Now switching tabs only refreshes
-  // the data the new pane needs.
-  activePane.value = paneId
-  if (paneId === 'logs') {
-    void queryLogs()
-  } else if (paneId === 'tokens') {
-    void loadCharts()
+function stopRealtime() {
+  if (eventsOff) {
+    eventsOff();
+    eventsOff = null;
+  }
+  sseState.value = "connected";
+  lastEventAt.value = null;
+  console.log("[sync] stopRealtime");
+}
+
+function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
+  stopPolling();
+  const ms = POLL_MS[mode];
+  if (!ms) return;
+  console.log("[sync] startPolling", mode, "intervalMs=", ms);
+
+  function tick() {
+    if (liveSync.value !== mode) {
+      console.log(
+        "[sync] polling tick exiting because mode changed to",
+        liveSync.value,
+      );
+      return;
+    }
+    console.log("[sync] polling tick");
+    void refreshAll().finally(() => {
+      pollTimer = setTimeout(tick, ms);
+    });
+  }
+
+  // Kick off an immediate refresh, then schedule the next tick.
+  void refreshAll().finally(() => {
+    pollTimer = setTimeout(tick, ms);
+  });
+}
+
+function startRealtime() {
+  stopRealtime();
+  lastEventAt.value = null;
+  const off = EventsOn("log:new", () => {
+    try {
+      console.log("[sync] log:new event received");
+      lastEventAt.value = Date.now();
+      sseState.value = "connected";
+      if (liveSync.value === "realtime") {
+        void refreshAll();
+      }
+    } catch (e: any) {
+      console.warn("[sync] log:new handler error", e);
+      sseState.value = "error";
+      lastEventAt.value = Date.now();
+    }
+  });
+  eventsOff = typeof off === "function" ? off : () => EventsOff("log:new");
+  // Mark as 'connected' only after the listener is in place so the UI
+  // reflects that the subscription is active, not just the user's intent.
+  sseState.value = "connected";
+  console.log("[sync] startRealtime (listener subscribed)");
+  // Ping the backend to verify the Wails event channel is alive.
+  console.log("[sync] pinging backend event channel");
+  api.pingLogEvent().catch((e: any) => {
+    console.warn("[sync] PingLogEvent failed", e);
+  });
+}
+
+function applyMode(mode: SyncMode) {
+  console.log("[sync] applyMode", mode);
+  stopPolling();
+  stopRealtime();
+  if (mode === "realtime") {
+    startRealtime();
+  } else if (mode === "5s" || mode === "30s") {
+    startPolling(mode);
+  }
+}
+
+function switchPane(paneId: "logs" | "tokens") {
+  // Tab switches only refresh the data the new pane needs. The separate
+  // sync-mode dropdown controls auto-refresh independently.
+  activePane.value = paneId;
+  if (paneId === "logs") {
+    void queryLogs();
+  } else if (paneId === "tokens") {
+    void loadCharts();
   }
 }
 
 async function applyFilters() {
-  logPage.value = 1
-  await queryLogs()
-  await loadCharts()
+  logPage.value = 1;
+  await queryLogs();
+  await loadCharts();
 }
 
 async function clearFilters() {
-  selectedProviderId.value = ''
-  statusFilter.value = 'all'
-  selectedRouteId.value = ''
-  modelFilter.value = ''
-  searchText.value = ''
-  logPage.value = 1
-  await queryLogs()
-  await loadCharts()
+  selectedProviderId.value = "";
+  statusFilter.value = "all";
+  selectedRouteId.value = "";
+  modelFilter.value = "";
+  searchText.value = "";
+  logPage.value = 1;
+  await queryLogs();
+  await loadCharts();
 }
 
 async function purgeLogs() {
   const ok = await confirm.open({
-    title: t('confirm.purgeLogsTitle'),
-    message: t('confirm.purgeLogsMessage'),
-    confirmText: t('confirm.purgeConfirm'),
+    title: t("confirm.purgeLogsTitle"),
+    message: t("confirm.purgeLogsMessage"),
+    confirmText: t("confirm.purgeConfirm"),
     danger: true,
-  })
-  if (!ok) return
+  });
+  if (!ok) return;
   try {
-    const deleted = await api.purgeLogs(90)
-    toast.push(t('toast.logsPurged', { count: deleted }), 'success')
-    await refreshAll()
+    const deleted = await api.purgeLogs(90);
+    toast.push(t("toast.logsPurged", { count: deleted }), "success");
+    await refreshAll();
   } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
+    toast.push(e?.message || String(e), "error");
   }
 }
 
 async function exportLogs() {
-  await download('logs_csv')
+  await download("logs_csv");
 }
 
 async function exportTokens() {
-  await download('tokens_csv')
+  await download("tokens_csv");
 }
 
 function goToPage(page: number) {
-  if (page < 1 || page > totalPages.value) return
-  if (page === logPage.value) return
-  logPage.value = page
-  void queryLogs()
+  if (page < 1 || page > totalPages.value) return;
+  if (page === logPage.value) return;
+  logPage.value = page;
+  void queryLogs();
 }
 
 function goFirstPage() {
-  if (!hasPrevPage.value) return
-  logPage.value = 1
-  void queryLogs()
+  if (!hasPrevPage.value) return;
+  logPage.value = 1;
+  void queryLogs();
 }
 
 function goPrevPage() {
-  if (!hasPrevPage.value) return
-  logPage.value = safePage.value - 1
-  void queryLogs()
+  if (!hasPrevPage.value) return;
+  logPage.value = safePage.value - 1;
+  void queryLogs();
 }
 
 function goNextPage() {
-  if (!hasNextPage.value) return
-  logPage.value = safePage.value + 1
-  void queryLogs()
+  if (!hasNextPage.value) return;
+  logPage.value = safePage.value + 1;
+  void queryLogs();
 }
 
 function goLastPage() {
-  if (!hasNextPage.value) return
-  logPage.value = totalPages.value
-  void queryLogs()
+  if (!hasNextPage.value) return;
+  logPage.value = totalPages.value;
+  void queryLogs();
 }
 
 const { handleKeydown: handleTabKeydown } = useTabKeyboard(
-  '#usage-tab-strip',
+  "#usage-tab-strip",
   activePane,
   switchPane,
-)
+);
 
 onMounted(() => {
-  void refreshAll()
-  void fetchModelRules().catch((e) => toast.push(e?.message || String(e), 'error'))
-  // Subscribe to the proxy's "log:new" event. The Wails runtime invokes
-  // the callback on the goroutine that fired the event; the handler
-  // itself just calls refreshAll which is debounced via the isRefreshing
-  // guard above. Refreshing when liveSync is on keeps the log table and
-  // token trend chart in sync without a polling timer; when the toggle
-  // is off the user keeps control of refresh cadence (e.g. via the
-  // clearFilters / pagination actions).
-  const off = EventsOn('log:new', () => {
-    if (liveSync.value) {
-      void refreshAll()
-    }
-  })
-  // EventsOn returns an unsubscribe function in current Wails runtime
-  // versions. Fall back to EventsOff if it doesn't so we still clean up.
-  if (typeof off === 'function') {
-    eventsOff = off
-  }
-})
+  void refreshAll();
+  void fetchModelRules().catch((e) =>
+    toast.push(e?.message || String(e), "error"),
+  );
+});
 
 onUnmounted(() => {
-  if (eventsOff) {
-    eventsOff()
-    eventsOff = null
-  } else {
-    EventsOff('log:new')
-  }
-  if (searchDebounce) clearTimeout(searchDebounce)
-})
+  stopPolling();
+  stopRealtime();
+  if (searchDebounce) clearTimeout(searchDebounce);
+});
+
+// Start/stop the correct refresh mechanism whenever the user changes sync mode.
+watch(liveSync, applyMode, { immediate: true });
 
 // Re-query immediately when selection or date range changes.
 watch(
-  [selectedProviderId, selectedRouteId, statusFilter, dateRangePreset, customStart, customEnd],
+  [
+    selectedProviderId,
+    selectedRouteId,
+    statusFilter,
+    dateRangePreset,
+    customStart,
+    customEnd,
+  ],
   () => {
-    void applyFilters()
+    void applyFilters();
   },
-)
+);
 
 // Debounce text inputs so we don't fire a Wails call on every keystroke.
-let searchDebounce: ReturnType<typeof setTimeout> | null = null
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 watch([modelFilter, searchText], () => {
-  if (searchDebounce) clearTimeout(searchDebounce)
+  if (searchDebounce) clearTimeout(searchDebounce);
   searchDebounce = setTimeout(() => {
-    searchDebounce = null
-    void applyFilters()
-  }, 300)
-})
+    searchDebounce = null;
+    void applyFilters();
+  }, 300);
+});
 </script>
 
 <template>
   <header class="main-header">
     <div class="main-title-group">
-      <h1 class="main-title">{{ t('usage.title') }}</h1>
-      <span class="main-subtitle">{{ t('usage.subtitle') }}</span>
+      <h1 class="main-title">{{ t("usage.title") }}</h1>
+      <span class="main-subtitle">{{ t("usage.subtitle") }}</span>
     </div>
     <div class="main-actions">
       <button class="btn btn-secondary" @click="exportLogs">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-        {{ t('usage.export') }}
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          style="width: 14px; height: 14px"
+          aria-hidden="true"
+        >
+          <path
+            d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"
+          />
+        </svg>
+        {{ t("usage.export") }}
       </button>
-      <button
-        class="btn btn-primary"
-        :class="{ active: liveSync }"
-        :aria-pressed="liveSync"
-        :aria-label="t('usage.liveAria')"
-        @click="toggleLive"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9M3 12a9 9 0 0 1 9-9M12 3v9l5 3"/></svg>
-        <span class="live-label">{{ t('usage.liveLabel') }}</span>
-      </button>
+      <div class="sync-control">
+        <label for="usage-sync-mode" class="text-muted">{{
+          t("usage.sync.label")
+        }}</label>
+        <select
+          id="usage-sync-mode"
+          v-model="liveSync"
+          class="select sync-select"
+          :aria-label="t('usage.sync.label')"
+        >
+          <option value="realtime">{{ t("usage.sync.realtime") }}</option>
+          <option value="5s">{{ t("usage.sync.seconds5") }}</option>
+          <option value="30s">{{ t("usage.sync.seconds30") }}</option>
+          <option value="off">{{ t("usage.sync.off") }}</option>
+        </select>
+        <div
+          v-if="liveSync === 'realtime'"
+          class="sse-status"
+          :class="sseState"
+        >
+          <span class="sse-dot" :class="sseState"></span>
+          <span class="sse-label">{{ t(`usage.sseStatus.${sseState}`) }}</span>
+          <span v-if="lastEventAt" class="sse-last"
+            >{{ t("usage.sseStatus.lastEvent") }}
+            {{ relativeTime.format(lastEventAt) }}</span
+          >
+        </div>
+      </div>
     </div>
   </header>
 
-  <div class="tabs-strip" role="tablist" :aria-label="t('usage.ariaLabel')" id="usage-tab-strip" @keydown="handleTabKeydown">
+  <div
+    class="tabs-strip"
+    role="tablist"
+    :aria-label="t('usage.ariaLabel')"
+    id="usage-tab-strip"
+    @keydown="handleTabKeydown"
+  >
     <button
       class="tab"
       :class="{ active: activePane === 'logs' }"
@@ -415,7 +572,10 @@ watch([modelFilter, searchText], () => {
       data-pane-id="logs"
       @click="switchPane('logs')"
     >
-      {{ t('usage.tabs.logs') }}<span class="tab-meta" aria-hidden="true">{{ logTotalValue.toLocaleString() }}</span>
+      {{ t("usage.tabs.logs")
+      }}<span class="tab-meta" aria-hidden="true">{{
+        logTotalValue.toLocaleString()
+      }}</span>
     </button>
     <button
       class="tab"
@@ -427,7 +587,8 @@ watch([modelFilter, searchText], () => {
       data-pane-id="tokens"
       @click="switchPane('tokens')"
     >
-      {{ t('usage.tabs.tokens') }}<span class="tab-meta" aria-hidden="true">{{ totalTokenValue }}</span>
+      {{ t("usage.tabs.tokens")
+      }}<span class="tab-meta" aria-hidden="true">{{ totalTokenValue }}</span>
     </button>
   </div>
 
@@ -444,29 +605,38 @@ watch([modelFilter, searchText], () => {
     @clear="clearFilters"
   />
 
-  <div v-if="dateRangePreset === 'custom'" class="filter-bar" style="margin-top: 8px;">
-    <label class="text-muted" style="font-size: 12px;">{{ t('usage.custom.start') }}</label>
+  <div
+    v-if="dateRangePreset === 'custom'"
+    class="filter-bar"
+    style="margin-top: 8px"
+  >
+    <label class="text-muted" style="font-size: 12px">{{
+      t("usage.custom.start")
+    }}</label>
     <input
       v-model="customStart"
       type="datetime-local"
       class="input"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px"
       :aria-label="t('usage.custom.startAria')"
     />
-    <label class="text-muted" style="font-size: 12px;">{{ t('usage.custom.end') }}</label>
+    <label class="text-muted" style="font-size: 12px">{{
+      t("usage.custom.end")
+    }}</label>
     <input
       v-model="customEnd"
       type="datetime-local"
       class="input"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px"
       :aria-label="t('usage.custom.endAria')"
     />
   </div>
 
   <div class="main-content">
-    <div v-if="loading && !usageData" class="loading-overlay">{{ t('usage.loading') }}</div>
+    <div v-if="loading && !usageData" class="loading-overlay">
+      {{ t("usage.loading") }}
+    </div>
     <div class="main-content-inner stack-loose">
-
       <!-- ================== TOKENS VIEW ================== -->
       <TokensPane
         v-show="activePane === 'tokens'"
@@ -508,5 +678,82 @@ watch([modelFilter, searchText], () => {
   z-index: 10;
   font-size: 14px;
   color: var(--muted, #6e6e73);
+}
+
+.sync-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-control label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sync-select {
+  width: auto;
+  min-width: 110px;
+  padding: 5px 28px 5px 10px;
+  font-size: 13px;
+  background-position: right 8px center;
+  background-size: 14px;
+}
+
+.sse-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sse-status .sse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--border-strong);
+}
+
+.sse-status.connected .sse-dot {
+  background: var(--positive);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.sse-status.error .sse-dot {
+  background: var(--negative);
+}
+
+.sse-status .sse-label {
+  font-weight: 500;
+  min-width: 52px;
+}
+
+.sse-status.connected .sse-label {
+  color: var(--positive);
+}
+
+.sse-status.error .sse-label {
+  color: var(--negative);
+}
+
+.sse-last {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .sync-control {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .sse-status {
+    width: 100%;
+  }
 }
 </style>

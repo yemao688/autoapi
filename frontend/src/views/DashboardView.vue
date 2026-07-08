@@ -123,12 +123,12 @@ onUnmounted(() => {
           v-for="(stat, idx) in stats"
           :key="stat.label + idx"
           class="stat-card"
-          :class="{ dark: stat.label === 'Active Providers' }"
+          :class="{ dark: stat.label === 'dashboard.stats.activeProviders' }"
         >
-          <div class="stat-label">{{ stat.label }}</div>
+          <div class="stat-label">{{ t(stat.label) }}</div>
           <div class="stat-value">{{ stat.value }}</div>
           <div class="stat-meta">
-            <template v-if="stat.label === 'Active Providers'">
+            <template v-if="stat.label === 'dashboard.stats.activeProviders'">
               <span :class="proxyRunning ? 'dot green' : 'dot red'"></span>
               <span>{{ health ? formatUptime(health.uptime_seconds) : '—' }}</span>
             </template>

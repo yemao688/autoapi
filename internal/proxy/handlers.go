@@ -9,6 +9,7 @@ package proxy
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -83,6 +84,9 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusUnauthorized
 		if err != nil {
 			status = http.StatusInternalServerError
+			slog.Error("proxy: auth failed (internal error)", "apiKeyID", apiKeyID, "path", r.URL.Path, "err", err)
+		} else {
+			slog.Warn("proxy: auth failed (invalid API key)", "apiKeyID", apiKeyID, "path", r.URL.Path)
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode = status
@@ -94,6 +98,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
+		slog.Error("proxy: read request body failed", "path", r.URL.Path, "err", err)
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
@@ -103,6 +108,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	var chatReq chatRequest
 	if err := json.Unmarshal(body, &chatReq); err != nil {
+		slog.Warn("proxy: invalid JSON body", "path", r.URL.Path, "err", err)
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
@@ -122,6 +128,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
+		slog.Warn("proxy: no candidates", "path", r.URL.Path, "model", inbound.Model, "err", err)
 		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
@@ -147,6 +154,9 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusUnauthorized
 		if err != nil {
 			status = http.StatusInternalServerError
+			slog.Error("proxy: auth failed (internal error)", "apiKeyID", apiKeyID, "path", r.URL.Path, "err", err)
+		} else {
+			slog.Warn("proxy: auth failed (invalid API key)", "apiKeyID", apiKeyID, "path", r.URL.Path)
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode = status
@@ -158,6 +168,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
+		slog.Error("proxy: read request body failed", "path", r.URL.Path, "err", err)
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
@@ -167,6 +178,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	var embReq embeddingsRequest
 	if err := json.Unmarshal(body, &embReq); err != nil {
+		slog.Warn("proxy: invalid JSON body", "path", r.URL.Path, "err", err)
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
@@ -183,6 +195,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
+		slog.Warn("proxy: no candidates", "path", r.URL.Path, "model", inbound.Model, "err", err)
 		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
@@ -220,6 +233,9 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusUnauthorized
 		if err != nil {
 			status = http.StatusInternalServerError
+			slog.Error("proxy: auth failed (internal error)", "apiKeyID", apiKeyID, "path", r.URL.Path, "err", err)
+		} else {
+			slog.Warn("proxy: auth failed (invalid API key)", "apiKeyID", apiKeyID, "path", r.URL.Path)
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode = status
@@ -231,6 +247,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
+		slog.Error("proxy: read request body failed", "path", r.URL.Path, "err", err)
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
@@ -263,6 +280,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
+		slog.Warn("proxy: no candidates", "path", r.URL.Path, "model", inbound.Model, "err", err)
 		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
@@ -280,6 +298,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 	rules, err := p.store.ListModelRules()
 	if err != nil {
+		slog.Error("proxy: list models failed", "err", err)
 		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list models")
 		return
 	}
@@ -311,6 +330,9 @@ func (p *Proxy) handleTokenStats(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusUnauthorized
 		if err != nil {
 			status = http.StatusInternalServerError
+			slog.Error("proxy: auth failed (internal error)", "path", r.URL.Path, "err", err)
+		} else {
+			slog.Warn("proxy: auth failed (invalid API key)", "path", r.URL.Path)
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		return
@@ -318,6 +340,7 @@ func (p *Proxy) handleTokenStats(w http.ResponseWriter, r *http.Request) {
 
 	dash, err := p.store.Dashboard()
 	if err != nil {
+		slog.Error("proxy: get stats failed", "err", err)
 		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get stats")
 		return
 	}
@@ -345,6 +368,7 @@ func (p *Proxy) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) handleNotFound(w http.ResponseWriter, r *http.Request) {
+	slog.Warn("proxy: unknown endpoint", "path", r.URL.Path, "method", r.Method)
 	p.writeError(w, http.StatusNotFound, "invalid_request_error", "Invalid endpoint")
 }
 

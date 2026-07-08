@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -53,12 +54,14 @@ func New(s *store.Store, proxy ProxyRef, keyDir string) *Service {
 		panic(fmt.Sprintf("service: load encryption key: %v", err))
 	}
 
-	return &Service{
+	svc := &Service{
 		store:     s,
 		proxy:     proxy,
 		encKey:    encKey,
 		startedAt: time.Now(),
 	}
+	slog.Info("service: initialized", "key_dir", keyDir, "key_bytes", len(encKey))
+	return svc
 }
 
 // loadOrCreateKey returns the 32-byte AES key stored in keyDir/.key,
@@ -317,8 +320,10 @@ func (s *Service) Decrypt(ciphertext, nonce []byte) ([]byte, error) {
 // TestProvider tests connectivity with a single provider by fetching its upstream
 // models and updating health metrics.
 func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, error) {
+	slog.Info("service: test provider started", "provider_id", providerID)
 	models, err := s.FetchUpstreamModels(providerID)
 	if err != nil {
+		slog.Warn("service: test provider failed", "provider_id", providerID, "err", err)
 		return s.testFailResult(err.Error()), nil
 	}
 
@@ -337,6 +342,10 @@ func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, er
 		return nil, fmt.Errorf("service: update provider test result: %w", err)
 	}
 
+	slog.Info("service: test provider succeeded",
+		"provider_id", providerID,
+		"models", len(models),
+		"latency_ms", latencyMs)
 	return &model.ProviderTestResult{
 		OK:        true,
 		LatencyMs: latencyMs,
@@ -370,12 +379,18 @@ func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) 
 	resp, err := client.Do(req)
 	latencyMs := int(time.Since(start).Milliseconds())
 	if err != nil {
+		slog.Warn("service: fetch upstream models HTTP error",
+			"provider_id", providerID, "provider_name", prov.Name,
+			"latency_ms", latencyMs, "err", err)
 		return nil, fmt.Errorf("HTTP error: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		slog.Warn("service: fetch upstream models non-OK status",
+			"provider_id", providerID, "provider_name", prov.Name,
+			"status", resp.StatusCode, "latency_ms", latencyMs)
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
 	}
 
@@ -410,7 +425,14 @@ func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) 
 		return nil, fmt.Errorf("service: upsert models: %w", err)
 	}
 
-	return s.store.ListModels(providerID)
+	stored, err := s.store.ListModels(providerID)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("service: fetch upstream models succeeded",
+		"provider_id", providerID, "provider_name", prov.Name,
+		"count", len(stored), "latency_ms", latencyMs)
+	return stored, nil
 }
 
 // TestModelLatency returns the latency recorded for a single model by
@@ -472,14 +494,23 @@ func (s *Service) TestAllProviders() ([]model.ProviderTestResult, error) {
 	}
 
 	results := make([]model.ProviderTestResult, len(providers))
+	var success, failed int
 	for range providers {
 		r := <-ch
 		if r.err != nil {
 			results[r.idx] = model.ProviderTestResult{OK: false, Error: r.err.Error()}
+			failed++
 		} else if r.res != nil {
 			results[r.idx] = *r.res
+			if r.res.OK {
+				success++
+			} else {
+				failed++
+			}
 		}
 	}
+	slog.Info("service: test all providers complete",
+		"total", len(providers), "success", success, "failed", failed)
 	return results, nil
 }
 
@@ -509,6 +540,7 @@ func (s *Service) ResolveProviderKey(providerID string) (string, error) {
 	}
 	plaintext, err := s.Decrypt(ciphertext, nonce)
 	if err != nil {
+		slog.Error("service: decrypt provider key failed", "provider_id", providerID, "err", err)
 		return "", fmt.Errorf("decrypt provider key %q: %w", providerID, err)
 	}
 	return string(plaintext), nil

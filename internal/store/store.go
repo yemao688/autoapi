@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -49,6 +50,7 @@ func New(_ context.Context, deps StoreDeps) (*Store, error) {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
 	db.SetMaxOpenConns(1)
+	slog.Info("store: db opened", "dsn", dsn)
 
 	// Connection pragmas (oracle requirement)
 	pragmas := []string{
@@ -67,15 +69,18 @@ func New(_ context.Context, deps StoreDeps) (*Store, error) {
 	s := &Store{db: db, dsnPath: dsn}
 
 	// Migrations
+	slog.Info("store: migrations starting")
 	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	slog.Info("store: migrations complete")
 
 	// Best-effort backfill of cost for pre-migration rows.
 	s.backfillCost()
 
 	// Writer
+	slog.Info("store: writer goroutine starting", "buffer", 1024)
 	s.writer = NewWriter(db, 1024)
 	go s.writer.Run()
 
@@ -91,6 +96,7 @@ var initDev = func(*Store) {}
 
 // Close shuts down the writer and closes the database connection.
 func (s *Store) Close() error {
+	slog.Info("store: closing")
 	s.writer.Close()
 	return s.db.Close()
 }

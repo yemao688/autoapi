@@ -38,7 +38,7 @@ function formatNumber(n: number): string {
 
     <section class="stat-grid-4" style="gap: 16px; margin-bottom: 24px;">
       <div v-for="(stat, idx) in tokenStats" :key="stat.label + idx" class="metric-card">
-        <div class="metric-label">{{ stat.label }}</div>
+        <div class="metric-label">{{ t(stat.label) }}</div>
         <div class="metric-value">{{ stat.value }}</div>
         <div class="metric-meta">
           <span class="metric-trend" :class="stat.trend">{{ stat.delta }}</span>

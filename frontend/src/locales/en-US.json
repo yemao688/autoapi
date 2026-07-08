@@ -318,6 +318,15 @@
     "subtitle": "Key metrics and recent activity",
     "exportReport": "Export report",
     "loading": "Loading…",
+    "stats": {
+      "todayTokens": "Today's Tokens",
+      "thisWeek": "This Week",
+      "thisMonth": "This Month",
+      "todayCost": "Today's Cost",
+      "thisWeekCost": "This Week Cost",
+      "thisMonthCost": "This Month Cost",
+      "activeProviders": "Active Providers"
+    },
     "chart": {
       "title": "Token usage trend · last 7 days",
       "subtitle": "Split by input / output tokens",
@@ -394,11 +403,31 @@
   "usage": {
     "title": "Usage",
     "subtitle": "Request logs and token usage · single-page switch",
+    "sync": {
+      "label": "Auto refresh",
+      "realtime": "Realtime",
+      "seconds5": "Every 5s",
+      "seconds30": "Every 30s",
+      "off": "Off"
+    },
+    "sseStatus": {
+      "connected": "Connected",
+      "idle": "Idle",
+      "error": "Error",
+      "lastEvent": "Last event"
+    },
     "export": "Export",
-    "liveLabel": "Live sync",
-    "liveAria": "Toggle live sync",
     "loading": "Loading…",
     "ariaLabel": "Usage stats view",
+    "stats": {
+      "totalRequests": "Total Requests",
+      "totalTokens": "Total Tokens",
+      "estimatedCost": "Estimated Cost",
+      "totalRequests30d": "Total Requests (30d)",
+      "successRate": "Success Rate",
+      "p95Latency": "P95 Latency",
+      "errors30d": "Errors (30d)"
+    },
     "tabs": {
       "logs": "Request logs",
       "tokens": "Token usage"

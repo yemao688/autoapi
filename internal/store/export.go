@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 // Export returns serialized data in the requested format and a suggested
 // filename. The caller (api.App) passes the bytes to the UI for download.
 func (s *Store) Export(format model.ExportFormat) ([]byte, string, error) {
+	slog.Info("store: export started", "format", format)
 	switch format {
 	case model.ExportAllJSON:
 		return s.exportAllJSON()

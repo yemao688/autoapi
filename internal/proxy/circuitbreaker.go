@@ -6,6 +6,7 @@
 package proxy
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -111,6 +112,8 @@ func (cb *CircuitBreaker) Record(success bool) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
+	oldState := cb.state
+
 	switch cb.state {
 	case StateClosed:
 		if success {
@@ -137,6 +140,10 @@ func (cb *CircuitBreaker) Record(success bool) {
 			cb.state = StateClosed
 			cb.consecutiveFailures = 0
 		}
+	}
+
+	if oldState != cb.state {
+		slog.Info("proxy: circuit breaker state changed", "from", oldState, "to", cb.state, "success", success, "consecutiveFailures", cb.consecutiveFailures)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"autoapi/internal/model"
 )
@@ -87,7 +88,7 @@ func (s *Store) SaveSettings(settings model.Settings) error {
 		"logging":    settings.Logging,
 	}
 
-	return s.execTx(func(tx *sql.Tx) error {
+	err := s.execTx(func(tx *sql.Tx) error {
 		for key, val := range sections {
 			data, err := json.Marshal(val)
 			if err != nil {
@@ -102,6 +103,10 @@ func (s *Store) SaveSettings(settings model.Settings) error {
 		}
 		return nil
 	})
+	if err == nil {
+		slog.Info("store: settings saved")
+	}
+	return err
 }
 
 // ListEndpoints returns the static list of endpoints served by the proxy.

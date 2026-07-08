@@ -98,6 +98,10 @@ export function OpenStorageFolder() {
   return window['go']['api']['App']['OpenStorageFolder']();
 }
 
+export function PingLogEvent() {
+  return window['go']['api']['App']['PingLogEvent']();
+}
+
 export function PurgeLogs(arg1) {
   return window['go']['api']['App']['PurgeLogs'](arg1);
 }

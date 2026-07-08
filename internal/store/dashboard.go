@@ -67,13 +67,13 @@ func (s *Store) computeStats(startOfDay, startOfWeek, startOfMonth int64) ([]mod
 	prevMonthCost := s.sumCostSince(prevMonthStart)
 
 	stats := []model.Stat{
-		makeStat("Today's Tokens", fmt.Sprintf("%d", todayTokens), deltaStr(todayTokens, prevWeekTokens/7), ""),
-		makeStat("This Week", fmt.Sprintf("%d", weekTokens), deltaStr(weekTokens, prevWeekTokens), ""),
-		makeStat("This Month", fmt.Sprintf("%d", monthTokens), deltaStr(monthTokens, prevMonthTokens), ""),
-		makeStat("Today's Cost", fmt.Sprintf("$%.2f", todayCost), deltaCostStr(todayCost, prevWeekCost/7), ""),
-		makeStat("This Week Cost", fmt.Sprintf("$%.2f", weekCost), deltaCostStr(weekCost, prevWeekCost), ""),
-		makeStat("This Month Cost", fmt.Sprintf("$%.2f", monthCost), deltaCostStr(monthCost, prevMonthCost), ""),
-		makeStat("Active Providers", fmt.Sprintf("%d", providerCount), "", ""),
+		makeStat("dashboard.stats.todayTokens", fmt.Sprintf("%d", todayTokens), deltaStr(todayTokens, prevWeekTokens/7), ""),
+		makeStat("dashboard.stats.thisWeek", fmt.Sprintf("%d", weekTokens), deltaStr(weekTokens, prevWeekTokens), ""),
+		makeStat("dashboard.stats.thisMonth", fmt.Sprintf("%d", monthTokens), deltaStr(monthTokens, prevMonthTokens), ""),
+		makeStat("dashboard.stats.todayCost", fmt.Sprintf("$%.2f", todayCost), deltaCostStr(todayCost, prevWeekCost/7), ""),
+		makeStat("dashboard.stats.thisWeekCost", fmt.Sprintf("$%.2f", weekCost), deltaCostStr(weekCost, prevWeekCost), ""),
+		makeStat("dashboard.stats.thisMonthCost", fmt.Sprintf("$%.2f", monthCost), deltaCostStr(monthCost, prevMonthCost), ""),
+		makeStat("dashboard.stats.activeProviders", fmt.Sprintf("%d", providerCount), "", ""),
 	}
 	return stats, nil
 }

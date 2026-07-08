@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	"autoapi/internal/model"
 )
@@ -56,6 +57,7 @@ func (s *Store) CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error) {
 	}); err != nil {
 		return nil, fmt.Errorf("store: create api key: %w", err)
 	}
+	slog.Info("store: api key created", "id", k.ID, "name", k.Name)
 	return k, nil
 }
 
@@ -79,12 +81,13 @@ func (s *Store) UpdateAPIKey(id string, in model.ApiKeyInput) (*model.ApiKey, er
 	}); err != nil {
 		return nil, err
 	}
+	slog.Info("store: api key updated", "id", id, "name", in.Name)
 	return s.getAPIKeyByID(id)
 }
 
 // DeleteAPIKey removes an access token by ID.
 func (s *Store) DeleteAPIKey(id string) error {
-	return s.execTx(func(tx *sql.Tx) error {
+	err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`DELETE FROM api_keys WHERE id = ?`, id)
 		if err != nil {
 			return fmt.Errorf("store: delete api key: %w", err)
@@ -95,6 +98,10 @@ func (s *Store) DeleteAPIKey(id string) error {
 		}
 		return nil
 	})
+	if err == nil {
+		slog.Info("store: api key deleted", "id", id)
+	}
+	return err
 }
 
 // getAPIKeyByID returns a single access token for internal use.

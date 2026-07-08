@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 )
 
 // writeOp is a unit of work submitted to the serial write goroutine.
@@ -52,6 +53,7 @@ func (w *Writer) Submit(fn func(tx *sql.Tx) error) error {
 	case w.ch <- op:
 		return <-op.done
 	default:
+		slog.Warn("store: request log queue full")
 		return fmt.Errorf("%w: queue full", ErrQueueFull)
 	}
 }
@@ -77,11 +79,18 @@ func (w *Writer) Close() {
 func (w *Writer) exec(fn func(tx *sql.Tx) error) error {
 	tx, err := w.db.Begin()
 	if err != nil {
+		slog.Error("store: writer begin tx failed", "err", err)
 		return fmt.Errorf("store: writer begin tx: %w", err)
 	}
 	if err := fn(tx); err != nil {
-		tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil {
+			slog.Error("store: writer rollback failed", "err", rbErr)
+		}
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		slog.Error("store: writer commit failed", "err", err)
+		return err
+	}
+	return nil
 }

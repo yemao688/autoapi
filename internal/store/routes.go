@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"autoapi/internal/model"
@@ -110,6 +111,7 @@ func (s *Store) CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, erro
 	}); err != nil {
 		return nil, fmt.Errorf("store: create model rule: %w", err)
 	}
+	slog.Info("store: model rule created", "id", r.ID, "name", r.Name)
 	return r, nil
 }
 
@@ -150,12 +152,13 @@ func (s *Store) UpdateModelRule(id string, in model.ModelRuleInput) (*model.Mode
 	}); err != nil {
 		return nil, err
 	}
+	slog.Info("store: model rule updated", "id", id, "name", in.Name)
 	return s.GetModelRule(id)
 }
 
 // DeleteModelRule removes a model rule (targets cascade).
 func (s *Store) DeleteModelRule(id string) error {
-	return s.execTx(func(tx *sql.Tx) error {
+	err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`DELETE FROM model_rules WHERE id = ?`, id)
 		if err != nil {
 			return fmt.Errorf("store: delete model rule: %w", err)
@@ -166,6 +169,10 @@ func (s *Store) DeleteModelRule(id string) error {
 		}
 		return nil
 	})
+	if err == nil {
+		slog.Info("store: model rule deleted", "id", id)
+	}
+	return err
 }
 
 // ReorderModelRules is a no-op kept for API compatibility. The previous

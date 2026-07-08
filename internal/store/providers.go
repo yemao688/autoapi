@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	"autoapi/internal/model"
 )
@@ -101,6 +102,7 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 	}); err != nil {
 		return nil, fmt.Errorf("store: create provider: %w", err)
 	}
+	slog.Info("store: provider created", "id", p.ID, "name", p.Name)
 	return p, nil
 }
 
@@ -126,12 +128,13 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 	}); err != nil {
 		return nil, err
 	}
+	slog.Info("store: provider updated", "id", id, "name", in.Name)
 	return s.GetProvider(id)
 }
 
 // DeleteProvider removes a provider by ID (models cascade).
 func (s *Store) DeleteProvider(id string) error {
-	return s.execTx(func(tx *sql.Tx) error {
+	err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`DELETE FROM providers WHERE id = ?`, id)
 		if err != nil {
 			return fmt.Errorf("store: delete provider: %w", err)
@@ -142,6 +145,10 @@ func (s *Store) DeleteProvider(id string) error {
 		}
 		return nil
 	})
+	if err == nil {
+		slog.Info("store: provider deleted", "id", id)
+	}
+	return err
 }
 
 // UpdateProviderHealth updates only the health-related fields of a provider.

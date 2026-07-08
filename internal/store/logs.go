@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"autoapi/internal/model"
@@ -247,5 +248,6 @@ func (s *Store) PurgeLogs(olderThanDays int) (int, error) {
 	}); err != nil {
 		return 0, fmt.Errorf("store: purge logs: %w", err)
 	}
+	slog.Info("store: purged logs", "count", count, "days", olderThanDays)
 	return count, nil
 }

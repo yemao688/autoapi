@@ -897,3 +897,341 @@ func TestIsClientDisconnect(t *testing.T) {
 		})
 	}
 }
+
+// TestStreaming_RetriesOnRetryable5xxBeforeFirstByte verifies the core fix
+// for the bug described in the proxy changelog: a streaming request to a
+// candidate that returns a retryable 5xx must NOT commit any bytes to
+// the client (no 500 leaked). Instead the proxy must fall through to the
+// next candidate and stream from there. The chain should record the
+// failed attempt and the successful one.
+func TestStreaming_RetriesOnRetryable5xxBeforeFirstByte(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"transient"}`))
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 (failover from p0 500 to p1 200), got %d: %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"id":"c1"`) {
+		t.Fatalf("expected SSE chunks from P1, got %q", body)
+	}
+
+	if p0Hits != 1 {
+		t.Fatalf("expected P0 hit once, got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after failover, got %d", p1Hits)
+	}
+
+	// Stats: P0 should show one failure, P1 should show one hit.
+	h0, f0 := store.statsFor("t0")
+	if f0 != 1 || h0 != 0 {
+		t.Fatalf("expected t0 hit=0 fail=1, got hit=%d fail=%d", h0, f0)
+	}
+	h1, f1 := store.statsFor("t1")
+	if h1 != 1 || f1 != 0 {
+		t.Fatalf("expected t1 hit=1 fail=0, got hit=%d fail=%d", h1, f1)
+	}
+}
+
+// TestStreaming_RetriesPerTargetBeforeFailover verifies the per-target
+// retry budget: a candidate with MaxRetries=2 that returns 500 on every
+// attempt is retried, then the proxy falls through to the next candidate
+// which succeeds. No bytes should reach the client from the failing
+// target.
+func TestStreaming_RetriesPerTargetBeforeFailover(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"transient"}`))
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	_, _ = io.ReadAll(resp.Body)
+
+	// 1 initial + 2 retries = 3 attempts on P0, then P1 succeeds.
+	if p0Hits != 3 {
+		t.Fatalf("expected P0 hit 3 times (1 + MaxRetries), got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after P0 exhausted, got %d", p1Hits)
+	}
+	h0, f0 := store.statsFor("t0")
+	if h0 != 0 || f0 != 3 {
+		t.Fatalf("expected t0 hit=0 fail=3, got hit=%d fail=%d", h0, f0)
+	}
+	h1, f1 := store.statsFor("t1")
+	if h1 != 1 || f1 != 0 {
+		t.Fatalf("expected t1 hit=1 fail=0, got hit=%d fail=%d", h1, f1)
+	}
+}
+
+// TestStreaming_FailoverOnNetworkError verifies that a candidate whose
+// upstream is unreachable (connection refused) triggers failover to the
+// next candidate before any bytes are sent to the client.
+func TestStreaming_FailoverOnNetworkError(t *testing.T) {
+	// Start and immediately close a server so its listener port becomes
+	// available for "connection refused" on the next dial. Using
+	// httptest.NewUnstartedServer + Close gives us a guaranteed-closed
+	// listener with a real port number.
+	closedSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedAddr := closedSrv.Listener.Addr().String()
+	closedSrv.Close()
+
+	// Use the closed address as P0's base URL — every request will fail
+	// with "connection refused", a retryable transport error.
+	var p1Hits int
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p1Hits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+	}))
+	defer okSrv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: "http://" + closedAddr},
+			"p1": {ID: "p1", Name: "P1", BaseURL: okSrv.URL},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 after network-error failover, got %d: %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"id":"c1"`) {
+		t.Fatalf("expected SSE chunks from P1, got %q", body)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after network-error failover, got %d", p1Hits)
+	}
+}
+
+// TestStreaming_FailoverOnHeaderTimeout verifies the upstream header
+// timeout fix: a candidate that accepts the connection but never sends
+// headers should not block the streaming request until the client
+// times out. The proxy's ResponseHeaderTimeout must fire, the attempt
+// must be classified as retryable, and the request must fail over to
+// the next candidate.
+func TestStreaming_FailoverOnHeaderTimeout(t *testing.T) {
+	// hangCh lets the hang-server release the blocked goroutine when
+	// the test finishes, otherwise the test leaks a goroutine.
+	// IMPORTANT: declare this defer AFTER hangSrv.Close so it runs
+	// FIRST (LIFO). Otherwise hangSrv.Close blocks waiting for the
+	// handler, which is blocked on hangCh, and the test deadlocks.
+	hangCh := make(chan struct{})
+	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hangCh:
+		case <-r.Context().Done():
+		}
+	}))
+	defer hangSrv.Close()
+	defer close(hangCh)
+
+	var p1Hits int
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p1Hits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+	}))
+	defer okSrv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: hangSrv.URL},
+			"p1": {ID: "p1", Name: "P1", BaseURL: okSrv.URL},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	// Override the proxy's transport with a short header timeout so the
+	// test runs in well under a second. We rebuild the transport from
+	// the existing one to preserve defaults (keep-alive, etc.).
+	if t1, ok := p.transport.(*http.Transport); ok {
+		clone := t1.Clone()
+		clone.ResponseHeaderTimeout = 200 * time.Millisecond
+		p.transport = clone
+	}
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 after header-timeout failover, got %d: %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"id":"c1"`) {
+		t.Fatalf("expected SSE chunks from P1, got %q", body)
+	}
+	elapsed := time.Since(start)
+	// The whole request should complete well under the default 30s
+	// ResponseHeaderTimeout — fail fast is the whole point of the fix.
+	if elapsed > 5*time.Second {
+		t.Fatalf("request took %v; header-timeout failover should fail fast", elapsed)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after header-timeout failover, got %d", p1Hits)
+	}
+}
