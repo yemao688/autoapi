@@ -52,6 +52,13 @@ const upstreamResponseHeaderTimeout = 30 * time.Second
 // targets each have a high per-target MaxRetries value.
 const maxTotalAttempts = 8
 
+// maxRequestDuration caps the total wall-clock time for a single inbound
+// request — including all retries, backoffs, failovers, and Retry-After
+// waits. Prevents a slow-degrading chain (one target returning Retry-After:
+// 86400, for example) from hanging the user. Exposed as a `var` rather
+// than a `const` so tests can shorten it.
+var maxRequestDuration = 90 * time.Second
+
 // retryBackoff returns the delay before the n-th retry (n=1,2,3,...).
 // Exponential: base * 2^(n-1), capped at maxDelay, with up to +25% jitter
 // to de-sync parallel retries. n=0 returns 0 so the helper is safe to
@@ -77,6 +84,48 @@ func retryBackoff(n int) time.Duration {
 	// Add up to +25% jitter so concurrent retries don't synchronize.
 	jitter := time.Duration(mathrand.Int63n(int64(d) / 4))
 	return d + jitter
+}
+
+// parseRetryAfter parses an HTTP Retry-After header value into a duration.
+// Supports both delta-seconds ("120") and HTTP-date (RFC1123) formats.
+// Returns 0 if the value is missing, malformed, negative, or otherwise
+// unusable. The caller is responsible for capping the returned duration
+// against its own budget — a hostile Retry-After: 86400 must never pin
+// the request.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	// Delta-seconds form (most common in practice).
+	if n, err := strconv.Atoi(v); err == nil {
+		if n <= 0 {
+			return 0
+		}
+		return time.Duration(n) * time.Second
+	}
+	// HTTP-date form (RFC1123, RFC850, asctime — http.ParseTime handles
+	// all three). A date in the past returns 0.
+	if t, err := http.ParseTime(v); err == nil {
+		d := time.Until(t)
+		if d <= 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
+}
+
+// budgetDeadline returns the absolute deadline of a context derived from
+// context.WithTimeout, or the zero time.Time if the context has no
+// deadline. Used by the backoff-sleep path to clamp a delay to the
+// remaining wall-clock budget. Safe on a plain context (returns zero;
+// caller must treat that as "no budget").
+func budgetDeadline(ctx context.Context) time.Time {
+	if d, ok := ctx.Deadline(); ok {
+		return d
+	}
+	return time.Time{}
 }
 
 // upstreamKeyProvider is the subset of *service.Service the proxy uses to
@@ -462,6 +511,14 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 		p.forwardStream(w, r, body, candidates, inputEstimate, logEntry)
 		return
 	}
+	// budgetCtx is derived from r.Context() so client-disconnect still
+	// cancels everything, but it also carries a maxRequestDuration
+	// deadline that fires for slow-degrading upstream chains. Every
+	// upstream HTTP call and every retry-backoff sleep below uses
+	// budgetCtx instead of r.Context() so a single deadline governs
+	// the whole request.
+	budgetCtx, budgetCancel := context.WithTimeout(r.Context(), maxRequestDuration)
+	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
 	// lastCandidate tracks the most recently iterated candidate so the
@@ -475,10 +532,16 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// per-target retries) so we can cap them with maxTotalAttempts. Backoff
 	// is applied BEFORE every attempt after the very first.
 	totalAttempts := 0
-	// attemptsCapped is set when totalAttempts reaches maxTotalAttempts; it
-	// signals the outer loop to stop iterating after the current candidate
-	// finishes its retry loop.
+	// attemptsCapped is set when totalAttempts reaches maxTotalAttempts OR
+	// the request wall-clock budget is exhausted; it signals the outer loop
+	// to stop iterating after the current candidate finishes its retry loop.
 	attemptsCapped := false
+	// retryAfter persists the most recent 429/503 Retry-After value from
+	// a failed attempt; the next backoff will honor it instead of the
+	// computed exponential backoff. Reset after consumption. Declared
+	// outside the candidate loop so the value carries over to the first
+	// attempt on a new target after a failed one.
+	retryAfter := time.Duration(0)
 
 	// outer is the label on the candidate loop. Used by the global attempt
 	// cap (maxTotalAttempts) to break out of BOTH the candidate and retry
@@ -596,39 +659,110 @@ outer:
 				break
 			}
 
+			// Wall-clock budget: maxRequestDuration is the total
+			// time budget for retries, backoffs, and failovers.
+			// Exceeding it aborts the whole chain with a
+			// budget_exceeded chain entry; the all-candidates-
+			// exhausted path then surfaces a 503.
+			if budgetCtx.Err() != nil && !isClientDisconnect(budgetCtx.Err()) {
+				attemptOrder++
+				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+					AttemptOrder: attemptOrder,
+					ProviderID:   c.provider.ID,
+					ProviderName: c.provider.Name,
+					ModelName:    c.modelName,
+					TargetID:     c.targetID,
+					Status:       "budget_exceeded",
+					StatusCode:   0,
+					Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+					LatencyMs:    0,
+				})
+				lastErr = fmt.Errorf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+				lastStatus = http.StatusServiceUnavailable
+				attemptsCapped = true
+				break
+			}
+
 			// Backoff between attempts: fires before every attempt
 			// except the very first (totalAttempts==0). Interrupts
-			// cleanly if the client disconnects while we are waiting
-			// — in that case we record a client_abort chain entry and
-			// return without penalizing any breaker.
+			// on (a) client disconnect, (b) wall-clock budget
+			// exhaustion, or (c) the planned delay elapsing. The
+			// 429/503 Retry-After header from the previous attempt
+			// is honored here instead of the computed exponential
+			// backoff when present.
 			if totalAttempts > 0 {
+				delay := retryBackoff(totalAttempts)
+				if retryAfter > 0 {
+					delay = retryAfter
+					retryAfter = 0
+				}
+				// Cap the delay to the remaining wall-clock budget
+				// so a hostile Retry-After: 86400 cannot pin us.
+				if remaining := time.Until(budgetDeadline(budgetCtx)); delay > remaining && remaining > 0 {
+					delay = remaining
+				} else if remaining <= 0 {
+					delay = 0
+				}
 				select {
-				case <-r.Context().Done():
-					logEntry.StatusCode = statusClientClosed
-					logEntry.Error = "client disconnected during retry backoff"
-					logEntry.ProviderID = c.provider.ID
-					logEntry.ProviderName = c.provider.Name
-					logEntry.Model = c.modelName
-					logEntry.RouteID = c.ruleID
-					logEntry.RouteLabel = c.ruleLabel
-					attemptOrder++
-					logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-						AttemptOrder: attemptOrder,
-						ProviderID:   c.provider.ID,
-						ProviderName: c.provider.Name,
-						ModelName:    c.modelName,
-						TargetID:     c.targetID,
-						Status:       "client_abort",
-						StatusCode:   statusClientClosed,
-						Error:        "client disconnected during retry backoff",
-						LatencyMs:    0,
-					})
-					slog.Warn("proxy: client disconnected during retry backoff",
-						"provider", c.provider.Name,
-						"model", c.modelName,
-						"target", c.targetID)
+				case <-budgetCtx.Done():
+					// budgetCtx fires for both client-disconnect
+					// and deadline-exceeded. Distinguish by
+					// checking r.Context() directly: only the
+					// request context is canceled on client
+					// disconnect, never on timeout (the request
+					// context is the parent of budgetCtx).
+					if r.Context().Err() != nil {
+						// Client disconnect.
+						logEntry.StatusCode = statusClientClosed
+						logEntry.Error = "client disconnected during retry backoff"
+						logEntry.ProviderID = c.provider.ID
+						logEntry.ProviderName = c.provider.Name
+						logEntry.Model = c.modelName
+						logEntry.RouteID = c.ruleID
+						logEntry.RouteLabel = c.ruleLabel
+						attemptOrder++
+						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+							AttemptOrder: attemptOrder,
+							ProviderID:   c.provider.ID,
+							ProviderName: c.provider.Name,
+							ModelName:    c.modelName,
+							TargetID:     c.targetID,
+							Status:       "client_abort",
+							StatusCode:   statusClientClosed,
+							Error:        "client disconnected during retry backoff",
+							LatencyMs:    0,
+						})
+						slog.Warn("proxy: client disconnected during retry backoff",
+							"provider", c.provider.Name,
+							"model", c.modelName,
+							"target", c.targetID)
+					} else {
+						// Wall-clock budget exhausted during backoff.
+						logEntry.StatusCode = http.StatusServiceUnavailable
+						logEntry.Error = fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+						logEntry.ProviderID = c.provider.ID
+						logEntry.ProviderName = c.provider.Name
+						logEntry.Model = c.modelName
+						logEntry.RouteID = c.ruleID
+						logEntry.RouteLabel = c.ruleLabel
+						attemptOrder++
+						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+							AttemptOrder: attemptOrder,
+							ProviderID:   c.provider.ID,
+							ProviderName: c.provider.Name,
+							ModelName:    c.modelName,
+							TargetID:     c.targetID,
+							Status:       "budget_exceeded",
+							StatusCode:   0,
+							Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+							LatencyMs:    0,
+						})
+						slog.Warn("proxy: request wall-clock budget exceeded during backoff",
+							"provider", c.provider.Name,
+							"budget", maxRequestDuration)
+					}
 					return
-				case <-time.After(retryBackoff(totalAttempts)):
+				case <-time.After(delay):
 				}
 			}
 			totalAttempts++
@@ -650,7 +784,9 @@ outer:
 				break
 			}
 
-			attemptReq := r.Clone(r.Context())
+			// Use budgetCtx (not r.Context()) so the per-request
+			// wall-clock budget cancels in-flight upstream calls.
+			attemptReq := r.Clone(budgetCtx)
 			attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
 			attemptReq.ContentLength = int64(len(rewrittenBody))
 			attemptReq.Header.Del("Transfer-Encoding")
@@ -868,6 +1004,17 @@ outer:
 				// final outcome below (or in the NonRetryable/ClientAbort
 				// branches above for hard stops). Record the failed attempt
 				// so the chain timeline is complete.
+				// Capture the upstream Retry-After header (RFC 7231)
+				// for 429/503 responses. The next backoff (back in
+				// the retry loop) will honor it instead of the
+				// computed exponential delay. parseRetryAfter
+				// tolerates missing/malformed values by returning 0,
+				// which means "use the regular backoff".
+				if buf.statusCode == 429 || buf.statusCode == 503 {
+					if v := parseRetryAfter(buf.header.Get("Retry-After")); v > 0 {
+						retryAfter = v
+					}
+				}
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
 					AttemptOrder: attemptOrder,
@@ -966,6 +1113,10 @@ outer:
 func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byte, candidates []candidate, inputEstimate int, logEntry *model.RequestLog) {
 	logEntry.IsStream = true
 
+	// Wall-clock budget for the whole request — see forwardWithFailover
+	// for the full design rationale.
+	budgetCtx, budgetCancel := context.WithTimeout(r.Context(), maxRequestDuration)
+	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
 	var lastCandidate candidate
@@ -983,6 +1134,10 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	// attemptsCapped signals the outer loop to stop after the current
 	// candidate's retry loop completes.
 	attemptsCapped := false
+	// retryAfter persists the most recent 429/503 Retry-After value from
+	// a failed attempt; the next backoff will honor it instead of the
+	// computed exponential backoff. Reset after consumption.
+	retryAfter := time.Duration(0)
 
 	// outer is the label on the candidate loop. The global attempt cap
 	// uses a labeled break to exit BOTH loops at once. Plain `break` in
@@ -1091,37 +1246,103 @@ outer:
 				break
 			}
 
+			// Wall-clock budget. See forwardWithFailover for the
+			// full rationale. Skip this check if the underlying
+			// error is a client disconnect — that's a separate
+			// case handled by the backoff select below.
+			if budgetCtx.Err() != nil && !isClientDisconnect(budgetCtx.Err()) {
+				attemptOrder++
+				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+					AttemptOrder: attemptOrder,
+					ProviderID:   c.provider.ID,
+					ProviderName: c.provider.Name,
+					ModelName:    c.modelName,
+					TargetID:     c.targetID,
+					Status:       "budget_exceeded",
+					StatusCode:   0,
+					Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+					LatencyMs:    0,
+				})
+				lastErr = fmt.Errorf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+				lastStatus = http.StatusServiceUnavailable
+				attemptsCapped = true
+				break
+			}
+
 			// Backoff between attempts: fires before every attempt
 			// except the very first (totalAttempts==0). Interrupts
-			// cleanly if the client disconnects while we are waiting.
+			// on (a) client disconnect, (b) wall-clock budget
+			// exhaustion, or (c) the planned delay elapsing. The
+			// 429/503 Retry-After header from the previous attempt
+			// is honored here instead of the computed exponential
+			// backoff when present.
 			if totalAttempts > 0 {
+				delay := retryBackoff(totalAttempts)
+				if retryAfter > 0 {
+					delay = retryAfter
+					retryAfter = 0
+				}
+				// Cap the delay to the remaining wall-clock budget
+				// so a hostile Retry-After: 86400 cannot pin us.
+				if remaining := time.Until(budgetDeadline(budgetCtx)); delay > remaining && remaining > 0 {
+					delay = remaining
+				} else if remaining <= 0 {
+					delay = 0
+				}
 				select {
-				case <-r.Context().Done():
-					logEntry.StatusCode = statusClientClosed
-					logEntry.Error = "client disconnected during retry backoff"
-					logEntry.ProviderID = c.provider.ID
-					logEntry.ProviderName = c.provider.Name
-					logEntry.Model = c.modelName
-					logEntry.RouteID = c.ruleID
-					logEntry.RouteLabel = c.ruleLabel
-					attemptOrder++
-					logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-						AttemptOrder: attemptOrder,
-						ProviderID:   c.provider.ID,
-						ProviderName: c.provider.Name,
-						ModelName:    c.modelName,
-						TargetID:     c.targetID,
-						Status:       "client_abort",
-						StatusCode:   statusClientClosed,
-						Error:        "client disconnected during retry backoff",
-						LatencyMs:    0,
-					})
-					slog.Warn("proxy: stream client disconnected during retry backoff",
-						"provider", c.provider.Name,
-						"model", c.modelName,
-						"target", c.targetID)
+				case <-budgetCtx.Done():
+					if r.Context().Err() != nil {
+						// Client disconnect.
+						logEntry.StatusCode = statusClientClosed
+						logEntry.Error = "client disconnected during retry backoff"
+						logEntry.ProviderID = c.provider.ID
+						logEntry.ProviderName = c.provider.Name
+						logEntry.Model = c.modelName
+						logEntry.RouteID = c.ruleID
+						logEntry.RouteLabel = c.ruleLabel
+						attemptOrder++
+						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+							AttemptOrder: attemptOrder,
+							ProviderID:   c.provider.ID,
+							ProviderName: c.provider.Name,
+							ModelName:    c.modelName,
+							TargetID:     c.targetID,
+							Status:       "client_abort",
+							StatusCode:   statusClientClosed,
+							Error:        "client disconnected during retry backoff",
+							LatencyMs:    0,
+						})
+						slog.Warn("proxy: stream client disconnected during retry backoff",
+							"provider", c.provider.Name,
+							"model", c.modelName,
+							"target", c.targetID)
+					} else {
+						// Wall-clock budget exhausted during backoff.
+						logEntry.StatusCode = http.StatusServiceUnavailable
+						logEntry.Error = fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+						logEntry.ProviderID = c.provider.ID
+						logEntry.ProviderName = c.provider.Name
+						logEntry.Model = c.modelName
+						logEntry.RouteID = c.ruleID
+						logEntry.RouteLabel = c.ruleLabel
+						attemptOrder++
+						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+							AttemptOrder: attemptOrder,
+							ProviderID:   c.provider.ID,
+							ProviderName: c.provider.Name,
+							ModelName:    c.modelName,
+							TargetID:     c.targetID,
+							Status:       "budget_exceeded",
+							StatusCode:   0,
+							Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+							LatencyMs:    0,
+						})
+						slog.Warn("proxy: stream request wall-clock budget exceeded during backoff",
+							"provider", c.provider.Name,
+							"budget", maxRequestDuration)
+					}
 					return
-				case <-time.After(retryBackoff(totalAttempts)):
+				case <-time.After(delay):
 				}
 			}
 			totalAttempts++
@@ -1143,7 +1364,7 @@ outer:
 				break
 			}
 
-			result, newOrder := p.streamAttempt(r.Context(), w, r, c, upstreamKey, rewrittenBody, upstreamURL, attemptOrder, inputEstimate, logEntry)
+			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, attemptOrder, inputEstimate, logEntry)
 			attemptOrder = newOrder
 
 			switch result.Status {
@@ -1178,11 +1399,18 @@ outer:
 						slog.Error("proxy: increment target failure count (stream)", "err", err)
 					}
 				}
+				// Honor the upstream's Retry-After on the next
+				// backoff (429/503 only — other retryable codes
+				// return RetryAfter=0 from streamAttempt).
+				if result.RetryAfter > 0 {
+					retryAfter = result.RetryAfter
+				}
 				slog.Debug("proxy: stream retrying same target",
 					"provider", c.provider.Name,
 					"model", c.modelName,
 					"attempt", attempt,
-					"maxRetries", c.maxRetries)
+					"maxRetries", c.maxRetries,
+					"retry_after", result.RetryAfter)
 				continue
 			default:
 				slog.Error("proxy: stream unknown attempt status", "status", result.Status)
@@ -1485,11 +1713,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			"model", c.modelName,
 			"status", upstreamStatus,
 			"category", cat)
+		// Capture Retry-After for 429/503 so the caller honors it
+		// instead of the computed exponential backoff.
+		var retryAfter time.Duration
+		if upstreamStatus == 429 || upstreamStatus == 503 {
+			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+		}
 		return streamAttemptResult{
 			Status:     "retryable",
 			StatusCode: upstreamStatus,
 			Error:      errStr,
 			LatencyMs:  latencyMs,
+			RetryAfter: retryAfter,
 		}, attemptOrder
 	}
 
@@ -1828,6 +2063,13 @@ type streamAttemptResult struct {
 	Error        string
 	LatencyMs    int // attempt wall-clock (for retryable entries; sum from caller)
 	FirstTokenMs int // success only: time from attemptStart to first body byte
+
+	// RetryAfter is the upstream's Retry-After header value (parsed
+	// via parseRetryAfter) for retryable 429/503 responses. Non-zero
+	// only on retryable outcomes; the caller uses it to override the
+	// computed exponential backoff on the next attempt. Capped to
+	// the remaining wall-clock budget in the caller.
+	RetryAfter time.Duration
 
 	// StreamErr is non-nil when the upstream body broke mid-stream (or
 	// the client disconnected) after at least one byte was committed.

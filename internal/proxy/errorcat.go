@@ -25,7 +25,17 @@ const (
 // CategorizeError classifies an upstream response. If err is non-nil, the error
 // type takes precedence over the status code. Client-side 4xx errors are
 // generally non-retryable, except 401/403/404/408/409/429 which may succeed on
-// a different provider; 5xx and network errors are retryable.
+// a different provider; 5xx and network errors are retryable. Unknown 4xx
+// codes (e.g. 451, 460) are ALSO retryable: a misbehaving provider returning
+// an odd status should not kill failover for the rest of the chain — let the
+// next candidate try. The explicit NonRetryable list (400/405/406/413/414/
+// 415/422/501) is reserved for HTTP codes whose semantics are clearly
+// "client error, do not retry" per RFC 9110 and OpenAI API behavior.
+//
+// Note: this is a categorizer only — it does NOT decide whether to penalize
+// the provider's circuit breaker. See isCircuitBreakerFailure for that: only
+// 5xx and net errors count toward the breaker, so an unknown 4xx that is now
+// retryable will failover WITHOUT tripping the breaker.
 func CategorizeError(err error, statusCode int) ErrorCategory {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -38,13 +48,15 @@ func CategorizeError(err error, statusCode int) ErrorCategory {
 		return CategoryRetryable
 	}
 
+	// Explicit non-retryable 4xx: the request itself is malformed in a
+	// way that no other provider can fix. Any other status is either
+	// retryable (auth/quota/5xx/unknown 4xx) or out of the failure
+	// path (< 400).
 	switch statusCode {
 	case 400, 405, 406, 413, 414, 415, 422, 501:
 		return CategoryNonRetryable
-	case 401, 403, 404, 408, 409, 429:
-		return CategoryRetryable
 	}
-	if statusCode >= 500 {
+	if statusCode >= 400 {
 		return CategoryRetryable
 	}
 	return CategoryNonRetryable

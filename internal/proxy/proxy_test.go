@@ -2496,3 +2496,270 @@ func TestFailover_BackoffBetweenRetries(t *testing.T) {
 		t.Fatalf("expected 5xx after all attempts failed, got %d", resp.StatusCode)
 	}
 }
+
+// TestFailover_UnknownStatusFailover verifies that an unknown 4xx status
+// from a provider (e.g. 451, 460) is now treated as RETRYABLE so the
+// proxy can fail over to the next candidate. Previously these codes
+// were categorized as NonRetryable, which stopped the request after
+// the first provider — defeating the purpose of having a fallback.
+//
+// Setup: P0 returns 451 (legal-blocked; previously non-retryable, now
+// retryable per the "unknown 4xx defaults to retryable" rule). P1
+// returns 200. Asserts the request succeeds via P1 failover, NOT via
+// P0.
+func TestFailover_UnknownStatusFailover(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(451) // legal-blocked, used as a stand-in for "unknown 4xx"
+			_, _ = w.Write([]byte(`{"error":"legal-blocked"}`))
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chatcmpl-p1",
+			"model": "m1",
+			"usage": map[string]interface{}{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after failover from 451, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "chatcmpl-p1") {
+		t.Fatalf("expected response from P1, got %s", rec.Body.String())
+	}
+	if p0Hits != 1 {
+		t.Fatalf("expected P0 hit once, got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after failover, got %d", p1Hits)
+	}
+	// Critically: an unknown 4xx must NOT trip the breaker (only 5xx
+	// and net errors do). 451 is a "client-error-shaped" code from
+	// P0's perspective, not a server failure. We verify this by
+	// checking the breaker's consecutiveFailures directly.
+	if p0Breaker := p.breakerFor("p0"); p0Breaker.consecutiveFailures != 0 {
+		t.Fatalf("expected P0 breaker consecutiveFailures=0 (unknown 4xx should not break the breaker), got %d",
+			p0Breaker.consecutiveFailures)
+	}
+	// Provider health must also stay Connected — same reason.
+	prov, _ := store.GetProvider("p0")
+	if prov.Status == model.ProviderStatusError {
+		t.Fatalf("expected P0 provider status != error, got %q (err=%q)",
+			prov.Status, prov.ErrorMessage)
+	}
+	// The target's failure_count is incremented for every failed
+	// attempt (regardless of category); that is by design and
+	// separate from the circuit breaker. What we care about is that
+	// the failover path WORKED, not whether the failure counter
+	// moved — so we only assert the hit/fail split on P1.
+	h1, f1 := store.statsFor("t1")
+	if h1 != 1 || f1 != 0 {
+		t.Fatalf("expected t1 hit=1 fail=0, got hit=%d fail=%d", h1, f1)
+	}
+}
+
+// TestFailover_RespectsRetryAfter verifies that the proxy honors an
+// upstream Retry-After header on a 429/503 response: instead of the
+// computed exponential backoff, the next attempt (on a different
+// target) is delayed by at least the Retry-After value.
+//
+// Setup: P0 returns 429 with Retry-After: 2 (delta-seconds). P1
+// returns 200. Asserts the request succeeds via P1 and that the
+// wall-clock delay between the P0 attempt and the P1 attempt is
+// >= 2s (Retry-After honored).
+func TestFailover_RespectsRetryAfter(t *testing.T) {
+	var p0Hits, p1Hits int
+	var p0Time time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			p0Time = time.Now()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "2") // 2 seconds
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"rate limited"}`))
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chatcmpl-p1",
+			"model": "m1",
+			"usage": map[string]interface{}{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	start := time.Now()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after failover with Retry-After, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "chatcmpl-p1") {
+		t.Fatalf("expected response from P1, got %s", rec.Body.String())
+	}
+	if p0Hits != 1 {
+		t.Fatalf("expected P0 hit once, got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after failover, got %d", p1Hits)
+	}
+	// P0 returned at p0Time. P1 should have been called >= 2s after
+	// that (Retry-After: 2). We measure from p0Time to elapsed; a
+	// little slack for clock noise.
+	p1Delay := elapsed - start.Sub(p0Time)
+	// elapsed is time-since-start; p0Time-start is negative. So
+	// elapsed - (p0Time-start) is actually (now-start) - (p0Time-start) =
+	// now-p0Time = delay between p0 and now (which is when p1 returned,
+	// slightly after p1 was hit). Approximate.
+	_ = p1Delay
+	// The simpler assertion: elapsed (full request time) must be at
+	// least 2s because the Retry-After delay is between the two
+	// upstream calls.
+	if elapsed < 1900*time.Millisecond {
+		t.Fatalf("expected elapsed >= 1900ms (proves Retry-After honored), got %v", elapsed)
+	}
+	// Sanity ceiling: with Retry-After: 2 and no other sleeps, the
+	// request should complete well under 5s.
+	if elapsed > 5*time.Second {
+		t.Fatalf("expected elapsed <= 5s (Retry-After cap), got %v", elapsed)
+	}
+}
+
+// TestFailover_WallClockBudgetExceeded verifies the per-request
+// wall-clock budget (maxRequestDuration, default 90s). The test
+// shortens the budget via the exported `var` so the request aborts
+// quickly. A slow upstream (1s+ per attempt) combined with MaxRetries
+// guarantees the chain runs longer than the shortened budget.
+//
+// Setup: maxRequestDuration temporarily = 500ms. P0 responds after
+// 200ms with 500 (retryable). MaxRetries=5. The total chain time
+// (multiple 200ms attempts + backoff sleeps) easily exceeds 500ms,
+// so the budget should fire.
+//
+// IMPORTANT: this test mutates the package-level `maxRequestDuration`
+// var. We restore the default in a defer so the change is local.
+func TestFailover_WallClockBudgetExceeded(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		// Sleep just long enough that the budget fires before
+		// the chain can complete.
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"slow"}`))
+	}))
+	defer srv.Close()
+
+	// Shrink the budget so the test runs in well under a second.
+	// Restore the default 90s at the end so other tests see the
+	// production value.
+	origDuration := maxRequestDuration
+	maxRequestDuration = 500 * time.Millisecond
+	defer func() { maxRequestDuration = origDuration }()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 5, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	elapsed := time.Since(start)
+
+	// 5xx because the budget was exhausted (treated as upstream
+	// unavailability).
+	if rec.Code < 500 {
+		t.Fatalf("expected 5xx when budget exceeded, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// The request must have completed reasonably close to the
+	// 500ms budget, NOT after the full MaxRetries+1 = 6 attempts
+	// × 200ms each (1.2s) + backoff. Allow generous upper bound.
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected elapsed <= 2s (budget should have fired ~500ms), got %v", elapsed)
+	}
+	// Floor: at least one full attempt should have completed
+	// before the budget fired.
+	if hits < 1 {
+		t.Fatalf("expected at least 1 upstream hit before budget fired, got %d", hits)
+	}
+	// The chain must contain a budget_exceeded entry. We don't
+	// inspect the log here because the test runs synchronously and
+	// the async log writer needs Stop() to flush — defer p.Stop()
+	// handles that, but reading the log after the response means
+	// the writer may not have flushed yet. We rely on the timing
+	// assertion (elapsed < 2s) as the primary signal that the
+	// budget fired; the status code (5xx) confirms the path.
+}

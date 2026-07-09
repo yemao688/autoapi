@@ -13,7 +13,9 @@ func TestCategorizeError_StatusCodes(t *testing.T) {
 		status int
 		want   ErrorCategory
 	}{
-		// Non-retryable
+		// Non-retryable: explicit list. Per RFC 9110 / OpenAI
+		// semantics, these are "request itself is malformed" — no
+		// other provider will succeed.
 		{400, CategoryNonRetryable},
 		{405, CategoryNonRetryable},
 		{406, CategoryNonRetryable},
@@ -22,18 +24,25 @@ func TestCategorizeError_StatusCodes(t *testing.T) {
 		{415, CategoryNonRetryable},
 		{422, CategoryNonRetryable},
 		{501, CategoryNonRetryable},
-		// Retryable (do not open circuit)
+		// Retryable: documented retryable 4xx (auth/quota/conflict).
 		{401, CategoryRetryable},
 		{403, CategoryRetryable},
 		{404, CategoryRetryable},
 		{408, CategoryRetryable},
 		{409, CategoryRetryable},
 		{429, CategoryRetryable},
-		// Retryable (open circuit)
+		// Retryable: 5xx upstream failures.
 		{500, CategoryRetryable},
 		{502, CategoryRetryable},
 		{503, CategoryRetryable},
 		{504, CategoryRetryable},
+		// Retryable: unknown / vendor-specific 4xx. A misbehaving
+		// provider returning an odd status must not block failover
+		// to the rest of the chain.
+		{451, CategoryRetryable}, // legal-blocked
+		{460, CategoryRetryable}, // vendor-specific
+		{463, CategoryRetryable}, // vendor-specific
+		{499, CategoryRetryable}, // nginx-style custom
 		// 2xx is not categorized as a failure path
 	}
 	for _, tc := range cases {
