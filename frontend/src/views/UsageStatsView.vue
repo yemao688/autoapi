@@ -413,7 +413,8 @@ const clearAllLogs = async () => {
   if (!ok) return;
   clearing.value = true;
   try {
-    await api.clearLogs();
+    const deleted = await api.clearLogs();
+    toast.push(t("usage.clearAllDone", { count: deleted }), "success");
     await refreshAll();
   } catch (e: any) {
     toast.push(e?.message || String(e), "error");

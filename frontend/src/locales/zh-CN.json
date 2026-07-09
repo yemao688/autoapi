@@ -531,7 +531,8 @@
     },
     "clearAllTitle": "清空所有统计日志",
     "clearAllMessage": "此操作将永久删除全部请求日志，且无法恢复。确定继续吗？",
-    "clearAllConfirm": "清空全部"
+    "clearAllConfirm": "清空全部",
+    "clearAllDone": "已清空 {count} 条统计日志"
   },
   "common": {
     "save": "保存",

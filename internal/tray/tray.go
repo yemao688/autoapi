@@ -11,13 +11,13 @@ import (
 	"fyne.io/systray"
 )
 
-//go:embed build/appicon.png
-// TODO: replace with a proper monochrome template icon. macOS treats
-// SetTemplateIcon images as black-with-alpha, so the colour appicon
-// is rendered as an opaque silhouette and is visually subpar on light
-// menu bars. A 22×22@1x / 44×44@2x single-colour PNG with anti-aliased
-// alpha is the standard macOS template image. Creating the asset is
-// out of scope for the code task; tracked here.
+//go:embed build/trayicon.png
+// icon is a 44×44 monochrome template image: pure black (#000000) with
+// anti-aliased alpha and a fully transparent background. macOS renders
+// SetTemplateIcon images as a single-colour silhouette and applies the
+// appropriate foreground (dark on light menu bar, light on dark), so a
+// colour PNG would appear as an opaque blob. Three connected nodes
+// (equilateral triangle) represent routing requests across providers.
 var icon []byte
 
 // Handlers groups the menu actions. main.go wires these to App methods
@@ -52,9 +52,9 @@ func Run(handlers Handlers) (start func(), stop func()) {
 			systray.SetTitle("")
 			systray.SetTooltip("Autoapi")
 			// Pass the same bytes for the @1x and @2x variants. macOS
-			// will use the @2x variant on Retina displays. Until a
-			// proper template icon is available, this serves as a
-			// visible placeholder; the TODO on the icon var explains.
+			// will use the @2x variant on Retina displays. The icon
+			// is a monochrome template (see the embed above) so the
+			// system applies the correct foreground colour.
 			systray.SetTemplateIcon(icon, icon)
 
 			showItem := systray.AddMenuItem("显示主窗口", "Bring the main window to the front")

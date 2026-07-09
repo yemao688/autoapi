@@ -531,7 +531,8 @@
     },
     "clearAllTitle": "Clear all stats logs",
     "clearAllMessage": "This will permanently delete ALL request logs and cannot be undone. Continue?",
-    "clearAllConfirm": "Clear all"
+    "clearAllConfirm": "Clear all",
+    "clearAllDone": "Cleared {count} stat log(s)"
   },
   "common": {
     "save": "Save",
