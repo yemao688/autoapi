@@ -8,14 +8,6 @@ import (
 	"autoapi/internal/model"
 )
 
-// initDev override is set in store_test.go; declare here for the per-package
-// test binary so the logs test file compiles standalone if needed.
-var _ = func() {
-	if initDev == nil {
-		initDev = func(*Store) {}
-	}
-}
-
 func newLogsTestStore(t *testing.T) *Store {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "autoapi-logs-test-*")

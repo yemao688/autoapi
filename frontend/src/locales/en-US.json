@@ -16,13 +16,19 @@
     "title": "Settings",
     "status": {
       "saved": "All changes saved",
-      "unsaved": "Unsaved changes"
+      "unsaved": "Unsaved changes",
+      "loading": "Loading settings…",
+      "loadFailed": "Settings failed to load"
     },
     "actions": {
       "discard": "Discard",
       "save": "Save",
       "restoreDefaults": "Restore defaults",
-      "notImplemented": "Not implemented yet"
+      "notImplemented": "Not implemented yet",
+      "retry": "Retry"
+    },
+    "paths": {
+      "loadFailed": "Runtime paths failed to load"
     },
     "sections": {
       "general": "General",

@@ -5,6 +5,7 @@
 # build outputs
 build/bin/
 frontend/dist/
+frontend/package.json.md5
 *.app/
 *.dmg
 *.exe

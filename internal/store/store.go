@@ -18,21 +18,28 @@ import (
 // resolve via the default home directory path ($HOME/.autoapi/autoapi.db).
 // For tests, set DSN to ":memory:" or a temp path.
 type StoreDeps struct {
-	DSN string // empty = default home directory; overridable for tests
+	DSN          string // empty = default home directory; overridable for tests
+	DefaultPort  int    // zero preserves the production default (8344)
+	SeedFixtures bool   // fixtures are opt-in and only available in dev builds
 }
 
 // Store is the SQLite-backed persistence layer implementing api.StoreService.
 // All write operations go through the single-writer goroutine (Writer); reads
 // go directly against the shared *sql.DB (safe under WAL mode).
 type Store struct {
-	db      *sql.DB
-	writer  *Writer
-	dsnPath string
+	db          *sql.DB
+	writer      *Writer
+	dsnPath     string
+	defaultPort int
 }
 
-// New opens (or creates) the SQLite database, applies migrations, seeds dev
-// fixtures (in !production builds), and starts the write-coordination goroutine.
+// New opens (or creates) the SQLite database, applies migrations, optionally
+// seeds fixtures in a development build, and starts the writer goroutine.
 func New(_ context.Context, deps StoreDeps) (*Store, error) {
+	defaultPort := deps.DefaultPort
+	if defaultPort == 0 {
+		defaultPort = 8344
+	}
 	dsn := deps.DSN
 	if dsn == "" {
 		home, err := os.UserHomeDir()
@@ -66,7 +73,7 @@ func New(_ context.Context, deps StoreDeps) (*Store, error) {
 		}
 	}
 
-	s := &Store{db: db, dsnPath: dsn}
+	s := &Store{db: db, dsnPath: dsn, defaultPort: defaultPort}
 
 	// Migrations
 	slog.Info("store: migrations starting")
@@ -84,15 +91,12 @@ func New(_ context.Context, deps StoreDeps) (*Store, error) {
 	s.writer = NewWriter(db, 1024)
 	go s.writer.Run()
 
-	// Dev-only seeding (no-op in production builds)
-	initDev(s)
+	if deps.SeedFixtures {
+		seedFixtures(s)
+	}
 
 	return s, nil
 }
-
-// initDev is replaced by a real implementation in !production builds.
-// See fixtures.go for the dev implementation.
-var initDev = func(*Store) {}
 
 // Close shuts down the writer and closes the database connection.
 func (s *Store) Close() error {

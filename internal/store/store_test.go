@@ -9,11 +9,6 @@ import (
 	"autoapi/internal/model"
 )
 
-func init() {
-	// Disable dev seeding in tests so test data isn't polluted.
-	initDev = func(*Store) {}
-}
-
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "autoapi-store-test-*")
@@ -725,6 +720,9 @@ func TestSettings(t *testing.T) {
 	if settings.Server.Port != 8344 {
 		t.Fatalf("expected default port 8344, got %d", settings.Server.Port)
 	}
+	if settings.General.StartupAction != "show_window" {
+		t.Fatalf("expected default startup action show_window, got %q", settings.General.StartupAction)
+	}
 
 	settings.Server.Port = 9090
 	settings.Appearance.Theme = "dark"
@@ -741,6 +739,50 @@ func TestSettings(t *testing.T) {
 	}
 	if loaded.Appearance.Theme != "dark" {
 		t.Fatalf("expected theme 'dark', got %q", loaded.Appearance.Theme)
+	}
+}
+
+func TestSettingsInjectedDefaultsAndPersistedMerge(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(context.Background(), StoreDeps{DSN: dir + "/settings.db", DefaultPort: 18344})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	settings, err := s.GetSettings()
+	if err != nil || settings.Server.Port != 18344 {
+		t.Fatalf("injected default: settings=%+v err=%v", settings, err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES ('server', '{"bind_address":"127.0.0.1"}')`); err != nil {
+		t.Fatalf("insert partial settings: %v", err)
+	}
+	settings, err = s.GetSettings()
+	if err != nil || settings.Server.Port != 18344 || settings.Server.BindAddress != "127.0.0.1" {
+		t.Fatalf("partial server merge: settings=%+v err=%v", settings, err)
+	}
+	if _, err := s.db.Exec(`UPDATE settings SET value = '{"port":19090}' WHERE key = 'server'`); err != nil {
+		t.Fatalf("persist explicit port: %v", err)
+	}
+	settings, err = s.GetSettings()
+	if err != nil || settings.Server.Port != 19090 || settings.Server.BindAddress != "0.0.0.0" {
+		t.Fatalf("explicit persisted port: settings=%+v err=%v", settings, err)
+	}
+	settings, err = s.ResetSettings()
+	if err != nil || settings.Server.Port != 18344 {
+		t.Fatalf("reset settings: settings=%+v err=%v", settings, err)
+	}
+	settings, err = s.GetSettings()
+	if err != nil || settings.Server.Port != 18344 {
+		t.Fatalf("persisted reset settings: settings=%+v err=%v", settings, err)
+	}
+}
+
+func TestSettingsZeroDefaultPortFallsBack(t *testing.T) {
+	s := newTestStore(t)
+	settings, err := s.GetSettings()
+	if err != nil || settings.Server.Port != 8344 {
+		t.Fatalf("zero default port fallback: settings=%+v err=%v", settings, err)
 	}
 }
 

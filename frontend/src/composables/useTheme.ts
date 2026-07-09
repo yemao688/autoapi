@@ -51,14 +51,10 @@ export function useTheme() {
   }
 
   async function saveTheme(theme: ThemeValue) {
-    activeTheme.value = theme
-    try {
-      const s = await api.getSettings()
-      s.appearance.theme = theme
-      await api.saveSettings(s)
-    } catch {
-      // ignore
-    }
+	activeTheme.value = theme
+	const s = await api.getSettings()
+	s.appearance.theme = theme
+	await api.saveSettings(s)
   }
 
   return {

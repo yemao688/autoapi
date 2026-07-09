@@ -83,6 +83,7 @@ type StoreService interface {
 	// Settings
 	GetSettings() (*model.Settings, error)
 	SaveSettings(s model.Settings) error
+	ResetSettings() (*model.Settings, error)
 	ListEndpoints() ([]model.Endpoint, error)
 	StorageDir() string
 
@@ -534,37 +535,89 @@ func (a *App) SaveSettings(s model.Settings) error {
 	if a.deps.Store == nil {
 		return errNotImpl
 	}
-	if err := a.deps.Store.SaveSettings(s); err != nil {
+	return a.persistSettingsWithRollback(func() (*model.Settings, error) {
+		if err := a.deps.Store.SaveSettings(s); err != nil {
+			return nil, err
+		}
+		return &s, nil
+	})
+}
+
+// ResetSettings restores and persists profile-aware defaults.
+func (a *App) ResetSettings() (*model.Settings, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	var settings *model.Settings
+	err := a.persistSettingsWithRollback(func() (*model.Settings, error) {
+		var err error
+		settings, err = a.deps.Store.ResetSettings()
+		return settings, err
+	})
+	return settings, err
+}
+
+func (a *App) persistSettingsWithRollback(persist func() (*model.Settings, error)) error {
+	previous, err := a.deps.Store.GetSettings()
+	if err != nil {
+		return fmt.Errorf("settings: read previous settings: %w", err)
+	}
+	updated, err := persist()
+	if err != nil {
 		return err
 	}
+	if a.deps.Proxy != nil {
+		slog.Info("app: settings changed, restarting proxy")
+		if restartErr := a.deps.Proxy.Restart(); restartErr != nil {
+			rollbackErr := a.deps.Store.SaveSettings(*previous)
+			var restoreErr error
+			if rollbackErr == nil {
+				restoreErr = a.deps.Proxy.Restart()
+			}
+			switch {
+			case rollbackErr != nil:
+				return fmt.Errorf("settings: restart proxy: %w; rollback settings failed: %v", restartErr, rollbackErr)
+			case restoreErr != nil:
+				return fmt.Errorf("settings: restart proxy: %w; restore previous listener failed: %v", restartErr, restoreErr)
+			default:
+				return fmt.Errorf("settings: restart proxy: %w; previous settings restored", restartErr)
+			}
+		}
+	}
+	a.updateLogger(updated.Logging)
+	return nil
+}
 
-	// Re-apply the persistent logger whenever settings are saved. This
-	// is a cheap re-init and is safe to call unconditionally: if the
-	// logging section did not change the resulting sink is identical.
-	// The path is rebuilt from the store's storage directory so the
-	// log file stays next to the SQLite database.
-	logDir := a.deps.Store.StorageDir()
-	logPath := filepath.Join(logDir, "logs", "autoapi.log")
+func (a *App) updateLogger(settings model.LoggingSettings) {
+	logPath := filepath.Join(a.deps.Store.StorageDir(), "logs", "autoapi.log")
 	_ = logger.Update(logger.Config{
-		Enabled:    s.Logging.Enabled,
-		Level:      s.Logging.Level,
-		MaxSizeMB:  s.Logging.MaxSizeMB,
-		MaxAgeDays: s.Logging.MaxAgeDays,
-		MaxBackups: s.Logging.MaxBackups,
+		Enabled:    settings.Enabled,
+		Level:      settings.Level,
+		MaxSizeMB:  settings.MaxSizeMB,
+		MaxAgeDays: settings.MaxAgeDays,
+		MaxBackups: settings.MaxBackups,
 		Path:       logPath,
 	})
-	// Note: logger.Update only returns an error when it had to fall back
-	// to stderr because the file could not be opened. Init/Update has
-	// already installed a working logger in that case, so there is
-	// nothing for the UI to display — silently swallowing the error is
-	// the correct UX.
+}
 
-	// Port/bind changed → restart proxy so it picks up the new listener.
-	if a.deps.Proxy != nil {
-		slog.Info("app: settings saved, restarting proxy")
-		return a.deps.Proxy.Restart()
+// GetRuntimePaths returns resolved profile paths for display in the UI.
+func (a *App) GetRuntimePaths() (RuntimePaths, error) {
+	if a.deps.Store == nil {
+		return RuntimePaths{}, errNotImpl
 	}
-	return nil
+	storageDir := a.deps.Store.StorageDir()
+	if storageDir == "" {
+		return RuntimePaths{}, fmt.Errorf("store: storage dir not available")
+	}
+	return RuntimePaths{
+		StorageDir: storageDir,
+		LogPath:    filepath.Join(storageDir, "logs", "autoapi.log"),
+	}, nil
+}
+
+type RuntimePaths struct {
+	StorageDir string `json:"storage_dir"`
+	LogPath    string `json:"log_path"`
 }
 
 func (a *App) ListEndpoints() ([]model.Endpoint, error) {

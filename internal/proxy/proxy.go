@@ -150,12 +150,16 @@ type storeProxy interface {
 type Proxy struct {
 	store            storeProxy
 	service          upstreamKeyProvider
-	settingsProvider func() *model.Settings
+	defaultPort      int
+	settingsProvider func() (*model.Settings, error)
 
-	mu       sync.RWMutex
-	listener net.Listener
-	server   *http.Server
-	router   chi.Router
+	lifecycleMu    sync.Mutex
+	mu             sync.RWMutex
+	listener       net.Listener
+	server         *http.Server
+	activeSettings model.ServerSettings
+	router         chi.Router
+	listen         func(network, address string) (net.Listener, error)
 
 	bufferPool  *bufferPool
 	errorLog    *log.Logger
@@ -177,12 +181,16 @@ type Proxy struct {
 // New creates a Proxy. The settingsProvider is called on Start/Restart to read
 // the current port/bind configuration. Pass a concrete *store.Store as the
 // store argument.
-func New(store storeProxy, service upstreamKeyProvider, settingsProvider func() *model.Settings) *Proxy {
+func New(store storeProxy, service upstreamKeyProvider, defaultPort int, settingsProvider func() (*model.Settings, error)) *Proxy {
+	if defaultPort == 0 {
+		defaultPort = 8344
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = upstreamResponseHeaderTimeout
 	p := &Proxy{
 		store:            store,
 		service:          service,
+		defaultPort:      defaultPort,
 		settingsProvider: settingsProvider,
 		bufferPool: &bufferPool{pool: &sync.Pool{
 			New: func() interface{} { return make([]byte, 32*1024) },
@@ -192,6 +200,7 @@ func New(store storeProxy, service upstreamKeyProvider, settingsProvider func() 
 		transport: transport,
 		breakers:  make(map[string]*CircuitBreaker),
 		writer:    newLogWriter(store),
+		listen:    net.Listen,
 	}
 	p.router = p.setupRouter()
 	return p
@@ -200,39 +209,66 @@ func New(store storeProxy, service upstreamKeyProvider, settingsProvider func() 
 // Start opens the TCP listener and begins serving the chi router in a
 // goroutine. It is safe to call multiple times; subsequent calls are no-ops.
 func (p *Proxy) Start() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
 
+	settings, err := p.currentSettings()
+	if err != nil {
+		return err
+	}
+	return p.startWithSettingsLocked(settings)
+}
+
+func (p *Proxy) startWithSettingsLocked(settings *model.Settings) error {
+	p.mu.RLock()
 	if p.listener != nil {
+		p.mu.RUnlock()
 		return nil
 	}
+	p.mu.RUnlock()
 
-	s := p.currentSettings()
-	addr := net.JoinHostPort(s.Server.BindAddress, strconv.Itoa(s.Server.Port))
-
-	ln, err := net.Listen("tcp", addr)
+	ln, server, err := p.newServer(settings)
 	if err != nil {
-		return fmt.Errorf("proxy: listen %s: %w", addr, err)
+		return err
 	}
 
-	p.listener = ln
-	p.server = &http.Server{
-		Handler: p.router,
+	p.installServer(ln, server)
+	p.serve(server, ln)
+	slog.Info("proxy started", "addr", ln.Addr().String())
+	return nil
+}
+
+func (p *Proxy) newServer(settings *model.Settings) (net.Listener, *http.Server, error) {
+	addr := net.JoinHostPort(settings.Server.BindAddress, strconv.Itoa(settings.Server.Port))
+	ln, err := p.listen("tcp", addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("proxy: listen %s: %w", addr, err)
 	}
+	return ln, &http.Server{Handler: p.router}, nil
+}
+
+func (p *Proxy) serve(server *http.Server, listener net.Listener) {
 	go func() {
-		if err := p.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			slog.Error("proxy server exited", "err", err)
 		}
 	}()
-	slog.Info("proxy started", "addr", ln.Addr().String())
-	return nil
+}
+
+type serverInstance struct {
+	listener net.Listener
+	server   *http.Server
 }
 
 // Stop performs a graceful shutdown of the http.Server and log writer. It is
 // safe to call multiple times; subsequent calls are no-ops.
 func (p *Proxy) Stop() error {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
 	slog.Info("proxy: stopping")
-	if err := p.stopServer(); err != nil {
+	instance := p.detachServer()
+	if err := shutdownServer(instance); err != nil {
 		return err
 	}
 	if p.writer != nil {
@@ -241,40 +277,133 @@ func (p *Proxy) Stop() error {
 	return nil
 }
 
-// stopServer stops the listener and http.Server without touching the log
-// writer. Used by Restart to keep the async writer alive across rebinds.
-func (p *Proxy) stopServer() error {
+func (p *Proxy) detachServer() serverInstance {
 	p.mu.Lock()
-	server := p.server
-	listener := p.listener
+	instance := serverInstance{listener: p.listener, server: p.server}
 	p.server = nil
 	p.listener = nil
+	p.activeSettings = model.ServerSettings{}
 	p.mu.Unlock()
+	return instance
+}
 
-	if server == nil {
+func (p *Proxy) installServer(listener net.Listener, server *http.Server) {
+	p.mu.Lock()
+	p.listener = listener
+	p.server = server
+	p.activeSettings = serverSettingsForListener(listener)
+	p.mu.Unlock()
+}
+
+func shutdownServer(instance serverInstance) error {
+	if instance.server == nil {
 		return nil
 	}
-	if listener != nil {
-		_ = listener.Close()
+	if instance.listener != nil {
+		_ = instance.listener.Close()
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
+	if err := instance.server.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
 		slog.Error("proxy: shutdown failed", "err", err)
 		return err
 	}
 	return nil
 }
 
-// Restart stops then starts the proxy so that new settings (port/bind) take
-// effect. The log writer stays alive across the restart.
+// Restart atomically switches to the requested listener. The old server stays
+// live until the new address has been acquired and installed.
 func (p *Proxy) Restart() error {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
 	slog.Info("proxy: restarting")
-	if err := p.stopServer(); err != nil {
+	settings, err := p.currentSettings()
+	if err != nil {
 		return err
 	}
-	return p.Start()
+
+	p.mu.RLock()
+	if p.listener != nil && listenerMatchesSettings(p.listener, settings.Server) {
+		p.mu.RUnlock()
+		return nil
+	}
+	oldInstance := serverInstance{listener: p.listener, server: p.server}
+	oldSettings := p.activeSettings
+	wasRunning := p.listener != nil && p.server != nil
+	p.mu.RUnlock()
+
+	if wasRunning && oldSettings.Port == settings.Server.Port {
+		return p.restartSamePort(settings, oldInstance, oldSettings)
+	}
+
+	newListener, newServer, err := p.newServer(settings)
+	if err != nil {
+		return err
+	}
+	p.installServer(newListener, newServer)
+	p.serve(newServer, newListener)
+
+	slog.Info("proxy restarted", "addr", newListener.Addr().String())
+	return shutdownServer(oldInstance)
+}
+
+func (p *Proxy) restartSamePort(settings *model.Settings, oldInstance serverInstance, oldSettings model.ServerSettings) error {
+	p.detachServer()
+	if err := shutdownServer(oldInstance); err != nil {
+		return p.restoreAfterRestartFailure(err, oldSettings)
+	}
+
+	newListener, newServer, bindErr := p.newServer(settings)
+	if bindErr != nil {
+		return p.restoreAfterRestartFailure(bindErr, oldSettings)
+	}
+	p.installServer(newListener, newServer)
+	p.serve(newServer, newListener)
+	slog.Info("proxy restarted", "addr", newListener.Addr().String())
+	return nil
+}
+
+func (p *Proxy) restoreAfterRestartFailure(originalErr error, oldSettings model.ServerSettings) error {
+	old := &model.Settings{Server: oldSettings}
+	listener, server, restoreErr := p.newServer(old)
+	if restoreErr != nil {
+		return fmt.Errorf("%w; restore previous listener failed: %v", originalErr, restoreErr)
+	}
+	p.installServer(listener, server)
+	p.serve(server, listener)
+	return originalErr
+}
+
+func serverSettingsForListener(listener net.Listener) model.ServerSettings {
+	if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+		return model.ServerSettings{Port: addr.Port, BindAddress: addr.IP.String()}
+	}
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		return model.ServerSettings{}
+	}
+	parsedPort, _ := strconv.Atoi(port)
+	return model.ServerSettings{Port: parsedPort, BindAddress: host}
+}
+
+func listenerMatchesSettings(listener net.Listener, settings model.ServerSettings) bool {
+	current, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || current.Port != settings.Port {
+		return false
+	}
+	target := net.ParseIP(settings.BindAddress)
+	if target == nil {
+		resolved, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(settings.BindAddress, strconv.Itoa(settings.Port)))
+		if err != nil {
+			return false
+		}
+		target = resolved.IP
+	}
+	if current.IP.IsUnspecified() && (target == nil || target.IsUnspecified()) {
+		return true
+	}
+	return current.IP.Equal(target)
 }
 
 // IsRunning reports whether the proxy has an active listener and server.
@@ -373,20 +502,24 @@ func slogMiddleware(next http.Handler) http.Handler {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-func (p *Proxy) currentSettings() *model.Settings {
+func (p *Proxy) currentSettings() (*model.Settings, error) {
 	s := &model.Settings{}
 	if p.settingsProvider != nil {
-		if provided := p.settingsProvider(); provided != nil {
+		provided, err := p.settingsProvider()
+		if err != nil {
+			return nil, fmt.Errorf("proxy: read settings: %w", err)
+		}
+		if provided != nil {
 			*s = *provided
 		}
 	}
 	if s.Server.Port == 0 {
-		s.Server.Port = 8344
+		s.Server.Port = p.defaultPort
 	}
 	if s.Server.BindAddress == "" {
 		s.Server.BindAddress = "0.0.0.0"
 	}
-	return s
+	return s, nil
 }
 
 func (p *Proxy) loadModelRules() []model.ModelRule {

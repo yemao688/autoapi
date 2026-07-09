@@ -1,4 +1,4 @@
-//go:build !production
+//go:build dev && !production
 
 package store
 
@@ -9,14 +9,12 @@ import (
 	"time"
 )
 
-func init() {
-	initDev = func(s *Store) {
-		seedIfEmpty(s.db)
-	}
+func seedFixtures(s *Store) {
+	seedIfEmpty(s.db)
 }
 
 // seedIfEmpty seeds the canonical dataset from the prototype when all core
-// tables are empty. Only compiled in dev builds (go:build !production).
+// tables are empty. Only compiled in development builds.
 func seedIfEmpty(db *sql.DB) {
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM providers`).Scan(&count); err != nil || count > 0 {

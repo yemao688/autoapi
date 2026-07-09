@@ -28,6 +28,20 @@ export namespace api {
 	        this.url = source["url"];
 	    }
 	}
+	export class RuntimePaths {
+	    storage_dir: string;
+	    log_path: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RuntimePaths(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.storage_dir = source["storage_dir"];
+	        this.log_path = source["log_path"];
+	    }
+	}
 
 }
 
@@ -894,4 +908,3 @@ export namespace model {
 	}
 
 }
-

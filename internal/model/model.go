@@ -95,12 +95,12 @@ type ApiKey struct {
 // response fully buffered), the budget stops. 0 = use the proxy default
 // (60 seconds).
 type ModelRule struct {
-	ID                       string `json:"id"`
-	Name                     string `json:"name"`
-	Enabled                  bool   `json:"enabled"`
-	FirstByteTimeoutSeconds  int    `json:"first_byte_timeout_seconds"`
-	CreatedAt                int64  `json:"created_at"`
-	UpdatedAt                int64  `json:"updated_at"`
+	ID                      string `json:"id"`
+	Name                    string `json:"name"`
+	Enabled                 bool   `json:"enabled"`
+	FirstByteTimeoutSeconds int    `json:"first_byte_timeout_seconds"`
+	CreatedAt               int64  `json:"created_at"`
+	UpdatedAt               int64  `json:"updated_at"`
 
 	Targets []ModelRuleTarget `json:"targets"`
 
@@ -118,7 +118,7 @@ type ModelRuleTarget struct {
 	RuleID       string `json:"rule_id"`
 	ProviderID   string `json:"provider_id"`
 	ModelName    string `json:"model_name"`
-	MaxRetries     int    `json:"max_retries"`     // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
+	MaxRetries   int    `json:"max_retries"`   // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
 	HitCount     int64  `json:"hit_count"`     // incremented once on successful dispatch
 	FailureCount int64  `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
 	Enabled      bool   `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
@@ -271,7 +271,7 @@ type Settings struct {
 
 type GeneralSettings struct {
 	LaunchAtLogin bool   `json:"launch_at_login"`
-	StartupAction string `json:"startup_action"` // "show" | "hide"
+	StartupAction string `json:"startup_action"` // "show_window" | "minimize_menubar" | "no_window"
 	MenuBarItem   bool   `json:"menu_bar_item"`
 	CloseAction   string `json:"close_action"` // "background" | "quit"
 }

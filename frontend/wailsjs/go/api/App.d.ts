@@ -30,6 +30,8 @@ export function GetProvider(arg1:string):Promise<model.Provider>;
 
 export function GetProxyStatus():Promise<api.ProxyStatus>;
 
+export function GetRuntimePaths():Promise<api.RuntimePaths>;
+
 export function GetSettings():Promise<model.Settings>;
 
 export function GetSystemHealth():Promise<model.ServiceHealth>;
@@ -63,6 +65,8 @@ export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;
 export function Quit():Promise<void>;
 
 export function ReorderModelRules(arg1:Array<string>):Promise<void>;
+
+export function ResetSettings():Promise<model.Settings>;
 
 export function RestartProxy():Promise<void>;
 

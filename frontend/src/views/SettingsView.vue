@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { model } from '../../wailsjs/go/models'
+import type { api as apiModels, model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
@@ -12,14 +12,20 @@ import i18n from '@/locales'
 
 const { t, locale } = useI18n()
 const { download } = useExportDownload()
-const { data: fetchedSettings, loading, execute: fetchSettings } = useApi(api.getSettings)
+const {
+  loading,
+  error: settingsLoadError,
+  execute: fetchSettings,
+} = useApi(api.getSettings)
 const toast = useToast()
 const { activeTheme, saveTheme } = useTheme()
 
 const isDirty = ref(false)
 const activeSection = ref('general')
-
-const defaultStoragePath = '~/.autoapi/'
+const settingsLoaded = ref(false)
+const runtimePaths = ref<apiModels.RuntimePaths | null>(null)
+const runtimePathsLoading = ref(false)
+const runtimePathsError = ref<string | null>(null)
 
 function defaultSettings(): model.Settings {
   return {
@@ -38,7 +44,7 @@ function defaultSettings(): model.Settings {
       streaming_sse: true,
     },
     server: {
-      port: 8344,
+      port: 0,
       bind_address: '0.0.0.0',
     },
     data: {
@@ -66,7 +72,8 @@ const selectedTheme = computed<'light' | 'dark' | 'system'>(() => {
   if (theme === 'light' || theme === 'dark' || theme === 'system') return theme
   return 'system'
 })
-const storagePath = computed(() => settings.value.data.storage_path || defaultStoragePath)
+const storagePath = computed(() => settings.value.data.storage_path || '')
+const logPath = computed(() => runtimePaths.value?.log_path || '')
 
 // Language picker
 const languageOptions: { value: AppLocale; label: string }[] = [
@@ -86,58 +93,94 @@ const currentLanguage = computed({
   },
 })
 
-function loadSettings() {
-  if (fetchedSettings.value) {
-    settings.value = JSON.parse(JSON.stringify(fetchedSettings.value)) as model.Settings
-    activeTheme.value = settings.value.appearance.theme as any
-  }
+function applySettings(value: model.Settings) {
+  settings.value = JSON.parse(JSON.stringify(value)) as model.Settings
+  activeTheme.value = settings.value.appearance.theme as any
+  settingsLoaded.value = true
   isDirty.value = false
 }
 
+async function loadSettings() {
+  settingsLoaded.value = false
+  const value = await fetchSettings()
+  if (value) applySettings(value)
+}
+
+async function resyncSettingsAfterFailure() {
+  settingsLoaded.value = false
+  const value = await fetchSettings()
+  if (value) applySettings(value)
+}
+
+async function loadRuntimePaths() {
+  runtimePathsLoading.value = true
+  runtimePathsError.value = null
+  try {
+    runtimePaths.value = await api.runtimePaths()
+  } catch (e: any) {
+    runtimePaths.value = null
+    runtimePathsError.value = e?.message || e?.toString() || t('settings.paths.loadFailed')
+  } finally {
+    runtimePathsLoading.value = false
+  }
+}
+
 function markSettingsDirty() {
+  if (!settingsLoaded.value) return
   isDirty.value = true
 }
 
 async function saveChanges() {
+  if (!settingsLoaded.value) return
   try {
     await api.saveSettings(settings.value)
     isDirty.value = false
     toast.push(t('toast.settingsSaved'), 'success')
   } catch (e: any) {
+    await resyncSettingsAfterFailure()
     toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
 
 async function discardChanges() {
-  await fetchSettings()
-  loadSettings()
+  if (!settingsLoaded.value) return
+  await loadSettings()
 }
 
 async function restoreDefaults() {
+  if (!settingsLoaded.value) return
   if (!confirm(t('confirm.restoreDefaultsMessage'))) return
-  const defaults = defaultSettings()
   try {
-    await api.saveSettings(defaults)
+    const defaults = await api.resetSettings()
     settings.value = defaults
     isDirty.value = false
     activeTheme.value = defaults.appearance.theme as any
     toast.push(t('toast.defaultsRestored'), 'success')
   } catch (e: any) {
+    await resyncSettingsAfterFailure()
     toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
 
 async function selectTheme(theme: 'light' | 'dark' | 'system') {
+  if (!settingsLoaded.value) return
   settings.value.appearance.theme = theme
-  await saveTheme(theme)
+  try {
+    await saveTheme(theme)
+  } catch (e: any) {
+    await resyncSettingsAfterFailure()
+    toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
+  }
 }
 
 async function selectAccent(color: string) {
+  if (!settingsLoaded.value) return
   settings.value.appearance.accent_color = color
   try {
     await api.saveSettings(settings.value)
     toast.push(t('toast.accentSaved'), 'success')
   } catch (e: any) {
+    await resyncSettingsAfterFailure()
     toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
@@ -173,6 +216,7 @@ function handleCopyBtn(e: Event) {
 }
 
 function copyStoragePath() {
+  if (!storagePath.value) return
   copyToClipboard(storagePath.value)
 }
 
@@ -189,14 +233,14 @@ function notImplemented() {
 }
 
 onMounted(() => {
-  void fetchSettings().then(loadSettings)
+  void loadSettings()
+  void loadRuntimePaths()
 })
 
 watch(activeTheme, (t) => {
   if (settings.value.appearance.theme !== t) settings.value.appearance.theme = t as any
 })
 
-watch(fetchedSettings, loadSettings, { once: true })
 </script>
 
 <template>
@@ -205,20 +249,20 @@ watch(fetchedSettings, loadSettings, { once: true })
       <h1 class="main-title">{{ t('settings.title') }}</h1>
       <span
         id="settings-status"
-        :style="{ color: isDirty ? 'var(--warning)' : 'var(--positive)' }"
-      >{{ isDirty ? t('settings.status.unsaved') : t('settings.status.saved') }}</span>
+        :style="{ color: !settingsLoaded ? 'var(--muted)' : isDirty ? 'var(--warning)' : 'var(--positive)' }"
+      >{{ loading ? t('settings.status.loading') : !settingsLoaded ? t('settings.status.loadFailed') : isDirty ? t('settings.status.unsaved') : t('settings.status.saved') }}</span>
     </div>
     <div class="main-actions">
       <button
         class="btn btn-secondary"
-        :disabled="!isDirty"
+        :disabled="!settingsLoaded || !isDirty"
         :style="{ opacity: isDirty ? 1 : 0.45, cursor: isDirty ? 'pointer' : 'not-allowed' }"
         id="settings-discard"
         @click="discardChanges"
       >{{ t('settings.actions.discard') }}</button>
       <button
         class="btn btn-primary"
-        :disabled="!isDirty"
+        :disabled="!settingsLoaded || !isDirty"
         :style="{ opacity: isDirty ? 1 : 0.45, cursor: isDirty ? 'pointer' : 'not-allowed' }"
         id="settings-save"
         @click="saveChanges"
@@ -309,6 +353,11 @@ watch(fetchedSettings, loadSettings, { once: true })
         </aside>
 
         <!-- Section content -->
+        <div v-if="!settingsLoaded" class="settings-load-state">
+          <span>{{ settingsLoadError || t('settings.status.loading') }}</span>
+          <button v-if="settingsLoadError" class="btn btn-secondary" @click="loadSettings">{{ t('settings.actions.retry') }}</button>
+        </div>
+        <fieldset v-else class="settings-fields" :disabled="loading">
         <div class="stack-loose">
           <section class="card" id="general">
             <div class="section-head">
@@ -715,7 +764,11 @@ watch(fetchedSettings, loadSettings, { once: true })
               <div class="row-between" style="margin-bottom: 0;">
                 <div>
                   <div class="field-label">{{ t('settings.logging.enabled') }}</div>
-                  <div class="field-help text-mono" style="font-size: 11.5px;">~/.autoapi/logs/autoapi.log</div>
+                  <div v-if="logPath" class="field-help text-mono" style="font-size: 11.5px;">{{ logPath }}</div>
+                  <div v-else class="field-help" style="font-size: 11.5px;">
+                    <span>{{ runtimePathsLoading ? t('settings.status.loading') : t('settings.paths.loadFailed') }}</span>
+                    <button v-if="runtimePathsError" class="btn btn-ghost" style="font-size: 11.5px; padding: 2px 6px;" @click="loadRuntimePaths">{{ t('settings.actions.retry') }}</button>
+                  </div>
                 </div>
                 <label class="toggle"><input type="checkbox" v-model="settings.logging.enabled" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
               </div>
@@ -798,8 +851,27 @@ watch(fetchedSettings, loadSettings, { once: true })
             </div>
           </section>
         </div>
+        </fieldset>
       </div>
     </div>
   </div>
 
 </template>
+
+<style scoped>
+.settings-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-load-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+</style>

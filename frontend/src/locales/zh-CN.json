@@ -16,13 +16,19 @@
     "title": "设置",
     "status": {
       "saved": "所有更改已保存",
-      "unsaved": "有未保存的更改"
+      "unsaved": "有未保存的更改",
+      "loading": "正在加载设置…",
+      "loadFailed": "设置加载失败"
     },
     "actions": {
       "discard": "放弃更改",
       "save": "保存更改",
       "restoreDefaults": "恢复默认",
-      "notImplemented": "暂未实现"
+      "notImplemented": "暂未实现",
+      "retry": "重试"
+    },
+    "paths": {
+      "loadFailed": "运行路径加载失败"
     },
     "sections": {
       "general": "常规",

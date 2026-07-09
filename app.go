@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"autoapi/internal/api"
+	"autoapi/internal/config"
 	"autoapi/internal/logger"
 	"autoapi/internal/model"
 	"autoapi/internal/proxy"
@@ -20,8 +21,21 @@ import (
 // NewApp constructs the bound App with real store, service, and proxy dependencies.
 func NewApp() *api.App {
 	ctx := context.Background()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("FATAL: cannot determine home directory: %v", err)
+	}
+	profile := config.Current()
+	storageDir := filepath.Join(home, profile.StorageDirName)
+	if err := os.MkdirAll(storageDir, 0700); err != nil {
+		log.Fatalf("FATAL: cannot create storage directory: %v", err)
+	}
 
-	st, err := store.New(ctx, store.StoreDeps{})
+	st, err := store.New(ctx, store.StoreDeps{
+		DSN:          filepath.Join(storageDir, "autoapi.db"),
+		DefaultPort:  profile.DefaultPort,
+		SeedFixtures: profile.SeedFixtures,
+	})
 	if err != nil {
 		log.Fatalf("FATAL: store initialization failed: %v", err)
 	}
@@ -32,7 +46,7 @@ func NewApp() *api.App {
 	// SQLite database so a single "show in Finder" reveals both. The
 	// log section is read from the stored settings (or the defaults
 	// baked into the store) so user changes survive a restart.
-	storageDir := st.StorageDir()
+	storageDir = st.StorageDir()
 	logPath := filepath.Join(storageDir, "logs", "autoapi.log")
 	{
 		loggingCfg := model.LoggingSettings{
@@ -59,22 +73,15 @@ func NewApp() *api.App {
 		}
 	}
 
-	prx := proxy.New(st, nil, func() *model.Settings {
-		s, _ := st.GetSettings()
-		return s
+	prx := proxy.New(st, nil, profile.DefaultPort, func() (*model.Settings, error) {
+		return st.GetSettings()
 	})
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatalf("FATAL: cannot determine home directory: %v", err)
-	}
-	keyDir := filepath.Join(home, ".autoapi")
-	sv := service.New(st, prx, keyDir)
+	sv := service.New(st, prx, st.StorageDir())
 
 	// proxy.New needs the service for resolving provider keys; re-create with service now available.
-	prx = proxy.New(st, sv, func() *model.Settings {
-		s, _ := st.GetSettings()
-		return s
+	prx = proxy.New(st, sv, profile.DefaultPort, func() (*model.Settings, error) {
+		return st.GetSettings()
 	})
 	sv.SetProxy(prx)
 

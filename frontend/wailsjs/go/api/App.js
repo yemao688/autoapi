@@ -54,6 +54,10 @@ export function GetProxyStatus() {
   return window['go']['api']['App']['GetProxyStatus']();
 }
 
+export function GetRuntimePaths() {
+  return window['go']['api']['App']['GetRuntimePaths']();
+}
+
 export function GetSettings() {
   return window['go']['api']['App']['GetSettings']();
 }
@@ -120,6 +124,10 @@ export function Quit() {
 
 export function ReorderModelRules(arg1) {
   return window['go']['api']['App']['ReorderModelRules'](arg1);
+}
+
+export function ResetSettings() {
+  return window['go']['api']['App']['ResetSettings']();
 }
 
 export function RestartProxy() {

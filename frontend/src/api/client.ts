@@ -142,6 +142,14 @@ export const api = {
     ensureWails()
     return wails.SaveSettings(settings) as Promise<void>
   },
+  resetSettings: (): Promise<model.Settings> => {
+    ensureWails()
+    return wails.ResetSettings() as Promise<model.Settings>
+  },
+  runtimePaths: (): Promise<apiModels.RuntimePaths> => {
+    ensureWails()
+    return wails.GetRuntimePaths() as Promise<apiModels.RuntimePaths>
+  },
 
   // System
   systemHealth: (): Promise<model.ServiceHealth> => {

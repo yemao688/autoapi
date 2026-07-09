@@ -30,48 +30,40 @@ func (s *Store) GetSettings() (*model.Settings, error) {
 		return nil, err
 	}
 
-	settings := defaultSettings()
-	settings.Data.StoragePath = s.dsnPath
+	settings := s.defaultSettings()
 	for section, data := range raw {
 		switch section {
 		case "general":
-			var s model.GeneralSettings
-			if json.Unmarshal(data, &s) == nil {
-				settings.General = s
-			}
+			_ = json.Unmarshal(data, &settings.General)
 		case "appearance":
-			var s model.AppearanceSettings
-			if json.Unmarshal(data, &s) == nil {
-				settings.Appearance = s
-			}
+			_ = json.Unmarshal(data, &settings.Appearance)
 		case "routing":
-			var s model.RoutingSettings
-			if json.Unmarshal(data, &s) == nil {
-				settings.Routing = s
-			}
+			_ = json.Unmarshal(data, &settings.Routing)
 		case "server":
-			var s model.ServerSettings
-			if json.Unmarshal(data, &s) == nil {
-				settings.Server = s
-			}
+			_ = json.Unmarshal(data, &settings.Server)
 		case "data":
-			var s model.DataSettings
-			if json.Unmarshal(data, &s) == nil {
-				settings.Data = s
-			}
+			_ = json.Unmarshal(data, &settings.Data)
 		case "advanced":
-			var s model.AdvancedSettings
-			if json.Unmarshal(data, &s) == nil {
-				settings.Advanced = s
-			}
+			_ = json.Unmarshal(data, &settings.Advanced)
 		case "logging":
-			var s model.LoggingSettings
-			if json.Unmarshal(data, &s) == nil {
-				settings.Logging = s
-			}
+			_ = json.Unmarshal(data, &settings.Logging)
 		}
 	}
+	if settings.Server.Port == 0 {
+		settings.Server.Port = s.defaultPort
+	}
+	settings.Data.StoragePath = s.dsnPath
 
+	return &settings, nil
+}
+
+// ResetSettings persists and returns this Store's profile-aware defaults.
+func (s *Store) ResetSettings() (*model.Settings, error) {
+	settings := s.defaultSettings()
+	settings.Data.StoragePath = s.dsnPath
+	if err := s.SaveSettings(settings); err != nil {
+		return nil, err
+	}
 	return &settings, nil
 }
 
@@ -126,11 +118,11 @@ func (s *Store) ListEndpoints() ([]model.Endpoint, error) {
 //  Defaults
 // ---------------------------------------------------------------------------
 
-func defaultSettings() model.Settings {
+func (s *Store) defaultSettings() model.Settings {
 	return model.Settings{
 		General: model.GeneralSettings{
 			LaunchAtLogin: false,
-			StartupAction: "show",
+			StartupAction: "show_window",
 			MenuBarItem:   true,
 			CloseAction:   "background",
 		},
@@ -143,7 +135,7 @@ func defaultSettings() model.Settings {
 			StreamingSSE: true,
 		},
 		Server: model.ServerSettings{
-			Port:        8344,
+			Port:        s.defaultPort,
 			BindAddress: "0.0.0.0",
 		},
 		Data: model.DataSettings{

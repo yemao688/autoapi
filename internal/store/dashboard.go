@@ -187,14 +187,6 @@ func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {
 	return logs, rows.Err()
 }
 
-func (s *Store) getProxyPort() int {
-	settings, err := s.GetSettings()
-	if err != nil {
-		return 8344
-	}
-	return settings.Server.Port
-}
-
 // ---------------------------------------------------------------------------
 //  Stat helpers
 // ---------------------------------------------------------------------------
