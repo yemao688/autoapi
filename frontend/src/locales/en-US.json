@@ -73,8 +73,6 @@
     "routing": {
       "title": "Routing defaults",
       "subtitle": "Model routing settings",
-      "autoRetry": "Auto-retry failed requests",
-      "autoRetryHelp": "Switch to backup provider on 429 / 5xx",
       "streamingSse": "Streaming response (SSE)",
       "streamingSseHelp": "Push tokens to the client as they arrive"
     },

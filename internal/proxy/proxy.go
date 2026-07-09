@@ -15,6 +15,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -44,6 +45,39 @@ const statusClientClosed = 499
 // blocked reading the upstream connection. The bound applies per attempt
 // so retries fail fast.
 const upstreamResponseHeaderTimeout = 30 * time.Second
+
+// maxTotalAttempts caps the total number of upstream attempts per inbound
+// request across all candidates and retries. Prevents a misbehaving
+// upstream (fast 500s) from causing N×(M+1) billable calls when many
+// targets each have a high per-target MaxRetries value.
+const maxTotalAttempts = 8
+
+// retryBackoff returns the delay before the n-th retry (n=1,2,3,...).
+// Exponential: base * 2^(n-1), capped at maxDelay, with up to +25% jitter
+// to de-sync parallel retries. n=0 returns 0 so the helper is safe to
+// call before every attempt.
+func retryBackoff(n int) time.Duration {
+	const (
+		base     = 200 * time.Millisecond
+		maxDelay = 2 * time.Second
+	)
+	if n <= 0 {
+		return 0
+	}
+	// 2^(n-1): n=1→1, n=2→2, n=3→4, n=4→8. Guard against n large enough
+	// to overflow uint (extremely unlikely but defensive).
+	shift := n - 1
+	if shift > 30 {
+		shift = 30
+	}
+	d := base * time.Duration(1<<uint(shift))
+	if d > maxDelay {
+		d = maxDelay
+	}
+	// Add up to +25% jitter so concurrent retries don't synchronize.
+	jitter := time.Duration(mathrand.Int63n(int64(d) / 4))
+	return d + jitter
+}
 
 // upstreamKeyProvider is the subset of *service.Service the proxy uses to
 // decrypt provider upstream keys.
@@ -437,7 +471,21 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// attemptOrder is monotonically incremented across every candidate and
 	// every retry so the Chain entries form a stable per-request timeline.
 	attemptOrder := 0
+	// totalAttempts counts upstream attempts (across all candidates and all
+	// per-target retries) so we can cap them with maxTotalAttempts. Backoff
+	// is applied BEFORE every attempt after the very first.
+	totalAttempts := 0
+	// attemptsCapped is set when totalAttempts reaches maxTotalAttempts; it
+	// signals the outer loop to stop iterating after the current candidate
+	// finishes its retry loop.
+	attemptsCapped := false
 
+	// outer is the label on the candidate loop. Used by the global attempt
+	// cap (maxTotalAttempts) to break out of BOTH the candidate and retry
+	// loops at once when the cap is reached. Plain `break` inside the retry
+	// loop still only exits the inner loop, so success / circuit-open /
+	// client-abort paths are unaffected.
+outer:
 	for _, c := range candidates {
 		lastCandidate = c
 		if !p.breakerFor(c.provider.ID).Allow() {
@@ -525,6 +573,66 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 		var finalCat ErrorCategory
 		var finalAttemptErr error
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
+			// Global attempt cap: stops the N×(M+1) explosion when
+			// many candidates each have a high MaxRetries. The cap is
+			// checked BEFORE the per-target circuit check and backoff
+			// so a fully-spent budget is honored even mid-retry.
+			if totalAttempts >= maxTotalAttempts {
+				attemptOrder++
+				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+					AttemptOrder: attemptOrder,
+					ProviderID:   c.provider.ID,
+					ProviderName: c.provider.Name,
+					ModelName:    c.modelName,
+					TargetID:     c.targetID,
+					Status:       "attempts_capped",
+					StatusCode:   0,
+					Error:        fmt.Sprintf("global attempt cap (%d) reached", maxTotalAttempts),
+					LatencyMs:    0,
+				})
+				lastErr = fmt.Errorf("global attempt cap (%d) reached", maxTotalAttempts)
+				lastStatus = http.StatusServiceUnavailable
+				attemptsCapped = true
+				break
+			}
+
+			// Backoff between attempts: fires before every attempt
+			// except the very first (totalAttempts==0). Interrupts
+			// cleanly if the client disconnects while we are waiting
+			// — in that case we record a client_abort chain entry and
+			// return without penalizing any breaker.
+			if totalAttempts > 0 {
+				select {
+				case <-r.Context().Done():
+					logEntry.StatusCode = statusClientClosed
+					logEntry.Error = "client disconnected during retry backoff"
+					logEntry.ProviderID = c.provider.ID
+					logEntry.ProviderName = c.provider.Name
+					logEntry.Model = c.modelName
+					logEntry.RouteID = c.ruleID
+					logEntry.RouteLabel = c.ruleLabel
+					attemptOrder++
+					logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+						AttemptOrder: attemptOrder,
+						ProviderID:   c.provider.ID,
+						ProviderName: c.provider.Name,
+						ModelName:    c.modelName,
+						TargetID:     c.targetID,
+						Status:       "client_abort",
+						StatusCode:   statusClientClosed,
+						Error:        "client disconnected during retry backoff",
+						LatencyMs:    0,
+					})
+					slog.Warn("proxy: client disconnected during retry backoff",
+						"provider", c.provider.Name,
+						"model", c.modelName,
+						"target", c.targetID)
+					return
+				case <-time.After(retryBackoff(totalAttempts)):
+				}
+			}
+			totalAttempts++
+
 			if attempt > 0 && !p.breakerFor(c.provider.ID).Allow() {
 				slog.Debug("proxy: circuit opened mid-retry, falling through", "provider", c.provider.Name, "attempt", attempt)
 				attemptOrder++
@@ -780,6 +888,13 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 			return
 		}
 
+		// If the global attempt cap fired, exit the candidate loop
+		// entirely and fall through to the all-candidates-exhausted
+		// path which will surface a 503 with the cap message.
+		if attemptsCapped {
+			break outer
+		}
+
 		// Exhausted retries (or breaker opened mid-retry): record breaker
 		// once on the final outcome, then fall through to the next candidate.
 		if finalCat == CategoryRetryable && isCircuitBreakerFailure(finalAttemptErr, lastStatus) {
@@ -861,7 +976,19 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	// "Σ failed chain latencies + success chain FirstTokenMs" per the
 	// oracle-approved design.
 	firstByteCumulativeMs := 0
+	// totalAttempts counts upstream attempts across all candidates and all
+	// per-target retries; capped at maxTotalAttempts to prevent the
+	// N×(M+1) explosion.
+	totalAttempts := 0
+	// attemptsCapped signals the outer loop to stop after the current
+	// candidate's retry loop completes.
+	attemptsCapped := false
 
+	// outer is the label on the candidate loop. The global attempt cap
+	// uses a labeled break to exit BOTH loops at once. Plain `break` in
+	// the retry loop still only exits the inner loop, so success /
+	// circuit-open paths are unaffected.
+outer:
 	for _, c := range candidates {
 		lastCandidate = c
 		if !p.breakerFor(c.provider.ID).Allow() {
@@ -943,6 +1070,62 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 		// MaxRetries=0 gets exactly one attempt.
 		var succeeded bool
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
+			// Global attempt cap: stops the N×(M+1) explosion when
+			// many candidates each have a high MaxRetries.
+			if totalAttempts >= maxTotalAttempts {
+				attemptOrder++
+				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+					AttemptOrder: attemptOrder,
+					ProviderID:   c.provider.ID,
+					ProviderName: c.provider.Name,
+					ModelName:    c.modelName,
+					TargetID:     c.targetID,
+					Status:       "attempts_capped",
+					StatusCode:   0,
+					Error:        fmt.Sprintf("global attempt cap (%d) reached", maxTotalAttempts),
+					LatencyMs:    0,
+				})
+				lastErr = fmt.Errorf("global attempt cap (%d) reached", maxTotalAttempts)
+				lastStatus = http.StatusServiceUnavailable
+				attemptsCapped = true
+				break
+			}
+
+			// Backoff between attempts: fires before every attempt
+			// except the very first (totalAttempts==0). Interrupts
+			// cleanly if the client disconnects while we are waiting.
+			if totalAttempts > 0 {
+				select {
+				case <-r.Context().Done():
+					logEntry.StatusCode = statusClientClosed
+					logEntry.Error = "client disconnected during retry backoff"
+					logEntry.ProviderID = c.provider.ID
+					logEntry.ProviderName = c.provider.Name
+					logEntry.Model = c.modelName
+					logEntry.RouteID = c.ruleID
+					logEntry.RouteLabel = c.ruleLabel
+					attemptOrder++
+					logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+						AttemptOrder: attemptOrder,
+						ProviderID:   c.provider.ID,
+						ProviderName: c.provider.Name,
+						ModelName:    c.modelName,
+						TargetID:     c.targetID,
+						Status:       "client_abort",
+						StatusCode:   statusClientClosed,
+						Error:        "client disconnected during retry backoff",
+						LatencyMs:    0,
+					})
+					slog.Warn("proxy: stream client disconnected during retry backoff",
+						"provider", c.provider.Name,
+						"model", c.modelName,
+						"target", c.targetID)
+					return
+				case <-time.After(retryBackoff(totalAttempts)):
+				}
+			}
+			totalAttempts++
+
 			if attempt > 0 && !p.breakerFor(c.provider.ID).Allow() {
 				slog.Debug("proxy: stream circuit opened mid-retry, falling through", "provider", c.provider.Name, "attempt", attempt)
 				attemptOrder++
@@ -1009,6 +1192,13 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 
 		if succeeded {
 			return
+		}
+
+		// If the global attempt cap fired, exit the candidate loop
+		// entirely and fall through to the all-candidates-exhausted
+		// path which will surface a 503 with the cap message.
+		if attemptsCapped {
+			break outer
 		}
 
 		// Exhausted retries on this candidate (or breaker opened

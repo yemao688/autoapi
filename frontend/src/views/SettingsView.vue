@@ -35,7 +35,6 @@ function defaultSettings(): model.Settings {
       accent_color: '#0071e3',
     },
     routing: {
-      auto_retry: false,
       streaming_sse: true,
     },
     server: {
@@ -515,16 +514,6 @@ watch(fetchedSettings, loadSettings, { once: true })
               </div>
             </div>
 
-            <div class="field">
-              <div class="row-between" style="margin-bottom: 0;">
-                <div>
-                  <div class="field-label">{{ t('settings.routing.autoRetry') }}</div>
-                  <div class="field-help">{{ t('settings.routing.autoRetryHelp') }}</div>
-                </div>
-                <label class="toggle"><input type="checkbox" v-model="settings.routing.auto_retry" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
-              </div>
-            </div>
-            <div class="h-divider"></div>
             <div class="field" style="margin-bottom: 0;">
               <div class="row-between" style="margin-bottom: 0;">
                 <div>

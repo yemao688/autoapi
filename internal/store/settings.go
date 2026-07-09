@@ -140,7 +140,6 @@ func defaultSettings() model.Settings {
 			AccentColor: "#0071e3",
 		},
 		Routing: model.RoutingSettings{
-			AutoRetry:    false,
 			StreamingSSE: true,
 		},
 		Server: model.ServerSettings{

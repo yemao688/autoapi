@@ -271,7 +271,6 @@ type AppearanceSettings struct {
 }
 
 type RoutingSettings struct {
-	AutoRetry    bool `json:"auto_retry"`
 	StreamingSSE bool `json:"streaming_sse"`
 }
 

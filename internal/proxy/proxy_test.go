@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -432,7 +433,7 @@ func TestNoMatchingRuleReturns503(t *testing.T) {
 		rules:   []model.ModelRule{}, // no rules registered
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 		settings: &model.Settings{
-			Routing: model.RoutingSettings{AutoRetry: false, StreamingSSE: true},
+			Routing: model.RoutingSettings{StreamingSSE: true},
 		},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return store.settings })
@@ -2310,5 +2311,188 @@ func TestStreaming_DoneThenClientCancel_IsSuccess(t *testing.T) {
 	if prov.Status == model.ProviderStatusError {
 		t.Fatalf("expected provider status != error, got %q (err=%q)",
 			prov.Status, prov.ErrorMessage)
+	}
+}
+
+// TestFailover_GlobalAttemptCap verifies that the proxy enforces a global
+// cap on the number of upstream attempts per inbound request, regardless
+// of how many candidates exist or how high each candidate's per-target
+// MaxRetries is. The cap prevents a misbehaving upstream (e.g. fast 500s)
+// from causing N×(M+1) billable calls when many targets each have a high
+// MaxRetries value.
+//
+// Setup: 3 targets, each MaxRetries=5 (so 6 attempts per target, 18
+// attempts total if unchecked). All targets return 500. Asserts that
+// total upstream attempts stop at maxTotalAttempts (8), that the last
+// chain entry has status "attempts_capped", and that the client gets a
+// 5xx with the cap message.
+func TestFailover_GlobalAttemptCap(t *testing.T) {
+	var totalHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		totalHits++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"transient"}`))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p2": {ID: "p2", Name: "P2", BaseURL: srv.URL + "/p2"},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 5, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 5, Enabled: true},
+					{ID: "t2", ProviderID: "p2", ModelName: "m2", MaxRetries: 5, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+
+	// Expect 5xx (cap is treated as upstream unavailability).
+	if resp.StatusCode < 500 {
+		t.Fatalf("expected 5xx when global attempt cap is hit, got %d", resp.StatusCode)
+	}
+
+	// Total upstream attempts must be capped at maxTotalAttempts (8),
+	// not 18 (3 candidates × 6 attempts each).
+	if totalHits != maxTotalAttempts {
+		t.Fatalf("expected exactly %d upstream attempts (global cap), got %d", maxTotalAttempts, totalHits)
+	}
+
+	// Wait for the log to be flushed.
+	deadline, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+	for {
+		log, ok := store.LastLog()
+		if ok && log.StatusCode != 0 {
+			break
+		}
+		select {
+		case <-deadline.Done():
+			t.Fatalf("timed out waiting for log entry")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	log, _ := store.LastLog()
+
+	// The chain must have maxTotalAttempts real attempt entries
+	// plus the final "attempts_capped" marker, so maxTotalAttempts+1
+	// total. The cap entry replaces what would have been the next
+	// attempt's retryable entry.
+	if len(log.Chain) != maxTotalAttempts+1 {
+		t.Fatalf("expected %d chain entries (8 attempts + 1 cap), got %d",
+			maxTotalAttempts+1, len(log.Chain))
+	}
+	last := log.Chain[len(log.Chain)-1]
+	if last.Status != "attempts_capped" {
+		t.Fatalf("expected last chain status=attempts_capped, got %q (err=%q)", last.Status, last.Error)
+	}
+	if !strings.Contains(last.Error, "global attempt cap") {
+		t.Fatalf("expected cap message in last chain error, got %q", last.Error)
+	}
+	if !strings.Contains(last.Error, fmt.Sprintf("%d", maxTotalAttempts)) {
+		t.Fatalf("expected cap number %d in chain error, got %q", maxTotalAttempts, last.Error)
+	}
+}
+
+// TestFailover_BackoffBetweenRetries verifies the exponential backoff
+// with jitter between retry attempts on a single target. Setup: 1
+// target with MaxRetries=2, all attempts return 500. Without backoff
+// the request would complete almost instantly; with backoff the wall
+// clock must be at least 200ms + 400ms = 600ms (plus a small jitter
+// allowance) before the second-and-third attempts even start.
+//
+// Timing assertions are generous: elapsed >= 400ms (the spec's
+// suggested floor with slack for CI variance) and elapsed <= 2500ms
+// (catches accidental seconds-long sleeps without being flaky on slow
+// CI). The test also asserts exactly 3 attempts were made (1 + 2
+// retries).
+func TestFailover_BackoffBetweenRetries(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"transient"}`))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, func() *model.Settings { return &model.Settings{} })
+	defer p.Stop()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	elapsed := time.Since(start)
+
+	// 1 initial + 2 retries = 3 attempts.
+	if hits != 3 {
+		t.Fatalf("expected 3 attempts (1 initial + 2 retries), got %d", hits)
+	}
+
+	// Floor: 200ms + 400ms = 600ms of pure backoff. We allow 400ms
+	// for CI noise but the request MUST take longer than it would
+	// without backoff (~0ms). The 400ms floor catches regressions
+	// where backoff is accidentally disabled.
+	if elapsed < 400*time.Millisecond {
+		t.Fatalf("expected elapsed >= 400ms (proves backoff fires), got %v", elapsed)
+	}
+	// Ceiling: 200ms (jitter-up to +25% = 50ms) + 400ms (jitter-up to
+	// +25% = 100ms) = 750ms. We give it 2500ms of headroom for CI
+	// noise — anything above that means backoff is way out of spec.
+	if elapsed > 2500*time.Millisecond {
+		t.Fatalf("expected elapsed <= 2500ms (sanity cap), got %v", elapsed)
+	}
+
+	// Response should be 5xx (all attempts failed).
+	if resp.StatusCode < 500 {
+		t.Fatalf("expected 5xx after all attempts failed, got %d", resp.StatusCode)
 	}
 }

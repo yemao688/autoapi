@@ -700,7 +700,6 @@ export namespace model {
 	
 	
 	export class RoutingSettings {
-	    auto_retry: boolean;
 	    streaming_sse: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -709,7 +708,6 @@ export namespace model {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.auto_retry = source["auto_retry"];
 	        this.streaming_sse = source["streaming_sse"];
 	    }
 	}

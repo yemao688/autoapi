@@ -73,8 +73,6 @@
     "routing": {
       "title": "路由默认行为",
       "subtitle": "模型路由设置",
-      "autoRetry": "自动重试失败请求",
-      "autoRetryHelp": "429 / 5xx 时切换备用 Provider",
       "streamingSse": "流式响应 (SSE)",
       "streamingSseHelp": "逐 Token 推送给客户端"
     },
