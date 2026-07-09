@@ -134,6 +134,10 @@ export function ShowWindow() {
   return window['go']['api']['App']['ShowWindow']();
 }
 
+export function Shutdown(arg1) {
+  return window['go']['api']['App']['Shutdown'](arg1);
+}
+
 export function TestAllProviders() {
   return window['go']['api']['App']['TestAllProviders']();
 }

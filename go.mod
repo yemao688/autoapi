@@ -3,6 +3,7 @@ module autoapi
 go 1.25.0
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/shirou/gopsutil/v4 v4.26.6
 	github.com/wailsapp/wails/v2 v2.12.0
