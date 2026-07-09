@@ -5,10 +5,10 @@ Compact ramp-up guide for OpenCode sessions working in this repo.
 ## Project type & entrypoints
 
 - **Wails v2 desktop app**: Go backend + Vue 3 + TypeScript frontend.
-- Product name: `Autoapi` (see `wails.json` info).
-- Backend entry: `main.go` (`wails.Run`) and `app.go` (dependency wiring).
+- Product name: `Autoapi`, version in `wails.json` (currently 0.4.2).
+- Backend entry: `main.go` (`wails.Run`, menu + tray wiring) and `app.go` (dependency wiring).
 - Frontend entry: `frontend/src/main.ts` → `App.vue` → `router.ts`.
-- Local OpenAI-compatible proxy: `internal/proxy/proxy.go`, listens on `0.0.0.0:8344` by default.
+- Local OpenAI-compatible proxy: `internal/proxy/proxy.go`, listens on `0.0.0.0:8344` by default. The UI never fetches 8344 directly; metrics/logs flow through bound `App` methods in `internal/api/app.go`.
 
 ## Development workflow
 
@@ -68,6 +68,7 @@ wails build
 - **Model rules**: the app recently switched from "route rules" to "model rules". Client-facing model IDs come from `model_rules.Name`. `/v1/models` returns only enabled rules, not upstream provider catalogs.
 - **Request logs**: stored in `request_logs`, with a `chain_json` column capturing retry/failover attempts.
 - **Logging**: `internal/logger` writes to `~/.autoapi/logs/autoapi.log` using `lumberjack` rotation; settings are persisted in the SQLite `settings` table.
+- **System tray + menu**: macOS has BOTH a top-of-screen application menu (`main.go` `Menu`) AND a menu-bar tray icon (`internal/tray`, via `fyne.io/systray` `RunWithExternalLoop`). They are separate subsystems; changing one does not change the other. Wails v2.12 has no public tray API — the systray coexists with Wails because `RunWithExternalLoop` does not call `setDelegate:` on NSApp.
 
 ## Data & state paths
 
@@ -94,11 +95,12 @@ wails build
 - Go formatting: run `gofmt -w` on changed files. No custom linter is configured.
 - Frontend: no ESLint/Prettier config; rely on `vue-tsc --noEmit` and manual consistency.
 - The app UI is Apple-style; dark mode is driven by CSS variables in `frontend/src/styles.css` and `html[data-theme]`.
-- Menu bar is the Wails application menu, not a true system tray (Wails v2.12 lacks a public tray API).
 
 ## Common gotchas
 
 - `frontend/package.json.md5` changes during every `wails build` / `npm install` — reset it before committing.
 - After any Go model change, verify `frontend/wailsjs/go/models.ts` is updated and `npm run build` still passes.
 - `wails dev` opens the macOS window automatically; it is the fastest way to verify UI changes.
-- The proxy uses a chi router. Request IDs are available via `middleware.GetReqID(r.Context())`.
+- The proxy uses a chi router. Request IDs are available via `middleware.GetReqID(r.context())`.
+- **Edit menu must stay role-based.** macOS copy/paste/cut/selectAll/undo/redo in the webview rely on `menu.EditMenu()` (appended in `main.go`). It produces NSMenuItems with standard Cocoa selectors (`copy:`, `paste:`, …) that propagate via the responder chain to the WKWebView first responder. Do NOT replace it with `AddText("Copy", keys.CmdOrCtrl("c"), cb)` — custom menu items use `@selector(handleClick)` which INTERCEPTS the keystroke at the NSMenu level and routes it to the Go callback, swallowing the event so the webview never sees it. This was a real regression; see the comment block in `main.go`.
+- **Tray lifecycle.** `internal/tray.Run` returns `start, stop`. Call `start()` BEFORE `wails.Run` (both need the runtime-locked main thread; start is non-blocking). Call `stop()` in `OnShutdown` BEFORE `app.Shutdown`. Each tray `MenuItem.ClickedCh` is unbuffered and MUST have a reader goroutine for the whole tray lifetime, or the CGo callback thread deadlocks.
