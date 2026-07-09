@@ -21,7 +21,7 @@ const form = ref<model.ModelRuleTarget>(new model.ModelRuleTarget({
   provider_id: '',
   model_name: '',
   max_retries: 0,
-  timeout_ms: 0,
+  timeout_seconds: 0,
   enabled: true,
 }))
 
@@ -30,7 +30,7 @@ function reset() {
     provider_id: '',
     model_name: '',
     max_retries: 0,
-    timeout_ms: 0,
+    timeout_seconds: 0,
     enabled: true,
   })
 }
@@ -43,7 +43,7 @@ watch(() => props.target, (t) => {
       provider_id: t.provider_id,
       model_name: t.model_name,
       max_retries: t.max_retries,
-      timeout_ms: t.timeout_ms,
+      timeout_seconds: t.timeout_seconds,
       enabled: t.enabled,
       hit_count: t.hit_count,
       failure_count: t.failure_count,
@@ -84,7 +84,7 @@ function save() {
     provider_id: form.value.provider_id,
     model_name: trimmedModelName.value,
     max_retries: form.value.max_retries,
-    timeout_ms: form.value.timeout_ms,
+    timeout_seconds: form.value.timeout_seconds,
     enabled: form.value.enabled,
     hit_count: form.value.hit_count,
     failure_count: form.value.failure_count,
@@ -114,7 +114,7 @@ function save() {
         </div>
         <div class="field">
           <label class="field-label">{{ t('modelRules.targets.timeout') }}</label>
-          <input v-model.number="form.timeout_ms" type="number" class="input" min="0" step="100" :disabled="saving" :placeholder="t('modelRules.targets.timeoutPlaceholder')">
+          <input v-model.number="form.timeout_seconds" type="number" class="input" min="0" step="1" :disabled="saving" :placeholder="t('modelRules.targets.timeoutPlaceholder')">
         </div>
         <div class="field">
           <div class="row-between" style="margin-bottom: 0;">

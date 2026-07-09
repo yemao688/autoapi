@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { VueDraggable } from 'vue-draggable-plus'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
@@ -72,16 +73,6 @@ const providerNameMap = computed(() => {
   ;(providers.value || []).forEach((p) => (map[p.id] = p.name))
   return map
 })
-
-const defaultFallback = computed(() => ({
-  provider: providerNameMap.value[settings.value?.routing?.default_provider_id || ''] || 'OpenAI',
-  model: settings.value?.routing?.default_model || 'gpt-4o-mini',
-  providerId: settings.value?.routing?.default_provider_id || '',
-}))
-
-const fallbackModalOpen = ref(false)
-const fallbackProviderId = ref('')
-const fallbackModel = ref('')
 
 function targetIconStyle(providerId: string) {
   const name = providerNameMap.value[providerId] || ''
@@ -283,6 +274,40 @@ async function deleteTarget(rule: model.ModelRule, target: model.ModelRuleTarget
   await updateRuleTargets(rule, newTargets)
 }
 
+// Set of rule IDs currently mid-reorder. Prevents a rapid second drag from
+// issuing a concurrent PATCH that re-orders the same rule's targets.
+const reorderingRules = ref<Set<string>>(new Set())
+
+function isReorderingRule(id: string): boolean {
+  return reorderingRules.value.has(id)
+}
+
+// onTargetsReorder is bound to VueDraggable's @end. By the time the handler
+// fires, vue-draggable-plus has already mutated the v-model'd array
+// (rule.targets) in place to reflect the new order; we just need to persist
+// it. The backend writes tier = slice index, so reordering the client array
+// is sufficient to update the failover priority.
+async function onTargetsReorder(rule: model.ModelRule) {
+  if (reorderingRules.value.has(rule.id)) return
+  reorderingRules.value.add(rule.id)
+  reorderingRules.value = new Set(reorderingRules.value)
+  try {
+    // Persist the new order. updateRuleTargets reads `rule.targets` (now
+    // already mutated by the v-model) and sends it through. We deliberately
+    // do NOT toast on success here: reorder feels "live" and a toast on
+    // every drag would be noisy. Errors are still surfaced.
+    const ok = await updateRuleTargets(rule, [...rule.targets])
+    if (!ok) {
+      // Reload on failure so the local array snaps back to the server's
+      // order; otherwise the UI would lie about the persisted state.
+      await loadRules()
+    }
+  } finally {
+    reorderingRules.value.delete(rule.id)
+    reorderingRules.value = new Set(reorderingRules.value)
+  }
+}
+
 async function onTargetModalSave(target: model.ModelRuleTarget) {
   const rule = targetModalRule.value
   if (!rule) return
@@ -295,30 +320,6 @@ async function onTargetModalSave(target: model.ModelRuleTarget) {
     if (ok) closeTargetModal()
   } finally {
     targetSaving.value = false
-  }
-}
-
-function editDefault() {
-  fallbackProviderId.value = settings.value?.routing?.default_provider_id || ''
-  fallbackModel.value = settings.value?.routing?.default_model || ''
-  fallbackModalOpen.value = true
-}
-
-async function saveDefaultFallback() {
-  try {
-    const s = settings.value ? new model.Settings(JSON.parse(JSON.stringify(settings.value))) : await api.getSettings()
-    if (!s) {
-      toast.push(t('toast.loadSettingsFailed'), 'error')
-      return
-    }
-    s.routing.default_provider_id = fallbackProviderId.value
-    s.routing.default_model = fallbackModel.value
-    await api.saveSettings(s)
-    await loadSettings()
-    fallbackModalOpen.value = false
-    toast.push(t('toast.defaultUpdated'), 'success')
-  } catch (e: any) {
-    toast.push(t('toast.saveFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
 
@@ -380,10 +381,6 @@ function closeModal() {
   modalOpen.value = false
 }
 
-function closeFallbackModal() {
-  fallbackModalOpen.value = false
-}
-
 onMounted(() => {
   loadRules()
   loadProviders()
@@ -413,20 +410,6 @@ onMounted(() => {
       <div v-if="rulesLoading && !rules" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('modelRules.loading') }}</div>
       <div v-else-if="rulesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('modelRules.loadFailed', { error: rulesError }) }}</div>
       <template v-else>
-        <!-- Default fallback banner -->
-        <div class="card fallback-banner">
-          <div class="fallback-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-          </div>
-          <div class="fallback-body">
-            <div class="fallback-title">{{ t('modelRules.fallbackTitle') }}</div>
-            <div class="fallback-desc">
-              {{ t('modelRules.fallbackDesc', { target: `${defaultFallback.provider} · ${defaultFallback.model}` }) }}
-            </div>
-          </div>
-          <button class="btn btn-secondary" @click="editDefault">{{ t('modelRules.fallbackEdit') }}</button>
-        </div>
-
         <!-- Rule list (no drag — model names are unique) -->
         <div class="stack-loose">
           <article
@@ -481,13 +464,25 @@ onMounted(() => {
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
                   </button>
                 </h3>
-                <ul class="rule-target-list">
+                <VueDraggable
+                  v-model="rule.targets"
+                  :animation="150"
+                  handle=".drag-handle"
+                  class="rule-target-list"
+                  @end="onTargetsReorder(rule)"
+                >
                   <li
                     v-for="(target, tidx) in rule.targets"
                     :key="target.id || tidx"
                     class="target-row"
                     :class="{ 'target-disabled': !target.enabled }"
                   >
+                    <span
+                      class="drag-handle"
+                      :aria-label="t('modelRules.dragHandle')"
+                      role="button"
+                      tabindex="-1"
+                    >⋮⋮</span>
                     <div class="list-icon target-icon" :style="targetIconStyle(target.provider_id)">
                       {{ providerLetter(targetProviderName(target)) }}
                     </div>
@@ -495,7 +490,7 @@ onMounted(() => {
                       <span class="target-provider">{{ targetProviderName(target) }}</span>
                       <span class="target-model">{{ target.model_name || t('modelRules.targetDefault') }}</span>
                       <span v-if="target.max_retries > 0" class="badge mono">{{ t('modelRules.targetRetries', { count: target.max_retries }) }}</span>
-                      <span v-if="target.timeout_ms > 0" class="badge mono">{{ t('modelRules.targetTimeout', { ms: target.timeout_ms }) }}</span>
+                      <span v-if="target.timeout_seconds > 0" class="badge mono">{{ t('modelRules.targetTimeout', { seconds: target.timeout_seconds }) }}</span>
                       <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">{{ t('modelRules.targetDisabled') }}</span>
                     </div>
                     <div class="target-counters">
@@ -534,7 +529,7 @@ onMounted(() => {
                     </div>
                   </li>
                   <li v-if="!rule.targets.length" class="text-muted" style="font-size: 12px;">{{ t('modelRules.empty') }}</li>
-                </ul>
+                </VueDraggable>
               </div>
             </div>
 
@@ -602,29 +597,6 @@ onMounted(() => {
     @close="closeTargetModal"
     @save="onTargetModalSave"
   />
-
-  <!-- Default fallback modal -->
-  <Teleport to="body">
-    <div v-if="fallbackModalOpen" class="modal-overlay" @click.self="closeFallbackModal">
-      <div class="modal-card">
-        <div class="modal-title">{{ t('modelRules.editFallbackTitle') }}</div>
-        <div class="field">
-          <label class="field-label">{{ t('modelRules.fallback.provider') }}</label>
-          <select v-model="fallbackProviderId" class="select">
-            <option v-for="p in providers || []" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-        </div>
-        <div class="field">
-          <label class="field-label">{{ t('modelRules.fallback.model') }}</label>
-          <input v-model="fallbackModel" class="input" :placeholder="t('modelRules.fallback.modelPlaceholder')">
-        </div>
-        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeFallbackModal">{{ t('modelRules.modal.cancel') }}</button>
-          <button class="btn btn-primary" @click="saveDefaultFallback">{{ t('modelRules.modal.save') }}</button>
-        </div>
-      </div>
-    </div>
-  </Teleport>
 </template>
 
 <style scoped>
@@ -765,6 +737,31 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
+.drag-handle {
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 6px;
+  color: var(--muted, #999);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+  border-radius: 4px;
+  transition: color 120ms ease, background-color 120ms ease;
+  touch-action: none;
+}
+.drag-handle:hover {
+  color: var(--fg, #333);
+  background-color: rgba(0, 0, 0, 0.04);
+}
+.drag-handle:active,
+.drag-handle.sortable-chosen {
+  cursor: grabbing;
+}
+html[data-theme="dark"] .drag-handle:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
 .target-disabled .target-provider {
   color: var(--muted);
   text-decoration: line-through;
@@ -813,52 +810,6 @@ onMounted(() => {
   color: var(--muted);
   font-family: var(--font-mono);
   margin-left: auto;
-}
-
-.fallback-banner {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  background: var(--accent-soft);
-  border: 1px solid rgba(0, 113, 227, 0.18);
-  color: var(--fg);
-}
-.fallback-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.fallback-icon svg {
-  width: 16px;
-  height: 16px;
-}
-.fallback-body {
-  flex: 1;
-  min-width: 0;
-}
-.fallback-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg);
-}
-.fallback-desc {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 2px;
-  line-height: 1.35;
-}
-.fallback-model {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 500;
 }
 
 .toggle-target {
@@ -917,9 +868,5 @@ html[data-theme="dark"] .rule-footer {
 }
 html[data-theme="dark"] .target-row {
   border-bottom-color: var(--rule-border-subtle);
-}
-html[data-theme="dark"] .fallback-banner {
-  background: var(--accent-soft);
-  border-color: rgba(10, 132, 255, 0.25);
 }
 </style>

@@ -140,10 +140,8 @@ func defaultSettings() model.Settings {
 			AccentColor: "#0071e3",
 		},
 		Routing: model.RoutingSettings{
-			DefaultProviderID: "",
-			DefaultModel:      "",
-			AutoRetry:         false,
-			StreamingSSE:      true,
+			AutoRetry:    false,
+			StreamingSSE: true,
 		},
 		Server: model.ServerSettings{
 			Port:        8344,

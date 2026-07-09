@@ -523,7 +523,7 @@ export namespace model {
 	    provider_id: string;
 	    model_name: string;
 	    max_retries: number;
-	    timeout_ms: number;
+	    timeout_seconds: number;
 	    hit_count: number;
 	    failure_count: number;
 	    enabled: boolean;
@@ -539,7 +539,7 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.model_name = source["model_name"];
 	        this.max_retries = source["max_retries"];
-	        this.timeout_ms = source["timeout_ms"];
+	        this.timeout_seconds = source["timeout_seconds"];
 	        this.hit_count = source["hit_count"];
 	        this.failure_count = source["failure_count"];
 	        this.enabled = source["enabled"];
@@ -700,8 +700,6 @@ export namespace model {
 	
 	
 	export class RoutingSettings {
-	    default_provider_id: string;
-	    default_model: string;
 	    auto_retry: boolean;
 	    streaming_sse: boolean;
 	
@@ -711,8 +709,6 @@ export namespace model {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.default_provider_id = source["default_provider_id"];
-	        this.default_model = source["default_model"];
 	        this.auto_retry = source["auto_retry"];
 	        this.streaming_sse = source["streaming_sse"];
 	    }

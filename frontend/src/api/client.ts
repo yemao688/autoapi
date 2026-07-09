@@ -124,6 +124,10 @@ export const api = {
     ensureWails()
     return wails.PurgeLogs(days) as Promise<number>
   },
+  clearLogs: (): Promise<number> => {
+    ensureWails()
+    return wails.ClearLogs() as Promise<number>
+  },
   pingLogEvent: (): Promise<void> => {
     ensureWails()
     return wails.PingLogEvent() as Promise<void>

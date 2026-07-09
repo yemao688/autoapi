@@ -72,9 +72,7 @@
     },
     "routing": {
       "title": "Routing defaults",
-      "subtitle": "Fallback policy when a request matches no rule",
-      "defaultProvider": "Default provider",
-      "defaultModel": "Default model",
+      "subtitle": "Model routing settings",
       "autoRetry": "Auto-retry failed requests",
       "autoRetryHelp": "Switch to backup provider on 429 / 5xx",
       "streamingSse": "Streaming response (SSE)",
@@ -170,18 +168,15 @@
     "loading": "Loading…",
     "loadFailed": "Load failed: {error}",
     "clientModelName": "Client-facing model name",
-    "fallbackTitle": "Default fallback",
-    "fallbackDesc": "Unmatched models will be forwarded to {target}",
-    "fallbackEdit": "Edit",
-    "editFallbackTitle": "Edit default fallback",
     "empty": "None",
     "targetsLabel": "Targets",
     "addTarget": "Add target",
+    "dragHandle": "Drag to reorder",
     "targetActions": "Target actions",
     "targetDefault": "default",
     "targetDisabled": "Disabled",
     "targetRetries": "Retries {count}",
-    "targetTimeout": "{ms}ms",
+    "targetTimeout": "{seconds}s",
     "targetHits": "Hits {count}",
     "targetFailures": "Failures {count}",
     "stats": {
@@ -211,11 +206,6 @@
       "save": "Save",
       "saving": "Saving…"
     },
-    "fallback": {
-      "provider": "Provider",
-      "model": "Model",
-      "modelPlaceholder": "e.g. gpt-4o-mini"
-    },
     "targets": {
       "edit": "Edit target",
       "add": "Add target",
@@ -224,7 +214,7 @@
       "model": "Upstream model",
       "modelPlaceholder": "e.g. gpt-4o-mini",
       "maxRetries": "Max retries",
-      "timeout": "First-byte timeout (ms)",
+      "timeout": "First-byte timeout (seconds)",
       "timeoutPlaceholder": "0 = default 60s",
       "enabled": "Enabled",
       "validation": "Select a provider and enter a model name",
@@ -538,7 +528,10 @@
       "next": "Next",
       "last": "Last",
       "pageN": "Page {n}"
-    }
+    },
+    "clearAllTitle": "Clear all stats logs",
+    "clearAllMessage": "This will permanently delete ALL request logs and cannot be undone. Continue?",
+    "clearAllConfirm": "Clear all"
   },
   "common": {
     "save": "Save",
@@ -585,7 +578,6 @@
     "targetsUpdated": "Targets updated",
     "targetsUpdateFailed": "Update failed",
     "loadSettingsFailed": "Failed to load settings",
-    "defaultUpdated": "Default fallback updated",
     "imported": "Imported {count} models",
     "importFailed": "Import failed",
     "exported": "Models exported",

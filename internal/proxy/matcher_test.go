@@ -1,8 +1,8 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +26,7 @@ func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
 	}
 	req := &InboundRequest{Model: "x"}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(req, rules, "", "", map[string]*CircuitBreaker{}, lookup)
+	cands, err := selectCandidates(req, rules, map[string]*CircuitBreaker{}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
 	}
 	breakers := map[string]*CircuitBreaker{"p0": open}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,25 +66,28 @@ func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
 	}
 }
 
-func TestSelectCandidates_DefaultFallback(t *testing.T) {
-	rules := []model.ModelRule{}
+// TestSelectCandidates_NoMatchingRuleReturnsErrNoMatch replaces the previous
+// "default fallback" tests: the fallback feature has been removed, so an
+// unknown model must surface errNoMatch so the handler can respond 503.
+func TestSelectCandidates_NoMatchingRuleReturnsErrNoMatch(t *testing.T) {
+	rules := []model.ModelRule{
+		{ID: "r1", Name: "registered-model", Enabled: true},
+	}
 	breakers := map[string]*CircuitBreaker{}
-	lookup := func(id string) (*model.Provider, error) {
-		if id == "default" {
-			return makeProvider(id), nil
-		}
-		return nil, fmt.Errorf("not found")
+	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
+	_, err := selectCandidates(&InboundRequest{Model: "not-registered"}, rules, breakers, lookup)
+	if err == nil {
+		t.Fatal("expected error for unknown model")
 	}
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", "", breakers, lookup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cands) != 1 || cands[0].provider.ID != "default" {
-		t.Fatalf("expected default provider, got %+v", cands)
+	if !errors.Is(err, errNoMatch) {
+		t.Fatalf("expected errNoMatch, got: %v", err)
 	}
 }
 
-func TestSelectCandidates_DefaultFallbackWhenAllOpen(t *testing.T) {
+// TestSelectCandidates_AllTargetsOpenReturnsError covers the corner case
+// where the rule matches but every target's circuit is open. There is no
+// default fallback any more, so the matcher must surface an error.
+func TestSelectCandidates_AllTargetsOpenReturnsError(t *testing.T) {
 	rules := []model.ModelRule{
 		{
 			ID: "r1", Name: "x", Enabled: true,
@@ -98,41 +101,21 @@ func TestSelectCandidates_DefaultFallbackWhenAllOpen(t *testing.T) {
 		open.Record(false)
 	}
 	breakers := map[string]*CircuitBreaker{"p0": open}
-	lookup := func(id string) (*model.Provider, error) {
-		return makeProvider(id), nil
-	}
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", "", breakers, lookup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cands) != 1 || cands[0].provider.ID != "default" {
-		t.Fatalf("expected default fallback, got %+v", cands)
-	}
-}
-
-func TestSelectCandidates_NoCandidates(t *testing.T) {
-	rules := []model.ModelRule{}
-	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, func(string) (*model.Provider, error) { return nil, fmt.Errorf("not found") })
+	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
+	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, breakers, lookup)
 	if err == nil {
-		t.Fatal("expected error when no candidates")
+		t.Fatal("expected error when all targets have open circuits and no default is configured")
+	}
+	if errors.Is(err, errNoMatch) {
+		t.Fatalf("errNoMatch is for unknown models, not for open circuits; got: %v", err)
 	}
 }
 
-func TestSelectCandidates_DefaultFallbackPreservesModel(t *testing.T) {
+func TestSelectCandidates_EmptyRulesReturnsErrNoMatch(t *testing.T) {
 	rules := []model.ModelRule{}
-	breakers := map[string]*CircuitBreaker{}
-	lookup := func(id string) (*model.Provider, error) {
-		if id == "default" {
-			return makeProvider(id), nil
-		}
-		return nil, fmt.Errorf("not found")
-	}
-	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "default", "", breakers, lookup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cands) != 1 || cands[0].modelName != "user-model" {
-		t.Fatalf("expected default candidate to preserve request model, got %+v", cands)
+	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, map[string]*CircuitBreaker{}, func(string) (*model.Provider, error) { return nil, fmt.Errorf("not found") })
+	if !errors.Is(err, errNoMatch) {
+		t.Fatalf("expected errNoMatch, got: %v", err)
 	}
 }
 
@@ -147,7 +130,7 @@ func TestSelectCandidates_EmptyTargetModelPreservesRequestModel(t *testing.T) {
 	}
 	breakers := map[string]*CircuitBreaker{}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "", "", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,30 +150,12 @@ func TestSelectCandidates_NonEmptyTargetModelOverrides(t *testing.T) {
 	}
 	breakers := map[string]*CircuitBreaker{}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, "", "", breakers, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "user-model"}, rules, breakers, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cands) != 1 || cands[0].modelName != "route-model" {
 		t.Fatalf("expected non-empty target model to override request model, got %+v", cands)
-	}
-}
-
-// TestSelectCandidates_UnknownModelReturnsError verifies the no-match path
-// when no default provider is configured: the matcher must surface an
-// "unknown model" error instead of silently forwarding to a wrong target.
-func TestSelectCandidates_UnknownModelReturnsError(t *testing.T) {
-	rules := []model.ModelRule{
-		{ID: "r1", Name: "registered-model", Enabled: true},
-	}
-	breakers := map[string]*CircuitBreaker{}
-	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	_, err := selectCandidates(&InboundRequest{Model: "not-registered"}, rules, "", "", breakers, lookup)
-	if err == nil {
-		t.Fatal("expected error for unknown model")
-	}
-	if !strings.Contains(err.Error(), "unknown model") {
-		t.Fatalf("expected 'unknown model' in error, got: %v", err)
 	}
 }
 
@@ -262,7 +227,7 @@ func TestSelectCandidates_PopulatesTargetIDAndMaxRetries(t *testing.T) {
 		},
 	}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, map[string]*CircuitBreaker{}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,27 +252,12 @@ func TestSelectCandidates_PopulatesTargetIDAndMaxRetries(t *testing.T) {
 	}
 }
 
-// TestSelectCandidates_DefaultFallbackHasEmptyTargetID verifies the synthetic
-// default-fallback candidate (used when no rule matches or all targets are
-// open) has no targetID — this is what guards the proxy's IncrementTargetStats
-// call so it isn't issued for a candidate that has no row in rule_targets.
-func TestSelectCandidates_DefaultFallbackHasEmptyTargetID(t *testing.T) {
-	// no rule matched → default fallback path
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, nil, "default", "", map[string]*CircuitBreaker{},
-		func(id string) (*model.Provider, error) { return makeProvider(id), nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cands) != 1 || cands[0].targetID != "" || cands[0].maxRetries != 0 {
-		t.Fatalf("expected default candidate with empty targetID/maxRetries=0, got %+v", cands)
-	}
-}
-
-// TestSelectCandidates_SkipsDisabledTargets verifies the Phase-3 per-target
+// TestSelectCandidates_SkipsDisabledTargets verifies the per-target
 // enable/disable flag: a target with Enabled=false is dropped from the
-// candidate list, and the survivors keep their slice (tier) order. If every
-// target is disabled and no default is configured, selectCandidates must
-// return an error rather than silently forwarding to a disabled provider.
+// candidate list, and the survivors keep their slice (tier) order. If
+// every target is disabled the matcher must return an error rather than
+// silently forwarding to a default provider (the default-fallback feature
+// has been removed).
 func TestSelectCandidates_SkipsDisabledTargets(t *testing.T) {
 	rules := []model.ModelRule{
 		{
@@ -321,7 +271,7 @@ func TestSelectCandidates_SkipsDisabledTargets(t *testing.T) {
 		},
 	}
 	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, lookup)
+	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, map[string]*CircuitBreaker{}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,11 +288,10 @@ func TestSelectCandidates_SkipsDisabledTargets(t *testing.T) {
 	}
 }
 
-// TestSelectCandidates_AllDisabledFallsBackToDefault covers the corner case
-// where every routed target is disabled but a default provider is configured:
-// the default should be returned (same fallback path used when all circuits
-// are open).
-func TestSelectCandidates_AllDisabledFallsBackToDefault(t *testing.T) {
+// TestSelectCandidates_AllDisabledReturnsError verifies the error path: the
+// rule matches but every target is disabled. The default-fallback feature
+// has been removed, so the matcher must return an error.
+func TestSelectCandidates_AllDisabledReturnsError(t *testing.T) {
 	rules := []model.ModelRule{
 		{
 			ID: "r1", Name: "x", Enabled: true,
@@ -353,34 +302,13 @@ func TestSelectCandidates_AllDisabledFallsBackToDefault(t *testing.T) {
 		},
 	}
 	lookup := func(id string) (*model.Provider, error) {
-		if id == "default" {
-			return makeProvider(id), nil
-		}
 		return makeProvider(id), nil
 	}
-	cands, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "default", "", map[string]*CircuitBreaker{}, lookup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cands) != 1 || cands[0].provider.ID != "default" || cands[0].targetID != "" {
-		t.Fatalf("expected single default candidate, got %+v", cands)
-	}
-}
-
-// TestSelectCandidates_AllDisabledNoDefault verifies the error path: every
-// target disabled AND no default provider → no available provider.
-func TestSelectCandidates_AllDisabledNoDefault(t *testing.T) {
-	rules := []model.ModelRule{
-		{
-			ID: "r1", Name: "x", Enabled: true,
-			Targets: []model.ModelRuleTarget{
-				{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: false},
-			},
-		},
-	}
-	lookup := func(id string) (*model.Provider, error) { return makeProvider(id), nil }
-	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, "", "", map[string]*CircuitBreaker{}, lookup)
+	_, err := selectCandidates(&InboundRequest{Model: "x"}, rules, map[string]*CircuitBreaker{}, lookup)
 	if err == nil {
-		t.Fatal("expected error when all targets disabled and no default configured")
+		t.Fatal("expected error when all targets disabled (no default fallback)")
+	}
+	if errors.Is(err, errNoMatch) {
+		t.Fatalf("errNoMatch is for unknown models; all-disabled should be a different error, got: %v", err)
 	}
 }

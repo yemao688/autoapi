@@ -251,3 +251,24 @@ func (s *Store) PurgeLogs(olderThanDays int) (int, error) {
 	slog.Info("store: purged logs", "count", count, "days", olderThanDays)
 	return count, nil
 }
+
+// ClearLogs deletes ALL request logs. Returns the number of rows deleted.
+func (s *Store) ClearLogs() (int, error) {
+	var count int
+	if err := s.execTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM request_logs`)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		count = int(n)
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("store: clear logs: %w", err)
+	}
+	slog.Info("store: cleared logs", "count", count)
+	return count, nil
+}

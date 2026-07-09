@@ -78,6 +78,7 @@ type StoreService interface {
 	UsageStats() (*model.UsageStats, error)
 	GetUsageTrends(q model.UsageTrendsQuery) (*model.UsageTrends, error)
 	PurgeLogs(olderThanDays int) (int, error)
+	ClearLogs() (int, error)
 
 	// Settings
 	GetSettings() (*model.Settings, error)
@@ -618,6 +619,15 @@ func (a *App) PurgeLogs(olderThanDays int) (int, error) {
 	}
 	slog.Info("app: purge logs triggered", "days", olderThanDays)
 	return a.deps.Store.PurgeLogs(olderThanDays)
+}
+
+// ClearLogs deletes all request logs.
+func (a *App) ClearLogs() (int, error) {
+	if a.deps.Store == nil {
+		return 0, errNotImpl
+	}
+	slog.Info("app: clear logs triggered")
+	return a.deps.Store.ClearLogs()
 }
 
 // ----- Proxy control -----

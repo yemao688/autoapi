@@ -8,6 +8,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -129,7 +130,15 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		slog.Warn("proxy: no candidates", "path", r.URL.Path, "model", inbound.Model, "err", err)
-		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
+		// The "default fallback" feature has been removed: an inbound
+		// request whose model is not registered as a model rule now fails
+		// loudly with 503 + "no_matching_rule" instead of being silently
+		// forwarded to a synthetic default provider.
+		errType := "service_unavailable"
+		if errors.Is(err, errNoMatch) {
+			errType = "no_matching_rule"
+		}
+		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
 		return
@@ -196,7 +205,11 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		slog.Warn("proxy: no candidates", "path", r.URL.Path, "model", inbound.Model, "err", err)
-		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
+		errType := "service_unavailable"
+		if errors.Is(err, errNoMatch) {
+			errType = "no_matching_rule"
+		}
+		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
 		return
@@ -281,7 +294,11 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		slog.Warn("proxy: no candidates", "path", r.URL.Path, "model", inbound.Model, "err", err)
-		p.writeError(w, http.StatusServiceUnavailable, "service_unavailable", err.Error())
+		errType := "service_unavailable"
+		if errors.Is(err, errNoMatch) {
+			errType = "no_matching_rule"
+		}
+		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
 		return

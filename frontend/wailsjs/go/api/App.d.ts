@@ -4,6 +4,8 @@ import {model} from '../models';
 import {api} from '../models';
 import {context} from '../models';
 
+export function ClearLogs():Promise<number>;
+
 export function CreateAPIKey(arg1:model.ApiKeyInput):Promise<model.ApiKey>;
 
 export function CreateModelRule(arg1:model.ModelRuleInput):Promise<model.ModelRule>;

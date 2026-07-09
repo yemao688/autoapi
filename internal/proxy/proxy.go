@@ -384,7 +384,6 @@ func (p *Proxy) logRequestEntry(log *model.RequestLog) {
 // model-rule matcher, filtering out providers with an open circuit breaker.
 func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	rules := p.loadModelRules()
-	settings := p.currentSettings().Routing
 
 	// Snapshot the breaker map to avoid racing with breakerFor writes.
 	p.breakersMu.RLock()
@@ -394,7 +393,7 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	p.breakersMu.RUnlock()
 
-	return selectCandidates(req, rules, settings.DefaultProviderID, settings.DefaultModel, breakers, p.store.GetProvider)
+	return selectCandidates(req, rules, breakers, p.store.GetProvider)
 }
 
 // breakerFor returns the circuit breaker for a provider, creating one if needed.

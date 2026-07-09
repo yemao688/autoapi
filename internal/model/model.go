@@ -105,8 +105,8 @@ type ModelRuleTarget struct {
 	RuleID       string `json:"rule_id"`
 	ProviderID   string `json:"provider_id"`
 	ModelName    string `json:"model_name"`
-	MaxRetries   int    `json:"max_retries"`   // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
-	TimeoutMs    int    `json:"timeout_ms"`    // 0 = use the default first-byte timeout; otherwise the per-target budget in milliseconds covering headers arrival + first response byte
+	MaxRetries     int    `json:"max_retries"`     // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
+	TimeoutSeconds int    `json:"timeout_seconds"` // 0 = use the default first-byte timeout; otherwise the per-target budget in seconds covering headers arrival + first response byte
 	HitCount     int64  `json:"hit_count"`     // incremented once on successful dispatch
 	FailureCount int64  `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
 	Enabled      bool   `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
@@ -271,10 +271,8 @@ type AppearanceSettings struct {
 }
 
 type RoutingSettings struct {
-	DefaultProviderID string `json:"default_provider_id"`
-	DefaultModel      string `json:"default_model"`
-	AutoRetry         bool   `json:"auto_retry"`
-	StreamingSSE      bool   `json:"streaming_sse"`
+	AutoRetry    bool `json:"auto_retry"`
+	StreamingSSE bool `json:"streaming_sse"`
 }
 
 type ServerSettings struct {

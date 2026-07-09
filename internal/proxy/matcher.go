@@ -1,15 +1,24 @@
 // matcher.go implements the model-rule lookup used by the proxy to select a
 // target provider/model. A rule matches by exact model name: the rule's
-// Name equals the request's Model field. Disabled rules and rules with no
-// enabled targets fall through to the default provider (if configured).
+// Name equals the request's Model field. Disabled rules are skipped. If no
+// enabled rule matches, the matcher returns errNoMatch so the handler can
+// respond with 503 — the "default fallback" feature has been removed: the
+// proxy no longer forwards unmatched requests to a synthetic
+// provider/model.
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"autoapi/internal/model"
 )
+
+// errNoMatch is returned by selectCandidates when the inbound request
+// model does not correspond to any enabled model rule. The proxy handler
+// converts this into a 503 with error type "no_matching_rule".
+var errNoMatch = errors.New("no matching model rule")
 
 // defaultFirstByteTimeout is the budget for receiving the first response
 // byte from an upstream provider when no per-target override is set. It
@@ -43,31 +52,26 @@ type candidate struct {
 // selectCandidates picks the enabled model rule whose Name equals req.Model
 // (exact match) and collects all of its forwarding targets in slice order,
 // filtering out targets that are disabled or whose provider's circuit
-// breaker is open. If no rule matches (or all targets are open), the call
-// falls back to the default provider/model when one is configured.
+// breaker is open. If no rule matches the request, selectCandidates returns
+// errNoMatch — the caller must respond with 503; the proxy no longer falls
+// back to a synthetic default provider/model.
 //
 // `rules` does not need to be pre-sorted; lookup is by exact name equality
 // so the input order is irrelevant. The getProvider closure resolves
 // provider IDs to full provider records. Disabled targets are skipped
 // without disturbing the relative tier ordering of the survivors.
-func selectCandidates(req *InboundRequest, rules []model.ModelRule, defaultProviderID, defaultModel string, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
+func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
 	rule, matched := findModelRule(req, rules)
 	if !matched {
-		if defaultProviderID == "" {
-			return nil, fmt.Errorf("unknown model: %s", req.Model)
-		}
-		p, err := getProvider(defaultProviderID)
-		if err != nil {
-			return nil, fmt.Errorf("default provider not found")
-		}
-		if isOpen(defaultProviderID, breakers) {
-			return nil, fmt.Errorf("no available provider: default provider circuit is open")
-		}
-		outName := req.Model
-		if defaultModel != "" {
-			outName = defaultModel
-		}
-		return []candidate{{provider: p, modelName: outName, ruleID: "", ruleLabel: "", timeout: 0}}, nil
+		// Include the model name in the error so the 503 body is
+		// actionable: clients (and operators reading the request log)
+		// can see which model was unknown without having to cross-
+		// reference the request log. We do this by wrapping errNoMatch
+		// with fmt.Errorf("%w: %s", errNoMatch, req.Model) — the
+		// handler uses errors.Is to detect errNoMatch and pick the
+		// 503 error type, while the wrapped message still bubbles up
+		// to the JSON body verbatim.
+		return nil, fmt.Errorf("%w: %s", errNoMatch, req.Model)
 	}
 
 	var out []candidate
@@ -92,27 +96,16 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, defaultProvi
 			ruleLabel:  rule.Name,
 			targetID:   t.ID,
 			maxRetries: t.MaxRetries,
-			timeout:    targetTimeout(t.TimeoutMs),
+			timeout:    targetTimeout(t.TimeoutSeconds),
 		})
 	}
 
-	if len(out) == 0 && defaultProviderID != "" {
-		p, err := getProvider(defaultProviderID)
-		if err != nil {
-			return nil, fmt.Errorf("no available provider")
-		}
-		if isOpen(defaultProviderID, breakers) {
-			return nil, fmt.Errorf("no available provider: all targets and default are open")
-		}
-		outName := req.Model
-		if defaultModel != "" {
-			outName = defaultModel
-		}
-		out = append(out, candidate{provider: p, modelName: outName, ruleID: "", ruleLabel: "", timeout: 0})
-	}
-
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no available provider")
+		// The rule matched, but every target is disabled or its circuit is
+		// open. There is no longer a default fallback to bridge this gap, so
+		// the caller must surface the failure rather than silently forward
+		// to a wrong target.
+		return nil, fmt.Errorf("no available provider: all targets of model %q are disabled or have open circuits", req.Model)
 	}
 	return out, nil
 }
@@ -146,14 +139,14 @@ func modelNameForTarget(targetModel, requestModel string) string {
 	return requestModel
 }
 
-// targetTimeout converts a per-target timeout_ms setting (0 = use default)
+// targetTimeout converts a per-target timeout_seconds setting (0 = use default)
 // into a time.Duration for the candidate. A zero return value means
 // "use the default first-byte timeout"; the actual default is resolved
 // at the call site in forwardStream so this constant is only referenced
 // once.
-func targetTimeout(timeoutMs int) time.Duration {
-	if timeoutMs > 0 {
-		return time.Duration(timeoutMs) * time.Millisecond
+func targetTimeout(timeoutSeconds int) time.Duration {
+	if timeoutSeconds > 0 {
+		return time.Duration(timeoutSeconds) * time.Second
 	}
 	return 0 // 0 signals "use defaultFirstByteTimeout"; resolved in forwardStream
 }

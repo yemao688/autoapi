@@ -413,14 +413,15 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 	}
 }
 
-func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
-	var seenBody string
+// TestNoMatchingRuleReturns503 verifies the proxy-level behavior for the
+// removed "default fallback" feature: an inbound request whose model name
+// is not registered as a model rule must produce a 503 with
+// error.type = "no_matching_rule" and a JSON body — NOT a silent forward to
+// a configured default provider.
+func TestNoMatchingRuleReturns503(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		seenBody = string(body)
-		w.Header().Set("Content-Type", "application/json")
+		t.Errorf("upstream should not be called when no model rule matches; got %s", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "chatcmpl-ok"})
 	}))
 	defer srv.Close()
 
@@ -428,10 +429,10 @@ func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
 		providers: map[string]*model.Provider{
 			"default": {ID: "default", Name: "Default", BaseURL: srv.URL},
 		},
-		rules:   []model.ModelRule{},
+		rules:   []model.ModelRule{}, // no rules registered
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 		settings: &model.Settings{
-			Routing: model.RoutingSettings{DefaultProviderID: "default"},
+			Routing: model.RoutingSettings{AutoRetry: false, StreamingSSE: true},
 		},
 	}
 	p := New(store, &mockService{}, func() *model.Settings { return store.settings })
@@ -442,11 +443,26 @@ func TestFailover_DefaultProviderPreservesModel(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when no rule matches, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(seenBody, `"model":"user-requested-model"`) {
-		t.Fatalf("expected upstream body to preserve request model, got %s", seenBody)
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("expected JSON content-type, got %q", ct)
+	}
+	var body struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("expected JSON body, got %q: %v", rec.Body.String(), err)
+	}
+	if body.Error.Type != "no_matching_rule" {
+		t.Fatalf("expected error.type=no_matching_rule, got %q", body.Error.Type)
+	}
+	if !strings.Contains(body.Error.Message, "user-requested-model") {
+		t.Fatalf("expected error message to mention the request model, got %q", body.Error.Message)
 	}
 }
 
@@ -1145,7 +1161,7 @@ func TestStreaming_FailoverOnNetworkError(t *testing.T) {
 // first-byte timeout: a candidate that accepts the connection but never
 // sends the first byte should not block the streaming request until the
 // client times out. The proxy's per-candidate first-byte timeout (set
-// via ModelRuleTarget.TimeoutMs) must fire, the attempt must be
+// via ModelRuleTarget.TimeoutSeconds) must fire, the attempt must be
 // classified as retryable, and the request must fail over to the next
 // candidate.
 func TestStreaming_FailoverOnFirstByteTimeout(t *testing.T) {
@@ -1185,8 +1201,8 @@ func TestStreaming_FailoverOnFirstByteTimeout(t *testing.T) {
 			{
 				ID: "r1", Name: "x", Enabled: true,
 				Targets: []model.ModelRuleTarget{
-					// Per-target first-byte timeout: 200ms.
-					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, TimeoutMs: 200, Enabled: true},
+					// Per-target first-byte timeout: 1s.
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, TimeoutSeconds: 1, Enabled: true},
 					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
 				},
 			},
@@ -1389,7 +1405,7 @@ func TestStreaming_TruePassThrough(t *testing.T) {
 }
 
 // TestStreaming_FirstByteTimeoutFailover verifies that a target with a
-// per-target TimeoutMs that never sends its first byte causes the
+// per-target TimeoutSeconds that never sends its first byte causes the
 // request to fail over to the next target, and the chain records the
 // failed attempt.
 func TestStreaming_FirstByteTimeoutFailover(t *testing.T) {
@@ -1435,8 +1451,8 @@ func TestStreaming_FirstByteTimeoutFailover(t *testing.T) {
 			{
 				ID: "r1", Name: "x", Enabled: true,
 				Targets: []model.ModelRuleTarget{
-					// Per-target first-byte timeout: 200ms.
-					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, TimeoutMs: 200, Enabled: true},
+					// Per-target first-byte timeout: 1s.
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, TimeoutSeconds: 1, Enabled: true},
 					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
 				},
 			},
@@ -1504,13 +1520,13 @@ func TestStreaming_FirstByteTimeoutFailover(t *testing.T) {
 		t.Fatalf("expected chain[1] status=success, got %q", log.Chain[1].Status)
 	}
 	// Top-level FirstTokenMs ≈ p0 latency + p1 first byte. The p0
-	// failure latency is bounded by the 200ms first-byte timeout
-	// (plus a small tolerance); p1 first byte is ~20ms after the
-	// request hits P1. We allow ±150ms slack.
-	expectedLow := 200 + 0
-	expectedHigh := 200 + 250
+	// failure latency is bounded by the 1s first-byte timeout (plus a
+	// small tolerance); p1 first byte is ~20ms after the request
+	// hits P1. We allow ±250ms slack.
+	expectedLow := 1000 + 0
+	expectedHigh := 1000 + 250
 	if log.FirstTokenMs < expectedLow || log.FirstTokenMs > expectedHigh {
-		t.Fatalf("expected top-level FirstTokenMs in [%d, %d] (p0 ~200ms + p1 ~20ms), got %d",
+		t.Fatalf("expected top-level FirstTokenMs in [%d, %d] (p0 ~1000ms + p1 ~20ms), got %d",
 			expectedLow, expectedHigh, log.FirstTokenMs)
 	}
 }
@@ -1841,9 +1857,9 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 // bounds headers arrival.
 //
 // Setup:
-//   - Target TimeoutMs: 300 (300ms first-byte budget).
+//   - Target TimeoutSeconds: 1 (1s first-byte budget).
 //   - Upstream: send headers + first chunk IMMEDIATELY, then sleep
-//     800ms (well beyond the 300ms timeout), then send the remaining
+//     800ms (well beyond the 1s timeout), then send the remaining
 //     chunks + [DONE].
 //
 // Expectations (would fail with the buggy context-based approach):
@@ -1890,11 +1906,11 @@ func TestStreaming_LongBodyNotKilledByFirstByteTimeout(t *testing.T) {
 			{
 				ID: "r1", Name: "x", Enabled: true,
 				Targets: []model.ModelRuleTarget{
-					// 300ms first-byte timeout. Headers + first
+					// 1s first-byte timeout. Headers + first
 					// chunk arrive immediately, but body streaming
 					// continues for 800ms+. The body must NOT be
-					// killed by the 300ms deadline.
-					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, TimeoutMs: 300, Enabled: true},
+					// killed by the 1s deadline.
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, TimeoutSeconds: 1, Enabled: true},
 				},
 			},
 		},

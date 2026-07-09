@@ -76,7 +76,7 @@ const selectedRouteId = ref("");
 const modelFilter = ref("");
 const searchText = ref("");
 
-const dateRangePreset = ref<DateRangePreset>("month");
+const dateRangePreset = ref<DateRangePreset>("today");
 const customStart = ref(""); // ISO local datetime string from <input type="datetime-local">
 const customEnd = ref("");
 
@@ -401,6 +401,27 @@ async function purgeLogs() {
   }
 }
 
+const clearing = ref(false);
+const clearAllLogs = async () => {
+  const ok = await confirm.open({
+    title: t("usage.clearAllTitle"),
+    message: t("usage.clearAllMessage"),
+    confirmText: t("usage.clearAllConfirm"),
+    cancelText: t("common.cancel"),
+    danger: true,
+  });
+  if (!ok) return;
+  clearing.value = true;
+  try {
+    await api.clearLogs();
+    await refreshAll();
+  } catch (e: any) {
+    toast.push(e?.message || String(e), "error");
+  } finally {
+    clearing.value = false;
+  }
+};
+
 async function exportLogs() {
   await download("logs_csv");
 }
@@ -511,6 +532,29 @@ watch([modelFilter, searchText], () => {
           />
         </svg>
         {{ t("usage.export") }}
+      </button>
+      <button
+        class="btn btn-danger"
+        :disabled="clearing"
+        @click="clearAllLogs"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          style="width: 14px; height: 14px"
+          aria-hidden="true"
+        >
+          <path
+            d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"
+          />
+          <line x1="10" y1="11" x2="10" y2="17" />
+          <line x1="14" y1="11" x2="14" y2="17" />
+        </svg>
+        {{ t("usage.clearAllConfirm") }}
       </button>
       <div class="sync-control">
         <label for="usage-sync-mode" class="text-muted">{{
@@ -743,5 +787,21 @@ watch([modelFilter, searchText], () => {
   .sse-status {
     width: 100%;
   }
+}
+
+.btn-danger {
+  background: var(--surface);
+  color: var(--negative);
+  border-color: var(--border);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(217, 48, 37, 0.06);
+  border-color: var(--negative);
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

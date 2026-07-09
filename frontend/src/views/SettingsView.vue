@@ -35,8 +35,6 @@ function defaultSettings(): model.Settings {
       accent_color: '#0071e3',
     },
     routing: {
-      default_provider_id: 'openai',
-      default_model: 'gpt-4o-mini',
       auto_retry: false,
       streaming_sse: true,
     },
@@ -517,24 +515,6 @@ watch(fetchedSettings, loadSettings, { once: true })
               </div>
             </div>
 
-            <div class="field">
-              <div class="field-label">{{ t('settings.routing.defaultProvider') }}</div>
-              <select class="select" style="max-width: 320px;" v-model="settings.routing.default_provider_id" @change="markSettingsDirty">
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="moonshot">Moonshot</option>
-              </select>
-            </div>
-            <div class="field">
-              <div class="field-label">{{ t('settings.routing.defaultModel') }}</div>
-              <select class="select" style="max-width: 320px;" v-model="settings.routing.default_model" @change="markSettingsDirty">
-                <option value="gpt-4o-mini">gpt-4o-mini</option>
-                <option value="gpt-4o">gpt-4o</option>
-                <option value="claude-haiku-4-5">claude-haiku-4-5</option>
-              </select>
-            </div>
-            <div class="h-divider"></div>
             <div class="field">
               <div class="row-between" style="margin-bottom: 0;">
                 <div>

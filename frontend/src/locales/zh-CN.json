@@ -72,9 +72,7 @@
     },
     "routing": {
       "title": "路由默认行为",
-      "subtitle": "当请求不匹配任何规则时的兜底策略",
-      "defaultProvider": "默认 Provider",
-      "defaultModel": "默认模型",
+      "subtitle": "模型路由设置",
       "autoRetry": "自动重试失败请求",
       "autoRetryHelp": "429 / 5xx 时切换备用 Provider",
       "streamingSse": "流式响应 (SSE)",
@@ -170,18 +168,15 @@
     "loading": "加载中…",
     "loadFailed": "加载失败：{error}",
     "clientModelName": "客户端可见的模型名",
-    "fallbackTitle": "默认兜底",
-    "fallbackDesc": "未匹配的模型将转发至 {target}",
-    "fallbackEdit": "修改",
-    "editFallbackTitle": "修改默认兜底",
     "empty": "无",
     "targetsLabel": "目标",
     "addTarget": "添加目标",
+    "dragHandle": "拖动以重新排序",
     "targetActions": "目标操作",
     "targetDefault": "默认",
     "targetDisabled": "已禁用",
     "targetRetries": "重试 {count}",
-    "targetTimeout": "{ms}ms",
+    "targetTimeout": "{seconds}s",
     "targetHits": "命中 {count}",
     "targetFailures": "失败 {count}",
     "stats": {
@@ -211,11 +206,6 @@
       "save": "保存",
       "saving": "保存中…"
     },
-    "fallback": {
-      "provider": "Provider",
-      "model": "模型",
-      "modelPlaceholder": "例如 gpt-4o-mini"
-    },
     "targets": {
       "edit": "编辑目标",
       "add": "添加目标",
@@ -224,7 +214,7 @@
       "model": "上游模型",
       "modelPlaceholder": "例如 gpt-4o-mini",
       "maxRetries": "最大重试",
-      "timeout": "首字超时 (ms)",
+      "timeout": "首字超时 (秒)",
       "timeoutPlaceholder": "0 = 默认 60s",
       "enabled": "启用",
       "validation": "请选择 Provider 并填写模型名称",
@@ -538,7 +528,10 @@
       "next": "下一页",
       "last": "末页",
       "pageN": "第 {n} 页"
-    }
+    },
+    "clearAllTitle": "清空所有统计日志",
+    "clearAllMessage": "此操作将永久删除全部请求日志，且无法恢复。确定继续吗？",
+    "clearAllConfirm": "清空全部"
   },
   "common": {
     "save": "保存",
@@ -585,7 +578,6 @@
     "targetsUpdated": "目标已更新",
     "targetsUpdateFailed": "更新失败",
     "loadSettingsFailed": "设置加载失败",
-    "defaultUpdated": "默认兜底已更新",
     "imported": "已导入 {count} 个模型",
     "importFailed": "导入失败",
     "exported": "模型已导出",
