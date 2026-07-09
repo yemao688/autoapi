@@ -44,9 +44,11 @@ const deleting = ref(false)
 const form = ref<{
   name: string
   enabled: boolean
+  first_byte_timeout_seconds: number
 }>({
   name: '',
   enabled: true,
+  first_byte_timeout_seconds: 0,
 })
 const formTargets = ref<model.ModelRuleTarget[]>([])
 
@@ -95,6 +97,7 @@ function openCreate() {
   form.value = {
     name: '',
     enabled: true,
+    first_byte_timeout_seconds: 0,
   }
   // New rules still need at least one default target; it is managed inline afterward.
   formTargets.value = [new model.ModelRuleTarget({ provider_id: '', model_name: '', max_retries: 0, enabled: true })]
@@ -106,6 +109,7 @@ function openEdit(rule: model.ModelRule) {
   form.value = {
     name: rule.name,
     enabled: rule.enabled,
+    first_byte_timeout_seconds: rule.first_byte_timeout_seconds || 0,
   }
   // Preserve existing targets even though they are edited outside the modal.
   formTargets.value = rule.targets.map((t) => new model.ModelRuleTarget({
@@ -127,6 +131,7 @@ async function saveRule() {
     const input = new model.ModelRuleInput({
       name: form.value.name,
       enabled: form.value.enabled,
+      first_byte_timeout_seconds: form.value.first_byte_timeout_seconds,
       targets: formTargets.value,
     })
     if (editingId.value) {
@@ -213,6 +218,7 @@ async function updateRuleTargets(rule: model.ModelRule, targets: model.ModelRule
     const input = new model.ModelRuleInput({
       name: rule.name,
       enabled: rule.enabled,
+      first_byte_timeout_seconds: rule.first_byte_timeout_seconds,
       targets,
     })
     await api.updateModelRule(rule.id, input)
@@ -490,7 +496,6 @@ onMounted(() => {
                       <span class="target-provider">{{ targetProviderName(target) }}</span>
                       <span class="target-model">{{ target.model_name || t('modelRules.targetDefault') }}</span>
                       <span v-if="target.max_retries > 0" class="badge mono">{{ t('modelRules.targetRetries', { count: target.max_retries }) }}</span>
-                      <span v-if="target.timeout_seconds > 0" class="badge mono">{{ t('modelRules.targetTimeout', { seconds: target.timeout_seconds }) }}</span>
                       <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">{{ t('modelRules.targetDisabled') }}</span>
                     </div>
                     <div class="target-counters">
@@ -569,6 +574,11 @@ onMounted(() => {
           <label class="field-label">{{ t('modelRules.modal.name') }}</label>
           <input v-model="form.name" class="input" :placeholder="t('modelRules.modal.namePlaceholder')">
           <div class="text-muted" style="font-size: 11px; margin-top: 4px;">{{ t('modelRules.modal.nameHelp') }}</div>
+        </div>
+        <div class="field">
+          <label class="field-label">{{ t('modelRules.modal.timeout') }}</label>
+          <input v-model.number="form.first_byte_timeout_seconds" type="number" class="input" min="0" step="1" :disabled="saving" :placeholder="t('modelRules.modal.timeoutPlaceholder')">
+          <div class="text-muted" style="font-size: 11px; margin-top: 4px;">{{ t('modelRules.modal.timeoutHelp') }}</div>
         </div>
         <div class="field">
           <div class="row-between" style="margin-bottom: 0;">

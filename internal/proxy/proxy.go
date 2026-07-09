@@ -52,13 +52,6 @@ const upstreamResponseHeaderTimeout = 30 * time.Second
 // targets each have a high per-target MaxRetries value.
 const maxTotalAttempts = 8
 
-// maxRequestDuration caps the total wall-clock time for a single inbound
-// request — including all retries, backoffs, failovers, and Retry-After
-// waits. Prevents a slow-degrading chain (one target returning Retry-After:
-// 86400, for example) from hanging the user. Exposed as a `var` rather
-// than a `const` so tests can shorten it.
-var maxRequestDuration = 90 * time.Second
-
 // retryBackoff returns the delay before the n-th retry (n=1,2,3,...).
 // Exponential: base * 2^(n-1), capped at maxDelay, with up to +25% jitter
 // to de-sync parallel retries. n=0 returns 0 so the helper is safe to
@@ -511,13 +504,22 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 		p.forwardStream(w, r, body, candidates, inputEstimate, logEntry)
 		return
 	}
-	// budgetCtx is derived from r.Context() so client-disconnect still
-	// cancels everything, but it also carries a maxRequestDuration
-	// deadline that fires for slow-degrading upstream chains. Every
-	// upstream HTTP call and every retry-backoff sleep below uses
-	// budgetCtx instead of r.Context() so a single deadline governs
-	// the whole request.
-	budgetCtx, budgetCancel := context.WithTimeout(r.Context(), maxRequestDuration)
+	// firstByteBudget is the rule-level maximum time the proxy is
+	// willing to wait for the first response byte from ANY upstream
+	// candidate (across all candidates and all per-target retries).
+	// All candidates in the same rule share the same budget (the
+	// matcher copies the rule's setting onto every candidate).
+	firstByteBudget := candidates[0].firstByteBudget
+	firstByteDeadline := time.Now().Add(firstByteBudget)
+	// budgetCtx is derived from r.Context() so client-disconnect
+	// still cancels everything, but it also carries a first-byte
+	// deadline that fires when the rule-level budget is exhausted.
+	// The budgetCtx is used for the backoff select only; the actual
+	// HTTP request uses r.Context() (with transport-level
+	// ResponseHeaderTimeout = remaining) so the body download is
+	// NOT cut off by the first-byte deadline — the budget is
+	// ONLY counted before the first byte is received.
+	budgetCtx, budgetCancel := context.WithDeadline(r.Context(), firstByteDeadline)
 	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
@@ -533,7 +535,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// is applied BEFORE every attempt after the very first.
 	totalAttempts := 0
 	// attemptsCapped is set when totalAttempts reaches maxTotalAttempts OR
-	// the request wall-clock budget is exhausted; it signals the outer loop
+	// the first-byte budget is exhausted; it signals the outer loop
 	// to stop iterating after the current candidate finishes its retry loop.
 	attemptsCapped := false
 	// retryAfter persists the most recent 429/503 Retry-After value from
@@ -659,12 +661,11 @@ outer:
 				break
 			}
 
-			// Wall-clock budget: maxRequestDuration is the total
-			// time budget for retries, backoffs, and failovers.
-			// Exceeding it aborts the whole chain with a
-			// budget_exceeded chain entry; the all-candidates-
-			// exhausted path then surfaces a 503.
-			if budgetCtx.Err() != nil && !isClientDisconnect(budgetCtx.Err()) {
+			// First-byte budget check at the TOP of each attempt.
+			// If the rule-level first-byte budget is exhausted, abort
+			// the whole chain with a budget_exceeded chain entry; the
+			// all-candidates-exhausted path then surfaces a 503.
+			if remaining := time.Until(firstByteDeadline); remaining <= 0 {
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
 					AttemptOrder: attemptOrder,
@@ -674,10 +675,10 @@ outer:
 					TargetID:     c.targetID,
 					Status:       "budget_exceeded",
 					StatusCode:   0,
-					Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+					Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
 					LatencyMs:    0,
 				})
-				lastErr = fmt.Errorf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+				lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
 				lastStatus = http.StatusServiceUnavailable
 				attemptsCapped = true
 				break
@@ -685,7 +686,7 @@ outer:
 
 			// Backoff between attempts: fires before every attempt
 			// except the very first (totalAttempts==0). Interrupts
-			// on (a) client disconnect, (b) wall-clock budget
+			// on (a) client disconnect, (b) first-byte budget
 			// exhaustion, or (c) the planned delay elapsing. The
 			// 429/503 Retry-After header from the previous attempt
 			// is honored here instead of the computed exponential
@@ -696,9 +697,9 @@ outer:
 					delay = retryAfter
 					retryAfter = 0
 				}
-				// Cap the delay to the remaining wall-clock budget
+				// Cap the delay to the remaining first-byte budget
 				// so a hostile Retry-After: 86400 cannot pin us.
-				if remaining := time.Until(budgetDeadline(budgetCtx)); delay > remaining && remaining > 0 {
+				if remaining := time.Until(firstByteDeadline); delay > remaining && remaining > 0 {
 					delay = remaining
 				} else if remaining <= 0 {
 					delay = 0
@@ -706,9 +707,9 @@ outer:
 				select {
 				case <-budgetCtx.Done():
 					// budgetCtx fires for both client-disconnect
-					// and deadline-exceeded. Distinguish by
-					// checking r.Context() directly: only the
-					// request context is canceled on client
+					// and deadline-exceeded (first-byte budget).
+					// Distinguish by checking r.Context() directly:
+					// only the request context is canceled on client
 					// disconnect, never on timeout (the request
 					// context is the parent of budgetCtx).
 					if r.Context().Err() != nil {
@@ -737,9 +738,9 @@ outer:
 							"model", c.modelName,
 							"target", c.targetID)
 					} else {
-						// Wall-clock budget exhausted during backoff.
+						// First-byte budget exhausted during backoff.
 						logEntry.StatusCode = http.StatusServiceUnavailable
-						logEntry.Error = fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+						logEntry.Error = fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget)
 						logEntry.ProviderID = c.provider.ID
 						logEntry.ProviderName = c.provider.Name
 						logEntry.Model = c.modelName
@@ -754,12 +755,12 @@ outer:
 							TargetID:     c.targetID,
 							Status:       "budget_exceeded",
 							StatusCode:   0,
-							Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+							Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
 							LatencyMs:    0,
 						})
-						slog.Warn("proxy: request wall-clock budget exceeded during backoff",
+						slog.Warn("proxy: first-byte budget exceeded during backoff",
 							"provider", c.provider.Name,
-							"budget", maxRequestDuration)
+							"budget", firstByteBudget)
 					}
 					return
 				case <-time.After(delay):
@@ -784,9 +785,12 @@ outer:
 				break
 			}
 
-			// Use budgetCtx (not r.Context()) so the per-request
-			// wall-clock budget cancels in-flight upstream calls.
-			attemptReq := r.Clone(budgetCtx)
+			// Use r.Context() (NOT budgetCtx) so the body download is
+			// NOT cut off by the first-byte deadline — the budget is
+			// ONLY counted before the first byte is received. The
+			// first-byte deadline is enforced via the transport's
+			// ResponseHeaderTimeout (set below to `remaining`).
+			attemptReq := r.Clone(r.Context())
 			attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
 			attemptReq.ContentLength = int64(len(rewrittenBody))
 			attemptReq.Header.Del("Transfer-Encoding")
@@ -795,22 +799,24 @@ outer:
 			}
 			attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 
+			// remaining is the time left in the first-byte budget at
+			// the start of this attempt. We set it as the per-attempt
+			// ResponseHeaderTimeout so the upstream headers must arrive
+			// within `remaining`; once headers arrive the body download
+			// is unbounded (r.Context() governs it instead).
+			remaining := time.Until(firstByteDeadline)
 			proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
 			proxy.BufferPool = p.bufferPool
 			proxy.ErrorLog = p.errorLog
-			// Per-target ResponseHeaderTimeout: when the target has a
-			// non-zero timeout, clone p.transport and override the
-			// header deadline. Non-streaming has no first-byte concept,
-			// so ResponseHeaderTimeout is the right knob. When c.timeout
-			// is 0 we keep the shared transport (with its 30s default).
-			if c.timeout > 0 {
-				if t1, ok := p.transport.(*http.Transport); ok {
-					clone := t1.Clone()
-					clone.ResponseHeaderTimeout = c.timeout
-					proxy.Transport = clone
-				} else {
-					proxy.Transport = p.transport
-				}
+			// Per-attempt ResponseHeaderTimeout = remaining (clamped
+			// to the first-byte budget remaining at the start of this
+			// attempt). Non-streaming has no first-byte concept, so
+			// ResponseHeaderTimeout is the right knob. We always clone
+			// p.transport so the per-attempt timeout is honored.
+			if t1, ok := p.transport.(*http.Transport); ok {
+				clone := t1.Clone()
+				clone.ResponseHeaderTimeout = remaining
+				proxy.Transport = clone
 			} else {
 				proxy.Transport = p.transport
 			}
@@ -1113,9 +1119,14 @@ outer:
 func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byte, candidates []candidate, inputEstimate int, logEntry *model.RequestLog) {
 	logEntry.IsStream = true
 
-	// Wall-clock budget for the whole request — see forwardWithFailover
-	// for the full design rationale.
-	budgetCtx, budgetCancel := context.WithTimeout(r.Context(), maxRequestDuration)
+	// firstByteBudget is the rule-level maximum time the proxy is willing to
+	// wait for the first response byte from ANY upstream candidate (across all
+	// candidates and all per-target retries). The budget is ONLY counted before
+	// the first byte is received; once a response is established (streaming
+	// first byte committed), the budget stops.
+	firstByteBudget := candidates[0].firstByteBudget
+	firstByteDeadline := time.Now().Add(firstByteBudget)
+	budgetCtx, budgetCancel := context.WithDeadline(r.Context(), firstByteDeadline)
 	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
@@ -1246,11 +1257,14 @@ outer:
 				break
 			}
 
-			// Wall-clock budget. See forwardWithFailover for the
-			// full rationale. Skip this check if the underlying
-			// error is a client disconnect — that's a separate
-			// case handled by the backoff select below.
-			if budgetCtx.Err() != nil && !isClientDisconnect(budgetCtx.Err()) {
+			// First-byte budget. The rule-level budget is the total
+			// time the proxy will wait for the first response byte
+			// from ANY upstream candidate (across all candidates
+			// and all per-target retries). The check is purely a
+			// time check (time.Until(firstByteDeadline)) so the
+			// client-disconnect signal stays in the backoff select
+			// below where it can be distinguished via r.Context().
+			if remaining := time.Until(firstByteDeadline); remaining <= 0 {
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
 					AttemptOrder: attemptOrder,
@@ -1260,10 +1274,10 @@ outer:
 					TargetID:     c.targetID,
 					Status:       "budget_exceeded",
 					StatusCode:   0,
-					Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+					Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
 					LatencyMs:    0,
 				})
-				lastErr = fmt.Errorf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+				lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
 				lastStatus = http.StatusServiceUnavailable
 				attemptsCapped = true
 				break
@@ -1271,7 +1285,7 @@ outer:
 
 			// Backoff between attempts: fires before every attempt
 			// except the very first (totalAttempts==0). Interrupts
-			// on (a) client disconnect, (b) wall-clock budget
+			// on (a) client disconnect, (b) first-byte budget
 			// exhaustion, or (c) the planned delay elapsing. The
 			// 429/503 Retry-After header from the previous attempt
 			// is honored here instead of the computed exponential
@@ -1282,9 +1296,9 @@ outer:
 					delay = retryAfter
 					retryAfter = 0
 				}
-				// Cap the delay to the remaining wall-clock budget
+				// Cap the delay to the remaining first-byte budget
 				// so a hostile Retry-After: 86400 cannot pin us.
-				if remaining := time.Until(budgetDeadline(budgetCtx)); delay > remaining && remaining > 0 {
+				if remaining := time.Until(firstByteDeadline); delay > remaining && remaining > 0 {
 					delay = remaining
 				} else if remaining <= 0 {
 					delay = 0
@@ -1317,9 +1331,9 @@ outer:
 							"model", c.modelName,
 							"target", c.targetID)
 					} else {
-						// Wall-clock budget exhausted during backoff.
+						// First-byte budget exhausted during backoff.
 						logEntry.StatusCode = http.StatusServiceUnavailable
-						logEntry.Error = fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration)
+						logEntry.Error = fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget)
 						logEntry.ProviderID = c.provider.ID
 						logEntry.ProviderName = c.provider.Name
 						logEntry.Model = c.modelName
@@ -1334,12 +1348,12 @@ outer:
 							TargetID:     c.targetID,
 							Status:       "budget_exceeded",
 							StatusCode:   0,
-							Error:        fmt.Sprintf("request wall-clock budget (%s) exceeded", maxRequestDuration),
+							Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
 							LatencyMs:    0,
 						})
-						slog.Warn("proxy: stream request wall-clock budget exceeded during backoff",
+						slog.Warn("proxy: stream first-byte budget exceeded during backoff",
 							"provider", c.provider.Name,
-							"budget", maxRequestDuration)
+							"budget", firstByteBudget)
 					}
 					return
 				case <-time.After(delay):
@@ -1510,12 +1524,26 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	// the attempt fails fast and we failover. Once headers arrive,
 	// SSE providers send the first body chunk almost immediately,
 	// so the first-byte window is effectively covered.
-	timeout := c.timeout
+	//
+	// The budget is the rule-level firstByteBudget, but a single
+	// attempt should not wait longer than the remaining time until
+	// the first-byte deadline.
+	timeout := c.firstByteBudget
+	if dl, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(dl); remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
 	if timeout == 0 {
 		timeout = defaultFirstByteTimeout
 	}
 
-	attemptReq := r.Clone(ctx)
+	// Use r.Context() (NOT ctx/budgetCtx) so the body download is
+	// NOT cut off by the first-byte deadline — the budget is
+	// ONLY counted before the first byte is received. The
+	// first-byte deadline is enforced via the transport's
+	// ResponseHeaderTimeout (set below to `timeout`).
+	attemptReq := r.Clone(r.Context())
 	attemptReq.URL = cloneURL(upstreamURL)
 	attemptReq.Host = upstreamURL.Host
 	attemptReq.RequestURI = "" // outbound requests must have an empty RequestURI

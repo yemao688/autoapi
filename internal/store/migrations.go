@@ -319,6 +319,25 @@ ALTER TABLE request_logs ADD COLUMN request_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE rule_targets ADD COLUMN timeout_ms INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		// Per-RULE first-byte timeout. Replaces the per-target
+		// `timeout_ms` (kept for backward compatibility; the
+		// ModelRuleTarget no longer exposes it). The budget is the
+		// total time the proxy is willing to wait for the first
+		// response byte across ALL candidates and retries for this
+		// rule. 0 = use the proxy default. Stored in milliseconds for
+		// consistency with the legacy per-target column.
+		//
+		// Safe schema bump: the new column is added with a default
+		// of 0, and the SkipIfRedundant predicate below makes this
+		// idempotent against pre-existing DBs that may have picked
+		// up the same column under an older ID.
+		ID:              "014_model_rule_first_byte_timeout",
+		SkipIfRedundant: modelRulesHasFirstByteTimeout,
+		SQL: `
+ALTER TABLE model_rules ADD COLUMN first_byte_timeout_ms INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have
@@ -416,6 +435,44 @@ func ruleTargetsHasTimeout(tx *sql.Tx) (bool, error) {
 				return false, fmt.Errorf("store: scan pragma table_info: %w", err)
 			}
 			if name == "timeout_ms" {
+				rows.Close()
+				return true, nil
+			}
+		}
+		rows.Close()
+	}
+	return false, nil
+}
+
+// modelRulesHasFirstByteTimeout reports whether the
+// `first_byte_timeout_ms` column already exists on the model_rules
+// table. Used as a SkipIfRedundant predicate so the
+// 014_model_rule_first_byte_timeout migration is safe to ship on DBs
+// that picked up the same schema change under an earlier ID (the
+// _migrations row would otherwise be missing and the rename would
+// re-run the ADD COLUMN and fail with "duplicate column name").
+//
+// Also inspects the legacy `routes` table name (Phase 4 renamed it to
+// `model_rules`) so pre-Phase-4 DBs that picked up this column under
+// the old name are also covered.
+func modelRulesHasFirstByteTimeout(tx *sql.Tx) (bool, error) {
+	for _, table := range []string{"model_rules", "routes"} {
+		rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+		if err != nil {
+			// PRAGMA errors when the table doesn't exist; treat that as
+			// "not yet present" and continue to the next candidate.
+			continue
+		}
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltValue sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+				rows.Close()
+				return false, fmt.Errorf("store: scan pragma table_info: %w", err)
+			}
+			if name == "first_byte_timeout_ms" {
 				rows.Close()
 				return true, nil
 			}

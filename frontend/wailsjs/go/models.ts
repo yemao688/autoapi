@@ -523,7 +523,6 @@ export namespace model {
 	    provider_id: string;
 	    model_name: string;
 	    max_retries: number;
-	    timeout_seconds: number;
 	    hit_count: number;
 	    failure_count: number;
 	    enabled: boolean;
@@ -539,7 +538,6 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.model_name = source["model_name"];
 	        this.max_retries = source["max_retries"];
-	        this.timeout_seconds = source["timeout_seconds"];
 	        this.hit_count = source["hit_count"];
 	        this.failure_count = source["failure_count"];
 	        this.enabled = source["enabled"];
@@ -549,6 +547,7 @@ export namespace model {
 	    id: string;
 	    name: string;
 	    enabled: boolean;
+	    first_byte_timeout_seconds: number;
 	    created_at: number;
 	    updated_at: number;
 	    targets: ModelRuleTarget[];
@@ -564,6 +563,7 @@ export namespace model {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.enabled = source["enabled"];
+	        this.first_byte_timeout_seconds = source["first_byte_timeout_seconds"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
@@ -592,6 +592,7 @@ export namespace model {
 	export class ModelRuleInput {
 	    name: string;
 	    enabled: boolean;
+	    first_byte_timeout_seconds: number;
 	    targets: ModelRuleTarget[];
 	
 	    static createFrom(source: any = {}) {
@@ -602,6 +603,7 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.enabled = source["enabled"];
+	        this.first_byte_timeout_seconds = source["first_byte_timeout_seconds"];
 	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
 	    }
 	

@@ -85,12 +85,22 @@ type ApiKey struct {
 // provider/model pairs the request may be forwarded to. The list order from
 // the store is the user-defined order; ordering is preserved for stable
 // listing (ORDER BY created_at DESC).
+//
+// FirstByteTimeoutSeconds is the per-RULE maximum first-byte budget: the
+// total time the proxy is willing to wait for the first response byte from
+// ANY upstream candidate (across all candidates and all per-target retries)
+// before declaring "first-byte budget exceeded" and falling through. The
+// budget is ONLY counted before the first byte is received — once a
+// response is established (streaming first byte committed, or non-streaming
+// response fully buffered), the budget stops. 0 = use the proxy default
+// (60 seconds).
 type ModelRule struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Enabled   bool   `json:"enabled"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	ID                       string `json:"id"`
+	Name                     string `json:"name"`
+	Enabled                  bool   `json:"enabled"`
+	FirstByteTimeoutSeconds  int    `json:"first_byte_timeout_seconds"`
+	CreatedAt                int64  `json:"created_at"`
+	UpdatedAt                int64  `json:"updated_at"`
 
 	Targets []ModelRuleTarget `json:"targets"`
 
@@ -99,14 +109,16 @@ type ModelRule struct {
 	MonthlySavings float64 `json:"monthly_savings"`
 }
 
-// ModelRuleTarget is what happens when a rule is selected.
+// ModelRuleTarget is what happens when a rule is selected. The
+// per-target first-byte timeout moved to the enclosing ModelRule
+// (FirstByteTimeoutSeconds): the budget is now a per-rule concern
+// covering the total time across all candidates and retries.
 type ModelRuleTarget struct {
 	ID           string `json:"id"`
 	RuleID       string `json:"rule_id"`
 	ProviderID   string `json:"provider_id"`
 	ModelName    string `json:"model_name"`
 	MaxRetries     int    `json:"max_retries"`     // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
-	TimeoutSeconds int    `json:"timeout_seconds"` // 0 = use the default first-byte timeout; otherwise the per-target budget in seconds covering headers arrival + first response byte
 	HitCount     int64  `json:"hit_count"`     // incremented once on successful dispatch
 	FailureCount int64  `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
 	Enabled      bool   `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
@@ -344,9 +356,10 @@ type ProviderInput struct {
 }
 
 type ModelRuleInput struct {
-	Name    string            `json:"name"`
-	Enabled bool              `json:"enabled"`
-	Targets []ModelRuleTarget `json:"targets"`
+	Name                    string            `json:"name"`
+	Enabled                 bool              `json:"enabled"`
+	FirstByteTimeoutSeconds int               `json:"first_byte_timeout_seconds"`
+	Targets                 []ModelRuleTarget `json:"targets"`
 }
 
 // Note on `ModelRuleTarget.Enabled` in this input: a target with an empty ID

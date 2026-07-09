@@ -21,9 +21,11 @@ import (
 var errNoMatch = errors.New("no matching model rule")
 
 // defaultFirstByteTimeout is the budget for receiving the first response
-// byte from an upstream provider when no per-target override is set. It
-// covers both headers arrival and first byte read. LLMs can legitimately
-// take 30-60s post-header on large prompts, so 60s is conservative.
+// byte from an upstream provider when the rule's first_byte_timeout_seconds
+// is 0. It covers both headers arrival and first byte read. LLMs can
+// legitimately take 30-60s post-header on large prompts, so 60s is
+// conservative. The budget is only counted BEFORE the first byte is
+// received — once a response is established, the budget stops.
 const defaultFirstByteTimeout = 60 * time.Second
 
 // InboundRequest carries the request context used for model-rule lookup.
@@ -39,14 +41,21 @@ type InboundRequest struct {
 }
 
 // candidate is one possible provider/model the proxy can forward a request to.
+//
+// firstByteBudget is the rule-level maximum first-byte timeout: the
+// total time the proxy is willing to wait for the first response byte
+// from ANY upstream candidate (across all candidates and all per-target
+// retries) before declaring "first-byte budget exceeded" and falling
+// through. It is identical for every candidate in the same rule (the
+// budget is set on the rule, not the target).
 type candidate struct {
-	provider   *model.Provider
-	modelName  string
-	ruleID     string
-	ruleLabel  string
-	targetID   string
-	maxRetries int
-	timeout    time.Duration // 0 = use default first-byte timeout; otherwise per-target budget
+	provider        *model.Provider
+	modelName       string
+	ruleID          string
+	ruleLabel       string
+	targetID        string
+	maxRetries      int
+	firstByteBudget time.Duration
 }
 
 // selectCandidates picks the enabled model rule whose Name equals req.Model
@@ -75,6 +84,9 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 	}
 
 	var out []candidate
+	// Resolve the rule's first-byte budget ONCE; every candidate in
+	// the same rule shares the same budget.
+	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
 	for _, t := range rule.Targets {
 		// Disabled targets are skipped during candidate selection. The slice
 		// order (tier) is the source of truth for failover ordering, so this
@@ -90,13 +102,13 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 			return nil, fmt.Errorf("matched provider not found")
 		}
 		out = append(out, candidate{
-			provider:   p,
-			modelName:  modelNameForTarget(t.ModelName, req.Model),
-			ruleID:     rule.ID,
-			ruleLabel:  rule.Name,
-			targetID:   t.ID,
-			maxRetries: t.MaxRetries,
-			timeout:    targetTimeout(t.TimeoutSeconds),
+			provider:        p,
+			modelName:       modelNameForTarget(t.ModelName, req.Model),
+			ruleID:          rule.ID,
+			ruleLabel:       rule.Name,
+			targetID:        t.ID,
+			maxRetries:      t.MaxRetries,
+			firstByteBudget: firstByteBudget,
 		})
 	}
 
@@ -139,14 +151,13 @@ func modelNameForTarget(targetModel, requestModel string) string {
 	return requestModel
 }
 
-// targetTimeout converts a per-target timeout_seconds setting (0 = use default)
-// into a time.Duration for the candidate. A zero return value means
-// "use the default first-byte timeout"; the actual default is resolved
-// at the call site in forwardStream so this constant is only referenced
-// once.
-func targetTimeout(timeoutSeconds int) time.Duration {
+// firstByteTimeout converts the rule-level first_byte_timeout_seconds
+// setting (0 = use default) into a time.Duration. The returned duration
+// is the total budget the proxy will wait for the first byte across
+// ALL candidates and retries for the rule.
+func firstByteTimeout(timeoutSeconds int) time.Duration {
 	if timeoutSeconds > 0 {
 		return time.Duration(timeoutSeconds) * time.Second
 	}
-	return 0 // 0 signals "use defaultFirstByteTimeout"; resolved in forwardStream
+	return defaultFirstByteTimeout
 }
