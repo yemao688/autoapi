@@ -80,6 +80,17 @@ func (m *mockStore) InsertRequestLogsBatch(logs []model.RequestLog) error {
 	return nil
 }
 
+func (m *mockStore) UpdateRequestLogsBatch(logs []model.RequestLog) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	m.lastLog = logs[len(logs)-1]
+	m.hasLog = true
+	m.mu.Unlock()
+	return nil
+}
+
 func (m *mockStore) ListModels(providerID string) ([]model.Model, error) { return nil, nil }
 
 func (m *mockStore) GetSettings() (*model.Settings, error) {

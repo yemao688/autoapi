@@ -272,3 +272,91 @@ func (s *Store) ClearLogs() (int, error) {
 	slog.Info("store: cleared logs", "count", count)
 	return count, nil
 }
+
+// UpdateRequestLog updates an existing log row by ID with completion-time
+// fields. Used by the two-phase logging system: a pending row is inserted
+// at request start, then this method fills in status_code, output_tokens,
+// cost, latency, chain, etc. when the request finishes.
+func (s *Store) UpdateRequestLog(l model.RequestLog) error {
+	if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
+		l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+	}
+	chainJSON := chainJSONFor(l.Chain)
+	return s.execTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			UPDATE request_logs SET
+				status_code = ?,
+				provider_id = ?,
+				provider_name = ?,
+				model = ?,
+				input_tokens = ?,
+				output_tokens = ?,
+				cost = ?,
+				latency_ms = ?,
+				first_token_ms = ?,
+				is_stream = ?,
+				route_id = ?,
+				route_label = ?,
+				error = ?,
+				cache_creation = ?,
+				cache_hit = ?,
+				chain_json = ?
+			WHERE id = ?`,
+			l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
+			l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
+			l.RouteID, l.RouteLabel,
+			l.Error,
+			l.CacheCreation, l.CacheHit,
+			chainJSON,
+			l.ID)
+		return err
+	})
+}
+
+// UpdateRequestLogsBatch updates multiple log rows by ID in a single
+// transaction. Used by the logwriter's update flush loop.
+func (s *Store) UpdateRequestLogsBatch(logs []model.RequestLog) error {
+	return s.execTx(func(tx *sql.Tx) error {
+		stmt, err := tx.Prepare(`
+			UPDATE request_logs SET
+				status_code = ?,
+				provider_id = ?,
+				provider_name = ?,
+				model = ?,
+				input_tokens = ?,
+				output_tokens = ?,
+				cost = ?,
+				latency_ms = ?,
+				first_token_ms = ?,
+				is_stream = ?,
+				route_id = ?,
+				route_label = ?,
+				error = ?,
+				cache_creation = ?,
+				cache_hit = ?,
+				chain_json = ?
+			WHERE id = ?`)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, l := range logs {
+			if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
+				l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+			}
+			chainJSON := chainJSONFor(l.Chain)
+			if _, err := stmt.Exec(
+				l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
+				l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
+				l.RouteID, l.RouteLabel,
+				l.Error,
+				l.CacheCreation, l.CacheHit,
+				chainJSON,
+				l.ID,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

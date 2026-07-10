@@ -909,6 +909,15 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .badge.error { background: rgba(217, 48, 37, 0.1); color: #b3261e; }
 .badge.warn { background: rgba(245, 166, 35, 0.12); color: #ad6700; }
 .badge.info { background: var(--accent-soft); color: var(--accent); }
+.badge.pending {
+  background: rgba(0, 113, 227, 0.08);
+  color: var(--accent);
+  animation: pulse-pending 1.5s ease-in-out infinite;
+}
+@keyframes pulse-pending {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 
 .badge.mono {
   font-family: var(--font-mono);
@@ -1585,6 +1594,7 @@ html[data-theme="dark"] .badge.success { background: rgba(48, 209, 88, 0.14); co
 html[data-theme="dark"] .badge.error { background: rgba(255, 69, 58, 0.14); color: #ff6b61; }
 html[data-theme="dark"] .badge.warn { background: rgba(255, 159, 10, 0.14); color: #ffb340; }
 html[data-theme="dark"] .badge.info { background: var(--accent-soft); color: var(--accent); }
+html[data-theme="dark"] .badge.pending { background: rgba(0, 113, 227, 0.18); color: #4da3ff; }
 html[data-theme="dark"] .badge.mono { background: rgba(255, 255, 255, 0.06); color: var(--fg); }
 
 html[data-theme="dark"] .h-divider,

@@ -27,6 +27,25 @@ func (f *fakeBatchStore) InsertRequestLogsBatch(logs []model.RequestLog) error {
 	f.logs = append(f.logs, logs...)
 	return nil
 }
+func (f *fakeBatchStore) UpdateRequestLogsBatch(logs []model.RequestLog) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Simulate update: replace existing logs by ID
+	for _, l := range logs {
+		found := false
+		for i, existing := range f.logs {
+			if existing.ID == l.ID {
+				f.logs[i] = l
+				found = true
+				break
+			}
+		}
+		if !found {
+			f.logs = append(f.logs, l)
+		}
+	}
+	return nil
+}
 func (f *fakeBatchStore) ListModels(providerID string) ([]model.Model, error) { return nil, nil }
 func (f *fakeBatchStore) GetSettings() (*model.Settings, error)               { return &model.Settings{}, nil }
 func (f *fakeBatchStore) Dashboard() (*model.DashboardData, error) {

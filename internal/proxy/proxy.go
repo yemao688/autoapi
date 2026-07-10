@@ -138,6 +138,7 @@ type storeProxy interface {
 	GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error)
 	InsertRequestLog(l model.RequestLog) error
 	InsertRequestLogsBatch(logs []model.RequestLog) error
+	UpdateRequestLogsBatch(logs []model.RequestLog) error
 	ListModels(providerID string) ([]model.Model, error)
 	GetSettings() (*model.Settings, error)
 	Dashboard() (*model.DashboardData, error)
@@ -587,10 +588,11 @@ func (p *Proxy) writeError(w http.ResponseWriter, status int, typ, message strin
 	})
 }
 
-// logRequestEntry persists a request log. It treats a full log-writer queue
-// as a soft drop (per oracle) and does not fail the request.
+// logRequestEntry persists the final state of a request log. It updates the
+// row that was inserted at request start (by insertPendingLog) with
+// completion-time fields. It treats a full log-writer queue as a soft drop
+// and does not fail the request.
 func (p *Proxy) logRequestEntry(log *model.RequestLog) {
-	log.ID = newUUID()
 	if log.Timestamp == 0 {
 		log.Timestamp = time.Now().UnixMilli()
 	}
@@ -598,8 +600,26 @@ func (p *Proxy) logRequestEntry(log *model.RequestLog) {
 		// Defensive: should never happen after New.
 		return
 	}
+	if !p.writer.EnqueueUpdate(*log) {
+		slog.Warn("proxy: request log update dropped: writer queue full", "id", log.ID)
+	}
+}
+
+// insertPendingLog enqueues a pending log entry (status_code=0) at request
+// start so the user can see in-flight requests in the log table before they
+// complete. The entry's ID must be set by the caller; the same ID is used
+// by logRequestEntry (deferred) to update the row with completion fields.
+func (p *Proxy) insertPendingLog(log *model.RequestLog) {
+	log.ID = newUUID()
+	if log.Timestamp == 0 {
+		log.Timestamp = time.Now().UnixMilli()
+	}
+	log.StatusCode = 0 // 0 = pending; updated by logRequestEntry on completion
+	if p.writer == nil {
+		return
+	}
 	if !p.writer.Enqueue(*log) {
-		slog.Warn("proxy: request log dropped: writer queue full", "api_key_id", log.APIKeyID)
+		slog.Warn("proxy: pending log dropped: writer queue full", "model", log.Model)
 	}
 }
 

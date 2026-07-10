@@ -46,7 +46,7 @@ func chartRangeLabel(startDate, endDate int64) string {
 }
 
 func buildChartFilter(q model.UsageTrendsQuery) (where string, args []interface{}) {
-	where = "WHERE 1=1"
+	where = "WHERE status_code != 0"
 	args = []interface{}{}
 	if q.StartDate > 0 {
 		where += " AND timestamp_ms >= ?"

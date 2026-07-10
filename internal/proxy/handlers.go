@@ -131,6 +131,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// carries the client-facing model name the user requested.
 	logEntry.Model = chatReq.Model
 	logEntry.RouteLabel = chatReq.Model
+	logEntry.IsStream = chatReq.Stream
 
 	inbound := &InboundRequest{
 		Model:           chatReq.Model,
@@ -139,6 +140,13 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Task:            chatReq.Task,
 		TimeHour:        time.Now().Hour(),
 	}
+	logEntry.InputTokens = inbound.EstimatedTokens
+
+	// Insert a pending log row immediately so the user can see the
+	// in-flight request in the log table before it completes. The same
+	// row is updated with final status/tokens/cost/chain by the deferred
+	// logRequestEntry when the handler returns.
+	p.insertPendingLog(logEntry)
 
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
@@ -218,6 +226,8 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		Task:            "embeddings",
 		TimeHour:        time.Now().Hour(),
 	}
+	logEntry.InputTokens = inbound.EstimatedTokens
+	p.insertPendingLog(logEntry)
 
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
@@ -324,6 +334,8 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		Task:            task,
 		TimeHour:        time.Now().Hour(),
 	}
+	logEntry.InputTokens = inbound.EstimatedTokens
+	p.insertPendingLog(logEntry)
 
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {

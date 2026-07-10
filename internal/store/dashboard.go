@@ -81,7 +81,7 @@ func (s *Store) computeStats(startOfDay, startOfWeek, startOfMonth int64) ([]mod
 func (s *Store) sumTokensSince(startMs int64) int64 {
 	row := s.db.QueryRow(`
 		SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
-		FROM request_logs WHERE timestamp_ms >= ?`, startMs)
+		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, startMs)
 	var total int64
 	row.Scan(&total)
 	return total
@@ -103,7 +103,7 @@ func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(cost), 0)
 		FROM request_logs
-		WHERE timestamp_ms >= ?
+		WHERE timestamp_ms >= ? AND status_code != 0
 		GROUP BY day
 		ORDER BY day ASC`, cutoff)
 	if err != nil {

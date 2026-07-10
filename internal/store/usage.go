@@ -93,7 +93,7 @@ func (s *Store) tokenStats() ([]model.Stat, error) {
 func (s *Store) sumCostSince(startMs int64) float64 {
 	row := s.db.QueryRow(`
 		SELECT COALESCE(SUM(cost), 0)
-		FROM request_logs WHERE timestamp_ms >= ?`, startMs)
+		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, startMs)
 	var total float64
 	if err := row.Scan(&total); err != nil {
 		slog.Error("store: sumCostSince", "err", err)
@@ -102,7 +102,7 @@ func (s *Store) sumCostSince(startMs int64) float64 {
 }
 
 func (s *Store) countRequestsSince(startMs int64) int64 {
-	row := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE timestamp_ms >= ?`, startMs)
+	row := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, startMs)
 	var n int64
 	if err := row.Scan(&n); err != nil {
 		slog.Error("store: countRequestsSince scan failed", "err", err)
@@ -115,7 +115,7 @@ func (s *Store) providerShares() ([]model.ProviderShare, error) {
 	cutoff := time.Now().AddDate(0, 0, -30).UnixMilli()
 	rows, err := s.db.Query(`
 		SELECT COALESCE(provider_id, ''), COALESCE(provider_name, ''), COALESCE(SUM(input_tokens + output_tokens), 0), COALESCE(SUM(cost), 0)
-		FROM request_logs WHERE timestamp_ms >= ?
+		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0
 		GROUP BY provider_id ORDER BY 3 DESC`, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("store: provider shares: %w", err)
@@ -155,7 +155,7 @@ func (s *Store) modelRanking(limit int) ([]model.ModelRanking, error) {
 		       COUNT(*) AS reqs,
 		       COALESCE(SUM(input_tokens + output_tokens), 0),
 		       COALESCE(SUM(cost), 0)
-		FROM request_logs WHERE timestamp_ms >= ?
+		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0
 		GROUP BY model
 		ORDER BY reqs DESC
 		LIMIT ?`, cutoff, limit)
@@ -193,7 +193,7 @@ func (s *Store) logStats() ([]model.Stat, error) {
 	rows, err := s.db.Query(`
 		SELECT status_code, latency_ms,
 		       CASE WHEN error != '' THEN 1 ELSE 0 END AS has_err
-		FROM request_logs WHERE timestamp_ms >= ?`, cutoff)
+		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("store: log stats: %w", err)
 	}

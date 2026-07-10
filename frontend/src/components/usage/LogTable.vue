@@ -122,9 +122,10 @@ function timingClass(ms: number, green: number, orange: number): string {
 }
 
 function statusBadgeClass(statusCode: number): string {
+  if (statusCode === 0) return 'pending'
   if (statusCode >= 200 && statusCode < 300) return 'success'
   if (statusCode === 429) return 'warn'
-  if (statusCode >= 400 || statusCode === 0) return 'error'
+  if (statusCode >= 400) return 'error'
   return 'info'
 }
 
@@ -132,10 +133,12 @@ function statusDotClass(statusCode: number): string {
   const cls = statusBadgeClass(statusCode)
   if (cls === 'success') return 'green'
   if (cls === 'warn') return 'amber'
+  if (cls === 'pending') return 'blue'
   return 'red'
 }
 
 function statusText(statusCode: number): string {
+  if (statusCode === 0) return '···'
   return String(statusCode)
 }
 
