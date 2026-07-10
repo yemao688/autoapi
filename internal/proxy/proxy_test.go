@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -3466,5 +3468,196 @@ func waitForLog(t *testing.T, store *mockStore) model.RequestLog {
 			t.Fatalf("timed out waiting for log entry; status=%d", log.StatusCode)
 		case <-time.After(50 * time.Millisecond):
 		}
+	}
+}
+
+// TestChatMultimodal_Passthrough verifies that a chat request with an
+// image_url content block (vision/multimodal) is forwarded to the upstream
+// with the image data intact. The proxy must not strip or corrupt the
+// messages array.
+func TestChatMultimodal_Passthrough(t *testing.T) {
+	var upstreamBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		upstreamBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      "chatcmpl-vision",
+			"object":  "chat.completion",
+			"model":   "m1",
+			"choices": []map[string]interface{}{{"index": 0, "message": map[string]interface{}{"role": "assistant", "content": "It's a cat."}}},
+			"usage":   map[string]interface{}{"prompt_tokens": 10, "completion_tokens": 5},
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		rules: []model.ModelRule{
+			{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{
+				{ProviderID: "p0", ModelName: "m1", Enabled: true},
+			}},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	// Build a multimodal request with a base64 image in the messages.
+	// The image data is a small fake base64 string for testing.
+	fakeImageB64 := strings.Repeat("A", 1000)
+	reqBody := fmt.Sprintf(`{
+		"model": "vision-model",
+		"messages": [
+			{
+				"role": "user",
+				"content": [
+					{"type": "text", "text": "What's in this image?"},
+					{"type": "image_url", "image_url": {"url": "data:image/png;base64,%s"}}
+				]
+			}
+		]
+	}`, fakeImageB64)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify the upstream received the image data intact.
+	if !strings.Contains(upstreamBody, fakeImageB64) {
+		t.Fatalf("upstream body does not contain the base64 image data; got %d chars", len(upstreamBody))
+	}
+	if !strings.Contains(upstreamBody, "image_url") {
+		t.Fatalf("upstream body does not contain image_url field")
+	}
+	if !strings.Contains(upstreamBody, "m1") {
+		t.Fatalf("upstream body should have model rewritten to 'm1'")
+	}
+}
+
+// TestChatLargeMultimodalBody verifies that a chat body larger than 10 MiB
+// (the old limit) but under the new 50 MiB limit is accepted and forwarded.
+func TestChatLargeMultimodalBody(t *testing.T) {
+	var upstreamBodyLen int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		upstreamBodyLen = len(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":     "chatcmpl-big",
+			"object": "chat.completion",
+			"model":  "m1",
+			"usage":  map[string]interface{}{"prompt_tokens": 10, "completion_tokens": 5},
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		rules: []model.ModelRule{
+			{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{
+				{ProviderID: "p0", ModelName: "m1", Enabled: true},
+			}},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	// Build a body that's ~12 MiB: a base64 image of ~12MB.
+	// 12 MiB = 12 * 1024 * 1024 bytes. The JSON overhead is small.
+	fakeImageB64 := strings.Repeat("B", 12*1024*1024)
+	reqBody := fmt.Sprintf(`{"model":"vision-model","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"data:image/png;base64,%s"}}]}]}`, fakeImageB64)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for large multimodal body, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamBodyLen < 12*1024*1024 {
+		t.Fatalf("upstream body should be >= 12 MiB, got %d bytes", upstreamBodyLen)
+	}
+}
+
+// TestMultipartAudioTranscription verifies that the proxy can route a
+// multipart/form-data request (audio transcription) by extracting the model
+// field from the form, and that the raw multipart body is forwarded to the
+// upstream with its Content-Type preserved.
+func TestMultipartAudioTranscription(t *testing.T) {
+	var (
+		upstreamContentType string
+		upstreamBody        string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		upstreamBody = string(raw)
+		upstreamContentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"text": "Hello, world.",
+		})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		rules: []model.ModelRule{
+			{ID: "r1", Name: "whisper-1", Enabled: true, Targets: []model.ModelRuleTarget{
+				{ProviderID: "p0", ModelName: "whisper-1", Enabled: true},
+			}},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	// Build a multipart/form-data body with model=whisper-1 and a fake audio file.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	part, _ := mw.CreateFormFile("file", "audio.mp3")
+	_, _ = part.Write([]byte("FAKE_AUDIO_DATA_12345"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest("POST", "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for multipart audio, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify upstream received the multipart body with correct Content-Type.
+	if !strings.HasPrefix(upstreamContentType, "multipart/form-data") {
+		t.Fatalf("upstream Content-Type should be multipart/form-data, got %q", upstreamContentType)
+	}
+	if !strings.Contains(upstreamBody, "FAKE_AUDIO_DATA_12345") {
+		t.Fatalf("upstream body should contain the audio file data")
+	}
+	if !strings.Contains(upstreamBody, "whisper-1") {
+		t.Fatalf("upstream body should contain the model field 'whisper-1'")
+	}
+
+	// Verify the response was forwarded correctly.
+	if !strings.Contains(rec.Body.String(), "Hello, world") {
+		t.Fatalf("response should contain transcribed text, got %s", rec.Body.String())
 	}
 }

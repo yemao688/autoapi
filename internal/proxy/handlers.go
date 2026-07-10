@@ -7,12 +7,16 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"autoapi/internal/model"
@@ -20,7 +24,9 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-const maxBodySize = 10 << 20 // 10 MiB
+const maxBodySize = 10 << 20        // 10 MiB — embeddings and other small endpoints
+const maxChatBodySize = 50 << 20    // 50 MiB — chat completions (vision/multimodal with base64 images)
+const maxGenericBodySize = 50 << 20 // 50 MiB — generic OpenAI (audio transcription, file uploads, images)
 
 // clientIPFromAddr extracts the host portion of an HTTP RemoteAddr value
 // ("host:port" or, in pathological cases, "host"). It returns "" when
@@ -97,7 +103,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	logEntry.APIKeyID = apiKeyID
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBodySize))
 	if err != nil {
 		slog.Error("proxy: read request body failed", "path", r.URL.Path, "err", err)
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
@@ -258,7 +264,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	}
 	logEntry.APIKeyID = apiKeyID
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxGenericBodySize))
 	if err != nil {
 		slog.Error("proxy: read request body failed", "path", r.URL.Path, "err", err)
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
@@ -268,8 +274,21 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
-	var genericReq genericOpenAIRequest
-	_ = json.Unmarshal(body, &genericReq)
+	// For multipart/form-data endpoints (audio transcriptions, file
+	// uploads) the model field is in the form, not the JSON body. Try
+	// JSON first (images/generations sends JSON), then fall back to
+	// parsing the multipart form to extract the model name for routing.
+	var modelField string
+	if isMultipartRequest(r) {
+		modelField = extractMultipartModel(body, r)
+	} else {
+		var jr struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &jr)
+		modelField = jr.Model
+	}
+	genericReq := genericOpenAIRequest{Model: modelField}
 
 	var task string
 	switch r.URL.Path {
@@ -413,4 +432,43 @@ func extractHeaders(h http.Header) map[string]string {
 		}
 	}
 	return out
+}
+
+// isMultipartRequest reports whether the request body is multipart/form-data.
+// The /v1/audio/transcriptions and /v1/files endpoints use multipart encoding
+// so they can carry binary payloads (audio files, document uploads).
+func isMultipartRequest(r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	return strings.HasPrefix(ct, "multipart/form-data")
+}
+
+// extractMultipartModel reads the "model" field from a multipart/form-data
+// body without consuming it. The body has already been buffered into a byte
+// slice by the handler, so we reconstruct a reader and use mime/multipart to
+// parse just the form fields (ignoring file content). Returns "" if the body
+// cannot be parsed or the model field is absent.
+func extractMultipartModel(body []byte, r *http.Request) string {
+	//mime.ParseMediaType extracts boundary=xxxx from the Content-Type header.
+	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		return ""
+	}
+	mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return ""
+		}
+		if part.FormName() == "model" {
+			val, err := io.ReadAll(io.LimitReader(part, 1024))
+			if err != nil {
+				return ""
+			}
+			return strings.TrimSpace(string(val))
+		}
+	}
+	return ""
 }
