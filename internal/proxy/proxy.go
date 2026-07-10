@@ -985,6 +985,12 @@ outer:
 
 			buf := &responseBuffer{statusCode: 0, header: make(http.Header), body: bytes.NewBuffer(nil)}
 			var attemptErr error
+			// attemptRespBody captures the upstream response body read
+			// inside ModifyResponse so the failure branches below can
+			// include the actual upstream error message (e.g. OpenAI's
+			// error envelope with "model_not_found" or "invalid_parameter")
+			// in the log entry instead of just "returned status 400".
+			var attemptRespBody []byte
 			// attemptStart is captured immediately before ServeHTTP so the
 			// per-attempt latency is a tight measure of upstream round-trip,
 			// excluding any candidate-selection / body-rewrite work above.
@@ -997,6 +1003,7 @@ outer:
 				}
 				_ = resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+				attemptRespBody = respBody
 
 				if isStream {
 					it, ot := parseStreamUsage(respBody)
@@ -1091,6 +1098,12 @@ outer:
 			lastErr = attemptErr
 			if lastErr == nil {
 				lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, effectiveStatus)
+			}
+			// Enrich the error with the upstream's response body so the
+			// log entry carries actionable detail (e.g. "model_not_found"
+			// or "invalid_parameter") instead of just the status code.
+			if upstreamMsg := extractUpstreamError(attemptRespBody); upstreamMsg != "" {
+				lastErr = fmt.Errorf("%s: %s", lastErr.Error(), upstreamMsg)
 			}
 			lastStatus = effectiveStatus
 			if c.targetID != "" {

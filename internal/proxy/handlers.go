@@ -125,6 +125,13 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		chatReq.Task = "chat"
 	}
 
+	// Pre-populate log fields early so that even if the request is
+	// aborted (client disconnect, 499/0) or fails before the proxy loop
+	// assigns a specific upstream candidate, the log entry still
+	// carries the client-facing model name the user requested.
+	logEntry.Model = chatReq.Model
+	logEntry.RouteLabel = chatReq.Model
+
 	inbound := &InboundRequest{
 		Model:           chatReq.Model,
 		Header:          extractHeaders(r.Header),
@@ -199,6 +206,10 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		logEntry.Error = err.Error()
 		return
 	}
+
+	// Pre-populate log fields so aborts carry the model name.
+	logEntry.Model = embReq.Model
+	logEntry.RouteLabel = embReq.Model
 
 	inbound := &InboundRequest{
 		Model:           embReq.Model,
@@ -289,6 +300,10 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		modelField = jr.Model
 	}
 	genericReq := genericOpenAIRequest{Model: modelField}
+
+	// Pre-populate log fields so aborts carry the model name.
+	logEntry.Model = modelField
+	logEntry.RouteLabel = modelField
 
 	var task string
 	switch r.URL.Path {

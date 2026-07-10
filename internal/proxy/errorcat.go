@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -130,4 +131,60 @@ func isConnReset(err error) bool {
 		}
 	}
 	return false
+}
+
+// extractUpstreamError attempts to parse a human-readable error message from
+// an upstream HTTP response body. Most OpenAI-compatible APIs return errors in
+// the form {"error":{"message":"...","type":"...","code":"..."}}. If the body
+// is not valid JSON or does not contain an error field, the raw body (truncated
+// to 500 bytes) is returned as a fallback.
+//
+// The result is always <= 500 bytes so it fits in a log column without blowing
+// up the chain JSON.
+func extractUpstreamError(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	// Try OpenAI-style nested error envelope.
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Message != "" {
+		msg := envelope.Error.Message
+		if envelope.Error.Type != "" {
+			msg = envelope.Error.Type + ": " + msg
+		}
+		return truncateErr(msg)
+	}
+	// Some providers use a flat {"message":"..."} or {"detail":"..."} shape.
+	var flat struct {
+		Message string `json:"message"`
+		Detail  string `json:"detail"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &flat); err == nil {
+		if flat.Message != "" {
+			return truncateErr(flat.Message)
+		}
+		if flat.Detail != "" {
+			return truncateErr(flat.Detail)
+		}
+		if flat.Error != "" {
+			return truncateErr(flat.Error)
+		}
+	}
+	// Fallback: raw body truncated.
+	return truncateErr(string(body))
+}
+
+func truncateErr(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 500 {
+		return s[:497] + "..."
+	}
+	return s
 }

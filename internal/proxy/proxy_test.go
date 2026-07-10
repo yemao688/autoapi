@@ -3661,3 +3661,75 @@ func TestMultipartAudioTranscription(t *testing.T) {
 		t.Fatalf("response should contain transcribed text, got %s", rec.Body.String())
 	}
 }
+
+// TestUpstreamErrorBodyInLog verifies that when the upstream returns a
+// non-2xx response with an OpenAI-style error body, the detailed error
+// message from that body is captured in the log entry's Error field,
+// not just the status code.
+func TestUpstreamErrorBodyInLog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"model not found: minimax-m3","type":"invalid_request_error","code":"model_not_found"}}`))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		rules: []model.ModelRule{
+			{ID: "r1", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{
+				{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+			}},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	log := waitForLog(t, store)
+	if log.Error == "" {
+		t.Fatalf("expected non-empty log error")
+	}
+	if !strings.Contains(log.Error, "model not found: minimax-m3") {
+		t.Fatalf("log error should contain upstream error message, got: %s", log.Error)
+	}
+}
+
+// TestLogModelPopulatedOnAbort verifies that logEntry.Model is populated
+// even when the request fails before reaching a candidate (e.g. no
+// matching rule). The model field should carry the inbound model name.
+func TestLogModelPopulatedOnNoMatch(t *testing.T) {
+	store := &mockStore{
+		providers: map[string]*model.Provider{},
+		rules:     []model.ModelRule{},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"nonexistent-model","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+
+	log := waitForLog(t, store)
+	if log.Model != "nonexistent-model" {
+		t.Fatalf("expected log.Model = 'nonexistent-model', got %q", log.Model)
+	}
+	if log.RouteLabel != "nonexistent-model" {
+		t.Fatalf("expected log.RouteLabel = 'nonexistent-model', got %q", log.RouteLabel)
+	}
+}
