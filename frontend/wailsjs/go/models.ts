@@ -1,13 +1,13 @@
 export namespace api {
-
+	
 	export class ExportResult {
 	    filename: string;
 	    data: number[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExportResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.filename = source["filename"];
@@ -17,11 +17,11 @@ export namespace api {
 	export class ProxyStatus {
 	    running: boolean;
 	    url?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProxyStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.running = source["running"];
@@ -31,11 +31,11 @@ export namespace api {
 	export class RuntimePaths {
 	    storage_dir: string;
 	    log_path: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RuntimePaths(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.storage_dir = source["storage_dir"];
@@ -46,16 +46,16 @@ export namespace api {
 }
 
 export namespace model {
-
+	
 	export class AdvancedSettings {
 	    debug_mode: boolean;
 	    experimental: boolean;
 	    http_proxy: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.debug_mode = source["debug_mode"];
@@ -69,11 +69,11 @@ export namespace model {
 	    expires_at: number;
 	    created_at: number;
 	    updated_at: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ApiKey(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -86,11 +86,11 @@ export namespace model {
 	export class ApiKeyInput {
 	    name: string;
 	    expires_at: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ApiKeyInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -101,11 +101,11 @@ export namespace model {
 	    theme: string;
 	    density: string;
 	    accent_color: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AppearanceSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.theme = source["theme"];
@@ -123,11 +123,11 @@ export namespace model {
 	    http_count: number;
 	    proxy_url: string;
 	    api_address: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ServiceHealth(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
@@ -152,11 +152,11 @@ export namespace model {
 	    error: string;
 	    latency_ms: number;
 	    first_token_ms: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RequestLogChainEntry(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.attempt_order = source["attempt_order"];
@@ -194,11 +194,11 @@ export namespace model {
 	    client_ip: string;
 	    request_id: string;
 	    chain: RequestLogChainEntry[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RequestLog(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -224,7 +224,7 @@ export namespace model {
 	        this.request_id = source["request_id"];
 	        this.chain = this.convertValues(source["chain"], RequestLogChainEntry);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -257,11 +257,11 @@ export namespace model {
 	    is_custom: boolean;
 	    created_at: number;
 	    updated_at: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Provider(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -284,11 +284,11 @@ export namespace model {
 	    input_tokens: number;
 	    output_tokens: number;
 	    cost: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TokenTrendPoint(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.date = source["date"];
@@ -303,11 +303,11 @@ export namespace model {
 	    delta: string;
 	    trend: string;
 	    note?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Stat(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.label = source["label"];
@@ -323,11 +323,11 @@ export namespace model {
 	    providers: Provider[];
 	    recent_activity: RequestLog[];
 	    service_health: ServiceHealth;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DashboardData(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.stats = this.convertValues(source["stats"], Stat);
@@ -336,7 +336,7 @@ export namespace model {
 	        this.recent_activity = this.convertValues(source["recent_activity"], RequestLog);
 	        this.service_health = this.convertValues(source["service_health"], ServiceHealth);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -358,11 +358,11 @@ export namespace model {
 	export class DataSettings {
 	    log_retention_days: number;
 	    storage_path: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DataSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.log_retention_days = source["log_retention_days"];
@@ -373,11 +373,11 @@ export namespace model {
 	    method: string;
 	    path: string;
 	    desc: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Endpoint(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.method = source["method"];
@@ -390,11 +390,11 @@ export namespace model {
 	    startup_action: string;
 	    menu_bar_item: boolean;
 	    close_action: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new GeneralSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.launch_at_login = source["launch_at_login"];
@@ -413,11 +413,11 @@ export namespace model {
 	    search: string;
 	    page: number;
 	    page_size: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LogQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.start_date = source["start_date"];
@@ -434,17 +434,17 @@ export namespace model {
 	export class LogQueryResult {
 	    logs: RequestLog[];
 	    total: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LogQueryResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.logs = this.convertValues(source["logs"], RequestLog);
 	        this.total = source["total"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -469,11 +469,11 @@ export namespace model {
 	    max_size_mb: number;
 	    max_age_days: number;
 	    max_backups: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LoggingSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -493,11 +493,11 @@ export namespace model {
 	    latency_ms: number;
 	    updated_at: number;
 	    created_at: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Model(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -517,11 +517,11 @@ export namespace model {
 	    requests: number;
 	    tokens: number;
 	    cost: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ModelRanking(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.model = source["model"];
@@ -540,11 +540,11 @@ export namespace model {
 	    hit_count: number;
 	    failure_count: number;
 	    enabled: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ModelRuleTarget(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -567,11 +567,11 @@ export namespace model {
 	    targets: ModelRuleTarget[];
 	    monthly_hits: number;
 	    monthly_savings: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ModelRule(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -584,7 +584,7 @@ export namespace model {
 	        this.monthly_hits = source["monthly_hits"];
 	        this.monthly_savings = source["monthly_savings"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -608,11 +608,11 @@ export namespace model {
 	    enabled: boolean;
 	    first_byte_timeout_seconds: number;
 	    targets: ModelRuleTarget[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ModelRuleInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -620,7 +620,7 @@ export namespace model {
 	        this.first_byte_timeout_seconds = source["first_byte_timeout_seconds"];
 	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -639,16 +639,16 @@ export namespace model {
 		    return a;
 		}
 	}
-
+	
 	export class ModelTestResult {
 	    ok: boolean;
 	    latency_ms: number;
 	    error?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ModelTestResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
@@ -656,17 +656,17 @@ export namespace model {
 	        this.error = source["error"];
 	    }
 	}
-
+	
 	export class ProviderInput {
 	    name: string;
 	    base_url: string;
 	    upstream_key: string;
 	    is_custom: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProviderInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -681,11 +681,11 @@ export namespace model {
 	    tokens: number;
 	    cost: number;
 	    percent: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProviderShare(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.provider_id = source["provider_id"];
@@ -700,11 +700,11 @@ export namespace model {
 	    latency_ms: number;
 	    error?: string;
 	    models: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProviderTestResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
@@ -713,13 +713,15 @@ export namespace model {
 	        this.models = source["models"];
 	    }
 	}
+	
+	
 	export class RoutingSettings {
 	    streaming_sse: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RoutingSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.streaming_sse = source["streaming_sse"];
@@ -728,18 +730,18 @@ export namespace model {
 	export class ServerSettings {
 	    port: number;
 	    bind_address: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ServerSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.port = source["port"];
 	        this.bind_address = source["bind_address"];
 	    }
 	}
-
+	
 	export class Settings {
 	    general: GeneralSettings;
 	    appearance: AppearanceSettings;
@@ -748,11 +750,11 @@ export namespace model {
 	    data: DataSettings;
 	    advanced: AdvancedSettings;
 	    logging: LoggingSettings;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.general = this.convertValues(source["general"], GeneralSettings);
@@ -763,7 +765,7 @@ export namespace model {
 	        this.advanced = this.convertValues(source["advanced"], AdvancedSettings);
 	        this.logging = this.convertValues(source["logging"], LoggingSettings);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -782,6 +784,8 @@ export namespace model {
 		    return a;
 		}
 	}
+	
+	
 	export class UsageStats {
 	    token_stats: Stat[];
 	    token_trend_30: TokenTrendPoint[];
@@ -790,11 +794,11 @@ export namespace model {
 	    log_stats: Stat[];
 	    logs: RequestLog[];
 	    log_total: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UsageStats(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.token_stats = this.convertValues(source["token_stats"], Stat);
@@ -805,7 +809,7 @@ export namespace model {
 	        this.logs = this.convertValues(source["logs"], RequestLog);
 	        this.log_total = source["log_total"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -831,11 +835,11 @@ export namespace model {
 	    cache_hit: number;
 	    input: number;
 	    output: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UsageTrendBucket(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.bucket = source["bucket"];
@@ -850,18 +854,18 @@ export namespace model {
 	    range: string;
 	    bucket_size: string;
 	    buckets: UsageTrendBucket[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UsageTrends(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.range = source["range"];
 	        this.bucket_size = source["bucket_size"];
 	        this.buckets = this.convertValues(source["buckets"], UsageTrendBucket);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -887,11 +891,11 @@ export namespace model {
 	    route_id: string;
 	    model: string;
 	    search: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UsageTrendsQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.start_date = source["start_date"];
@@ -904,3 +908,4 @@ export namespace model {
 	}
 
 }
+
