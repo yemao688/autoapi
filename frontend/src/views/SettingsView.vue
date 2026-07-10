@@ -331,7 +331,7 @@ watch(activeTheme, (t) => {
       <div class="col-3-7">
 
         <!-- Section nav -->
-        <aside style="position: sticky; top: 0; align-self: flex-start;">
+        <aside class="settings-nav-aside">
           <nav class="stack-tight" style="padding: 4px 0;">
             <a
               class="sub-nav-item"

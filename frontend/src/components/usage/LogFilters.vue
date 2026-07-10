@@ -72,7 +72,7 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
     <select
       :value="dateRangePreset"
       class="select"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px; flex: 0 0 auto;"
       :aria-label="t('usage.filters.presetAria')"
       @change="onDateRangeChange"
     >
@@ -81,7 +81,7 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
     <select
       :value="provider"
       class="select"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px; flex: 0 0 auto;"
       :aria-label="t('usage.filters.providerAria')"
       @change="onProviderChange"
     >
@@ -90,7 +90,7 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
     <select
       :value="route"
       class="select"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px; flex: 0 0 auto;"
       :aria-label="t('usage.filters.routeAria')"
       @change="onRouteChange"
     >
@@ -100,7 +100,7 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       :value="model"
       type="text"
       class="input"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px; min-width: 140px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px; min-width: 0; flex: 1 1 120px;"
       :placeholder="t('usage.filters.modelPlaceholder')"
       :aria-label="t('usage.filters.modelAria')"
       @input="onModelInput"
@@ -109,7 +109,7 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       :value="search"
       type="text"
       class="input"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px; min-width: 160px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px; min-width: 0; flex: 1 1 120px;"
       :placeholder="t('usage.filters.searchPlaceholder')"
       :aria-label="t('usage.filters.searchAria')"
       @input="onSearchInput"
@@ -118,7 +118,7 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       v-if="showStatus"
       :value="status"
       class="select"
-      style="width: auto; padding: 5px 10px; font-size: 12.5px;"
+      style="width: auto; padding: 5px 10px; font-size: 12.5px; flex: 0 0 auto;"
       :aria-label="t('usage.filters.statusAria')"
       @change="onStatusChange"
     >

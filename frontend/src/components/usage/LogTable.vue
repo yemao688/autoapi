@@ -167,6 +167,7 @@ const columnCount = computed(() => columns)
 </script>
 
 <template>
+  <div class="tbl-wrap">
   <table class="tbl">
     <thead>
       <tr>
@@ -319,6 +320,7 @@ const columnCount = computed(() => columns)
       </tr>
     </tbody>
   </table>
+  </div>
 </template>
 
 <style scoped>
