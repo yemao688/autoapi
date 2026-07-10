@@ -307,6 +307,10 @@ func (s *Service) Decrypt(ciphertext, nonce []byte) ([]byte, error) {
 		return nil, fmt.Errorf("service: aes gcm: %w", err)
 	}
 
+	if len(nonce) != gcm.NonceSize() {
+		return nil, fmt.Errorf("service: decrypt: invalid nonce length %d, expected %d", len(nonce), gcm.NonceSize())
+	}
+
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("service: decrypt: %w", err)

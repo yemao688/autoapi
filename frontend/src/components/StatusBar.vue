@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
+import { usePolling } from '@/composables/usePolling'
 
 const { t } = useI18n()
 
@@ -47,17 +48,11 @@ async function copyApiAddress() {
   }
 }
 
-let timer: ReturnType<typeof setInterval> | null = null
-
-onMounted(() => {
-  void loadHealth()
-  timer = setInterval(() => void loadHealth(), 5000)
-})
-
 onUnmounted(() => {
-  if (timer) clearInterval(timer)
   if (copyTimer) clearTimeout(copyTimer)
 })
+
+usePolling(loadHealth, 30000)
 </script>
 
 <template>

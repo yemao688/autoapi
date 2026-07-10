@@ -53,6 +53,7 @@ type StoreService interface {
 	ListModels(providerID string) ([]model.Model, error)
 	SetModelsActive(providerID string, modelNames []string, active bool) error
 	DeleteModel(providerID, modelName string) error
+	ClearProviderModels(providerID string) error
 	UpdateModelName(providerID, oldName, newName string) error
 	RecalcModelsCount(providerID string) error
 	UpdateProviderTestResult(id string, status model.ProviderStatus, avgLatency int, errMsg string) error
@@ -76,6 +77,7 @@ type StoreService interface {
 	UpdateModelRule(id string, in model.ModelRuleInput) (*model.ModelRule, error)
 	DeleteModelRule(id string) error
 	ReorderModelRules(orderedIDs []string) error // no-op kept for API compatibility
+	ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) error
 
 	// Logs & stats
 	QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error)
@@ -440,6 +442,14 @@ func (a *App) DeleteModel(providerID, modelName string) error {
 	return a.deps.Store.DeleteModel(providerID, modelName)
 }
 
+// ClearProviderModels removes all models for a provider.
+func (a *App) ClearProviderModels(providerID string) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	return a.deps.Store.ClearProviderModels(providerID)
+}
+
 // UpdateModelName renames a model in a provider's catalog. Both names are
 // trimmed; an empty new name is rejected.
 func (a *App) UpdateModelName(providerID, oldName, newName string) error {
@@ -538,6 +548,16 @@ func (a *App) ReorderModelRules(orderedIDs []string) error {
 		return errNotImpl
 	}
 	return a.deps.Store.ReorderModelRules(orderedIDs)
+}
+
+// ReorderModelRuleTargets reorders the targets within a model rule by updating
+// only their tier values. Unlike UpdateModelRule, it does NOT delete or recreate
+// targets — counters and IDs are fully preserved.
+func (a *App) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	return a.deps.Store.ReorderModelRuleTargets(ruleID, orderedTargetIDs)
 }
 
 // ----- Dashboard / usage -----

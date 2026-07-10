@@ -773,12 +773,6 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   overflow: hidden;
 }
 
-.stat-card.dark {
-  background: var(--black);
-  color: white;
-  border-color: transparent;
-}
-
 .stat-label {
   font-size: 11px;
   font-weight: 600;
@@ -786,8 +780,6 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
-
-.stat-card.dark .stat-label { color: rgba(255, 255, 255, 0.55); }
 
 .stat-value {
   font-family: var(--font-display);
@@ -805,8 +797,6 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: var(--muted);
   margin-left: 2px;
 }
-
-.stat-card.dark .stat-value .unit { color: rgba(255, 255, 255, 0.55); }
 
 .stat-meta {
   display: flex;

@@ -144,6 +144,53 @@ func TestModels(t *testing.T) {
 	}
 }
 
+func TestClearProviderModels(t *testing.T) {
+	s := newTestStore(t)
+
+	p, _ := s.CreateProvider(model.ProviderInput{Name: "Clear Me", BaseURL: "https://clear.example.com"})
+	other, _ := s.CreateProvider(model.ProviderInput{Name: "Other", BaseURL: "https://other.example.com"})
+
+	if err := s.UpsertModels(p.ID, []model.Model{{Name: "m1"}, {Name: "m2"}, {Name: "m3"}}); err != nil {
+		t.Fatalf("UpsertModels: %v", err)
+	}
+	if err := s.UpsertModels(other.ID, []model.Model{{Name: "o1"}}); err != nil {
+		t.Fatalf("UpsertModels other: %v", err)
+	}
+
+	if err := s.ClearProviderModels(p.ID); err != nil {
+		t.Fatalf("ClearProviderModels: %v", err)
+	}
+
+	models, err := s.ListModels(p.ID)
+	if err != nil {
+		t.Fatalf("ListModels after clear: %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("expected 0 models, got %d", len(models))
+	}
+
+	got, err := s.GetProvider(p.ID)
+	if err != nil {
+		t.Fatalf("GetProvider after clear: %v", err)
+	}
+	if got.ModelsCount != 0 {
+		t.Fatalf("expected models_count 0, got %d", got.ModelsCount)
+	}
+
+	// Idempotent second call.
+	if err := s.ClearProviderModels(p.ID); err != nil {
+		t.Fatalf("ClearProviderModels idempotent: %v", err)
+	}
+
+	otherModels, err := s.ListModels(other.ID)
+	if err != nil {
+		t.Fatalf("ListModels other: %v", err)
+	}
+	if len(otherModels) != 1 {
+		t.Fatalf("expected other provider to keep 1 model, got %d", len(otherModels))
+	}
+}
+
 // ---------------------------------------------------------------------------
 //  API Key CRUD (simple access token model)
 // ---------------------------------------------------------------------------
@@ -563,6 +610,94 @@ func TestModelRuleClampsNegativeMaxRetries(t *testing.T) {
 	// And the existing target ID was preserved (not a new row).
 	if updated.Targets[0].ID != r.Targets[0].ID {
 		t.Fatalf("expected target ID preserved (%q), got %q", r.Targets[0].ID, updated.Targets[0].ID)
+	}
+}
+
+// TestReorderModelRuleTargets verifies the non-destructive reorder API: only the
+// tier column changes, IDs are preserved, and counters are untouched. It also
+// rejects malformed inputs (count mismatch, unknown ID, duplicate ID).
+func TestReorderModelRuleTargets(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create a rule with three targets.
+	r, err := s.CreateModelRule(model.ModelRuleInput{
+		Name:    "Reorder Target Test",
+		Enabled: true,
+		Targets: []model.ModelRuleTarget{
+			{ProviderID: "p01", ModelName: "m1"}, // tier 0
+			{ProviderID: "p01", ModelName: "m2"}, // tier 1
+			{ProviderID: "p02", ModelName: "m3"}, // tier 2
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateModelRule: %v", err)
+	}
+	if len(r.Targets) != 3 {
+		t.Fatalf("expected 3 targets, got %d", len(r.Targets))
+	}
+	m1, m2, m3 := r.Targets[0], r.Targets[1], r.Targets[2]
+
+	// Set distinct counters so we can prove preservation.
+	if err := s.IncrementTargetStats(m1.ID, 5, 2); err != nil {
+		t.Fatalf("IncrementTargetStats[m1]: %v", err)
+	}
+	if err := s.IncrementTargetStats(m2.ID, 3, 7); err != nil {
+		t.Fatalf("IncrementTargetStats[m2]: %v", err)
+	}
+	if err := s.IncrementTargetStats(m3.ID, 1, 0); err != nil {
+		t.Fatalf("IncrementTargetStats[m3]: %v", err)
+	}
+
+	// Reorder: swap first and last, so the new order is [m3, m2, m1].
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m3.ID, m2.ID, m1.ID}); err != nil {
+		t.Fatalf("ReorderModelRuleTargets: %v", err)
+	}
+
+	post, err := s.GetModelRule(r.ID)
+	if err != nil {
+		t.Fatalf("GetModelRule (post): %v", err)
+	}
+	if len(post.Targets) != 3 {
+		t.Fatalf("expected 3 targets after reorder, got %d", len(post.Targets))
+	}
+
+	// Verify order and ID preservation.
+	want := []struct {
+		id    string
+		model string
+		hit   int64
+		fail  int64
+	}{
+		{m3.ID, "m3", 1, 0},
+		{m2.ID, "m2", 3, 7},
+		{m1.ID, "m1", 5, 2},
+	}
+	for i, w := range want {
+		if post.Targets[i].ID != w.id {
+			t.Fatalf("post[%d]: id got %q, want %q", i, post.Targets[i].ID, w.id)
+		}
+		if post.Targets[i].ModelName != w.model {
+			t.Fatalf("post[%d]: model got %q, want %q", i, post.Targets[i].ModelName, w.model)
+		}
+		if post.Targets[i].HitCount != w.hit || post.Targets[i].FailureCount != w.fail {
+			t.Fatalf("post[%d]: counters got %d/%d, want %d/%d", i,
+				post.Targets[i].HitCount, post.Targets[i].FailureCount, w.hit, w.fail)
+		}
+	}
+
+	// Wrong number of IDs must fail.
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID}); err == nil {
+		t.Fatal("expected error for wrong ID count, got nil")
+	}
+
+	// Unknown ID must fail.
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID, m3.ID, "unknown-id"}); err == nil {
+		t.Fatal("expected error for unknown ID, got nil")
+	}
+
+	// Duplicate ID must fail.
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m1.ID, m2.ID}); err == nil {
+		t.Fatal("expected error for duplicate ID, got nil")
 	}
 }
 

@@ -983,7 +983,7 @@ outer:
 				}
 			}
 
-			buf := &responseBuffer{statusCode: http.StatusOK, header: make(http.Header), body: bytes.NewBuffer(nil)}
+			buf := &responseBuffer{statusCode: 0, header: make(http.Header), body: bytes.NewBuffer(nil)}
 			var attemptErr error
 			// attemptStart is captured immediately before ServeHTTP so the
 			// per-attempt latency is a tight measure of upstream round-trip,
@@ -1024,7 +1024,17 @@ outer:
 
 			proxy.ServeHTTP(buf, attemptReq)
 
-			cat := CategorizeError(attemptErr, buf.statusCode)
+			// effectiveStatus is the status code used for chain logging and retry
+			// categorization. If the upstream never wrote a response (ModifyResponse
+			// error, connection drop before headers), buf.statusCode is 0 (unset) and
+			// buf.wrote is false. In that case, treat it as 502 Bad Gateway for error
+			// classification purposes — the upstream did NOT return a 200.
+			effectiveStatus := buf.statusCode
+			if attemptErr != nil && !buf.wrote {
+				effectiveStatus = http.StatusBadGateway
+			}
+
+			cat := CategorizeError(attemptErr, effectiveStatus)
 			finalCat = cat
 			finalAttemptErr = attemptErr
 			latencyMs := int(time.Since(attemptStart).Milliseconds())
@@ -1033,10 +1043,10 @@ outer:
 				"model", c.modelName,
 				"attempt", attempt,
 				"category", cat,
-				"status", buf.statusCode,
+				"status", effectiveStatus,
 				"err", attemptErr)
 
-			if attemptErr == nil && buf.statusCode < 400 {
+			if attemptErr == nil && effectiveStatus < 400 {
 				// SUCCESS — copy response, record breaker + hit counter once.
 				copyBufferedResponse(w, buf)
 				logEntry.StatusCode = buf.statusCode
@@ -1053,7 +1063,7 @@ outer:
 					ModelName:    c.modelName,
 					TargetID:     c.targetID,
 					Status:       "success",
-					StatusCode:   buf.statusCode,
+					StatusCode:   effectiveStatus,
 					Error:        "",
 					LatencyMs:    latencyMs,
 				})
@@ -1080,9 +1090,9 @@ outer:
 			// FAILED attempt — record failure counter on every failed attempt.
 			lastErr = attemptErr
 			if lastErr == nil {
-				lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, buf.statusCode)
+				lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, effectiveStatus)
 			}
-			lastStatus = buf.statusCode
+			lastStatus = effectiveStatus
 			if c.targetID != "" {
 				if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
 					slog.Error("proxy: increment target failure count", "err", err)
@@ -1107,7 +1117,7 @@ outer:
 					ModelName:    c.modelName,
 					TargetID:     c.targetID,
 					Status:       "client_abort",
-					StatusCode:   buf.statusCode,
+					StatusCode:   effectiveStatus,
 					Error:        lastErr.Error(),
 					LatencyMs:    latencyMs,
 				})
@@ -1115,7 +1125,7 @@ outer:
 				slog.Warn("proxy: client abort",
 					"provider", c.provider.Name,
 					"model", c.modelName,
-					"status", buf.statusCode,
+					"status", effectiveStatus,
 					"err", lastErr.Error())
 				return
 			case CategoryNonRetryable:
@@ -1135,7 +1145,7 @@ outer:
 					ModelName:    c.modelName,
 					TargetID:     c.targetID,
 					Status:       "non_retryable",
-					StatusCode:   buf.statusCode,
+					StatusCode:   effectiveStatus,
 					Error:        lastErr.Error(),
 					LatencyMs:    latencyMs,
 				})
@@ -1168,6 +1178,16 @@ outer:
 						retryAfter = v
 					}
 				}
+				chainErr := attemptErr
+				if attemptErr != nil {
+					if errors.Is(attemptErr, io.ErrUnexpectedEOF) || errors.Is(attemptErr, io.EOF) {
+						chainErr = fmt.Errorf("upstream response truncated")
+					} else if isConnReset(attemptErr) {
+						chainErr = fmt.Errorf("upstream response truncated")
+					}
+				} else if lastErr != nil {
+					chainErr = lastErr
+				}
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
 					AttemptOrder: attemptOrder,
@@ -1176,8 +1196,8 @@ outer:
 					ModelName:    c.modelName,
 					TargetID:     c.targetID,
 					Status:       "retryable",
-					StatusCode:   buf.statusCode,
-					Error:        lastErr.Error(),
+					StatusCode:   effectiveStatus,
+					Error:        chainErr.Error(),
 					LatencyMs:    latencyMs,
 				})
 				continue

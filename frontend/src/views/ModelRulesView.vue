@@ -298,16 +298,12 @@ async function onTargetsReorder(rule: model.ModelRule) {
   reorderingRules.value.add(rule.id)
   reorderingRules.value = new Set(reorderingRules.value)
   try {
-    // Persist the new order. updateRuleTargets reads `rule.targets` (now
-    // already mutated by the v-model) and sends it through. We deliberately
-    // do NOT toast on success here: reorder feels "live" and a toast on
-    // every drag would be noisy. Errors are still surfaced.
-    const ok = await updateRuleTargets(rule, [...rule.targets])
-    if (!ok) {
-      // Reload on failure so the local array snaps back to the server's
-      // order; otherwise the UI would lie about the persisted state.
-      await loadRules()
-    }
+    const targetIds = rule.targets.map(t => t.id)
+    await api.reorderRuleTargets(rule.id, targetIds)
+    // Silent success — no toast on reorder (matches existing UX)
+  } catch (e: any) {
+    toast.push(t('toast.targetsUpdateFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
+    await loadRules()
   } finally {
     reorderingRules.value.delete(rule.id)
     reorderingRules.value = new Set(reorderingRules.value)
@@ -473,6 +469,7 @@ onMounted(() => {
                 <VueDraggable
                   v-model="rule.targets"
                   :animation="150"
+                  :disabled="isReorderingRule(rule.id)"
                   handle=".drag-handle"
                   class="rule-target-list"
                   @end="onTargetsReorder(rule)"

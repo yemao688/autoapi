@@ -403,6 +403,27 @@ async function deleteModelConfirm(m: model.Model) {
   }
 }
 
+async function clearAllModels() {
+  if (!editingId.value) return
+  const ok = await confirm.open({
+    title: t('providers.clearModels'),
+    message: t('providers.clearModelsConfirm'),
+    confirmText: t('common.delete'),
+    danger: true,
+  })
+  if (!ok) return
+  mutationBusy.value = true
+  try {
+    await api.clearProviderModels(editingId.value)
+    models.value = []
+    toast.push(t('providers.modelsCleared'), 'success')
+  } catch (e: any) {
+    toast.push(t('providers.modelsClearFailed') + ': ' + (e?.message || ''), 'error')
+  } finally {
+    mutationBusy.value = false
+  }
+}
+
 async function toggleModelActive(m: model.Model) {
   if (!editingId.value) return
   try {
@@ -820,6 +841,14 @@ onMounted(() => {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
                 {{ fetchingModels ? t('providers.modal.fetching') : t('providers.modal.fetchModels') }}
               </button>
+              <button
+                class="btn btn-danger-text"
+                style="padding: 4px 10px; font-size: 12px;"
+                :disabled="mutationBusy || models.length === 0"
+                @click="clearAllModels"
+              >
+                {{ t('providers.clearModels') }}
+              </button>
             </div>
           </div>
 
@@ -1002,3 +1031,19 @@ onMounted(() => {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.btn-danger-text {
+  background: transparent;
+  color: var(--negative);
+  border: 1px solid transparent;
+}
+.btn-danger-text:hover:not(:disabled) {
+  background: rgba(217, 48, 37, 0.06);
+  border-color: var(--negative);
+}
+.btn-danger-text:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+</style>

@@ -8,6 +8,8 @@ export function AddProviderModels(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function ClearLogs():Promise<number>;
 
+export function ClearProviderModels(arg1:string):Promise<void>;
+
 export function CreateAPIKey(arg1:model.ApiKeyInput):Promise<model.ApiKey>;
 
 export function CreateModelRule(arg1:model.ModelRuleInput):Promise<model.ModelRule>;
@@ -69,6 +71,8 @@ export function PurgeLogs(arg1:number):Promise<number>;
 export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;
 
 export function Quit():Promise<void>;
+
+export function ReorderModelRuleTargets(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function ReorderModelRules(arg1:Array<string>):Promise<void>;
 

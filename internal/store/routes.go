@@ -340,7 +340,7 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 			if _, err := tx.Exec(`
 				INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, enabled)
 				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+				t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 				return nil, err
 			}
 		} else {
@@ -363,6 +363,55 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 		out[i] = t
 	}
 	return out, nil
+}
+
+// ReorderModelRuleTargets updates the tier (display order / failover priority)
+// of targets within a rule. It verifies that the provided IDs exactly match the
+// rule's current target set (no additions, no deletions) and then updates only
+// the tier column. This is a safe, non-destructive reorder that preserves all
+// target data (counters, provider, model name, etc.).
+func (s *Store) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) error {
+	return s.execTx(func(tx *sql.Tx) error {
+		// 1. Verify the incoming IDs exactly match the rule's current targets.
+		rows, err := tx.Query(`SELECT id FROM rule_targets WHERE rule_id = ?`, ruleID)
+		if err != nil {
+			return fmt.Errorf("store: reorder targets %q: %w", ruleID, err)
+		}
+		defer rows.Close()
+		existing := make(map[string]bool)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			existing[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// Check count match
+		if len(orderedTargetIDs) != len(existing) {
+			return fmt.Errorf("store: reorder targets %q: id count mismatch (got %d, expected %d)", ruleID, len(orderedTargetIDs), len(existing))
+		}
+		// Check each incoming ID exists in the rule
+		seen := make(map[string]bool, len(orderedTargetIDs))
+		for _, id := range orderedTargetIDs {
+			if !existing[id] {
+				return fmt.Errorf("store: reorder targets %q: unknown target id %q", ruleID, id)
+			}
+			if seen[id] {
+				return fmt.Errorf("store: reorder targets %q: duplicate target id %q", ruleID, id)
+			}
+			seen[id] = true
+		}
+		// 2. Update tier for each target.
+		for i, id := range orderedTargetIDs {
+			if _, err := tx.Exec(`UPDATE rule_targets SET tier = ? WHERE id = ? AND rule_id = ?`, i, id, ruleID); err != nil {
+				return fmt.Errorf("store: reorder targets %q: %w", ruleID, err)
+			}
+		}
+		return nil
+	})
 }
 
 // IncrementTargetStats bumps the per-target hit/failure counters. It is called

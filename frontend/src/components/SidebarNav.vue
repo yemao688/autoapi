@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
+import { usePolling } from '@/composables/usePolling'
 
 const route = useRoute()
 
@@ -24,20 +25,11 @@ function isActive(to: string): boolean {
   return route.path === to
 }
 
-let timer: ReturnType<typeof setInterval> | null = null
-
 async function refresh() {
   await Promise.all([loadProviders(), loadModelRules()])
 }
 
-onMounted(() => {
-  void refresh()
-  timer = setInterval(() => void refresh(), 5000)
-})
-
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
-})
+usePolling(refresh, 30000)
 </script>
 
 <template>

@@ -277,6 +277,10 @@
     "moreActions": "更多操作：{name}",
     "loading": "加载中…",
     "loadFailed": "加载失败：{error}",
+    "clearModels": "清空模型",
+    "clearModelsConfirm": "确定要清空所有模型吗？此操作不可撤销。",
+    "modelsCleared": "模型已清空",
+    "modelsClearFailed": "清空模型失败",
     "status": {
       "connected": "已连接",
       "error": "异常",
@@ -536,6 +540,7 @@
       "hitModel": "命中模型",
       "input": "输入",
       "inputCache": "缓存",
+      "usageUnavailable": "用量数据不可用",
       "output": "输出",
       "cost": "成本",
       "totalCost": "总成本",
@@ -594,7 +599,8 @@
     "settings": "设置",
     "confirm": "确认",
     "processing": "处理中…",
-    "unknown": "未知"
+    "unknown": "未知",
+    "noMatches": "无匹配项"
   },
   "status": {
     "serviceRunning": "服务运行中",

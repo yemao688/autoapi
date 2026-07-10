@@ -316,6 +316,24 @@ func (s *Store) DeleteModel(providerID, modelName string) error {
 	})
 }
 
+// ClearProviderModels removes all models for a provider and resets models_count.
+func (s *Store) ClearProviderModels(providerID string) error {
+	return s.execTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM models WHERE provider_id = ?`, providerID)
+		if err != nil {
+			return fmt.Errorf("store: clear provider models %q: %w", providerID, err)
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return nil // idempotent: no models to delete
+		}
+		if _, err := tx.Exec(`UPDATE providers SET models_count = 0, updated_at = ? WHERE id = ?`, nowMs(), providerID); err != nil {
+			return fmt.Errorf("store: clear provider models %q: reset count: %w", providerID, err)
+		}
+		return nil
+	})
+}
+
 // UpdateModelName renames a model in a provider's catalog.
 func (s *Store) UpdateModelName(providerID, oldName, newName string) error {
 	now := nowMs()

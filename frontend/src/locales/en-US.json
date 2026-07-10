@@ -277,6 +277,10 @@
     "moreActions": "More actions: {name}",
     "loading": "Loading…",
     "loadFailed": "Load failed: {error}",
+    "clearModels": "Clear All Models",
+    "clearModelsConfirm": "Are you sure you want to clear all models? This cannot be undone.",
+    "modelsCleared": "Models cleared",
+    "modelsClearFailed": "Failed to clear models",
     "status": {
       "connected": "Connected",
       "error": "Error",
@@ -536,6 +540,7 @@
       "hitModel": "Upstream",
       "input": "Input",
       "inputCache": "Cache",
+      "usageUnavailable": "Usage data unavailable",
       "output": "Output",
       "cost": "Cost",
       "totalCost": "Cost",
@@ -594,7 +599,8 @@
     "settings": "Settings",
     "confirm": "Confirm",
     "processing": "Processing…",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "noMatches": "No matches"
   },
   "status": {
     "serviceRunning": "Service running",

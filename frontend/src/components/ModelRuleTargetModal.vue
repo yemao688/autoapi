@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useToast } from '@/composables/useToast'
+import AutoComplete from '@/components/AutoComplete.vue'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -172,16 +173,12 @@ async function testModel() {
         </div>
         <div class="field">
           <label class="field-label">{{ t('modelRules.targets.model') }}</label>
-          <input
+          <AutoComplete
             v-model="form.model_name"
-            class="input"
+            :options="availableModels"
             :placeholder="loadingModels ? t('modelRules.targets.loadingModels') : t('modelRules.targets.modelPlaceholder')"
             :disabled="saving || !form.provider_id"
-            list="available-models-list"
-          >
-          <datalist id="available-models-list">
-            <option v-for="name in availableModels" :key="name" :value="name" />
-          </datalist>
+          />
           <div v-if="form.provider_id && availableModels.length" class="field-help">
             {{ t('modelRules.targets.modelHelp', { count: availableModels.length }) }}
           </div>

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -77,5 +78,40 @@ func TestDecryptWithoutKey(t *testing.T) {
 	_, err := svc.Decrypt([]byte("ct"), []byte("nonce"))
 	if err == nil {
 		t.Fatal("expected error when decrypting without key, got nil")
+	}
+}
+
+func TestDecryptInvalidNonceLength(t *testing.T) {
+	svc := &Service{}
+	svc.encKey = make([]byte, 32)
+	for i := range svc.encKey {
+		svc.encKey[i] = byte(i)
+	}
+
+	plaintext := []byte("secret data")
+	ciphertext, _, err := svc.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	_, err = svc.Decrypt(ciphertext, []byte("nonce-p01")) // 9 bytes, wrong length
+	if err == nil {
+		t.Fatal("expected error for invalid nonce length, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid nonce length") {
+		t.Fatalf("expected error to contain 'invalid nonce length', got: %v", err)
+	}
+}
+
+func TestDecryptEmptyCiphertext(t *testing.T) {
+	svc := &Service{}
+	svc.encKey = make([]byte, 32)
+	for i := range svc.encKey {
+		svc.encKey[i] = byte(i)
+	}
+
+	_, err := svc.Decrypt([]byte{}, []byte{})
+	if err == nil {
+		t.Fatal("expected error when decrypting empty ciphertext, got nil")
 	}
 }

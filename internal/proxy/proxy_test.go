@@ -3207,3 +3207,264 @@ func TestFailover_RuleFirstByteBudgetExceeded(t *testing.T) {
 		t.Fatalf("expected at least 1 upstream hit before budget fired, got %d", hits)
 	}
 }
+
+// TestFailover_TruncatedNonStreaming verifies that when an upstream sends a
+// Content-Length header but closes the connection before the full body is
+// delivered, the proxy retries, classifies the attempt as retryable with a
+// synthetic 502 status code, and logs a clear "upstream response truncated"
+// error in the chain — NOT a misleading 200.
+func TestFailover_TruncatedNonStreaming(t *testing.T) {
+	var p0Hits, p1Hits int
+	// p0 hijacks the connection and sends a Content-Length header but closes
+	// before the full body, triggering io.ErrUnexpectedEOF in the proxy.
+	p0Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p0Hits++
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("hijacker not available")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		defer conn.Close()
+		// Send headers claiming 1000 bytes, then only 100 bytes of body.
+		headers := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n"
+		body := strings.Repeat("x", 100)
+		_, _ = conn.Write([]byte(headers + body))
+	}))
+	defer p0Srv.Close()
+
+	p1Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chatcmpl-p1",
+			"model": "m1",
+			"usage": map[string]interface{}{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer p1Srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL},
+			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 1, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after failover, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "chatcmpl-p1") {
+		t.Fatalf("expected response from P1, got %s", rec.Body.String())
+	}
+	// MaxRetries=1 -> 1 initial + 1 retry = 2 attempts on P0, then failover to P1.
+	if p0Hits != 2 {
+		t.Fatalf("expected P0 hit 2 times (1 + maxRetries), got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once after P0 exhaustion, got %d", p1Hits)
+	}
+
+	log := waitForLog(t, store)
+	if len(log.Chain) != 3 {
+		t.Fatalf("expected 3 chain entries (2 P0 retries + 1 P1 success), got %d: %+v", len(log.Chain), log.Chain)
+	}
+	for i := 0; i < 2; i++ {
+		p0Entry := log.Chain[i]
+		if p0Entry.StatusCode != http.StatusBadGateway {
+			t.Fatalf("P0 attempt %d: expected truncated chain status 502, got %d", i+1, p0Entry.StatusCode)
+		}
+		if p0Entry.Status != "retryable" {
+			t.Fatalf("P0 attempt %d: expected chain status 'retryable', got %q", i+1, p0Entry.Status)
+		}
+		if p0Entry.Error != "upstream response truncated" {
+			t.Fatalf("P0 attempt %d: expected chain error 'upstream response truncated', got %q", i+1, p0Entry.Error)
+		}
+	}
+	p1Entry := log.Chain[2]
+	if p1Entry.StatusCode != http.StatusOK {
+		t.Fatalf("expected P1 chain status 200, got %d", p1Entry.StatusCode)
+	}
+	if p1Entry.Status != "success" {
+		t.Fatalf("expected P1 chain status 'success', got %q", p1Entry.Status)
+	}
+}
+
+// TestFailover_SuccessImplicit200 verifies that an upstream which writes a body
+// without calling WriteHeader still records status 200 in the chain entry.
+// This guards the responseBuffer.Write path that sets the implicit status code.
+func TestFailover_SuccessImplicit200(t *testing.T) {
+	var p0Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p0Hits++
+		// Deliberately do NOT call WriteHeader; the responseBuffer.Write path
+		// should set the implicit 200 status code.
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-implicit","object":"chat.completion","model":"m0"}`))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if p0Hits != 1 {
+		t.Fatalf("expected P0 hit once, got %d", p0Hits)
+	}
+
+	log := waitForLog(t, store)
+	if log.StatusCode != http.StatusOK {
+		t.Fatalf("expected log status 200, got %d", log.StatusCode)
+	}
+	if len(log.Chain) != 1 {
+		t.Fatalf("expected 1 chain entry, got %d: %+v", len(log.Chain), log.Chain)
+	}
+	if log.Chain[0].StatusCode != http.StatusOK {
+		t.Fatalf("expected chain status 200, got %d", log.Chain[0].StatusCode)
+	}
+	if log.Chain[0].Status != "success" {
+		t.Fatalf("expected chain status 'success', got %q", log.Chain[0].Status)
+	}
+}
+
+// TestFailover_AllCandidatesTruncated verifies that when every upstream
+// candidate truncates its response body, the final client response is 503
+// (Service Unavailable), all chain entries show synthetic 502 with "upstream
+// response truncated", and the top-level log status is 503.
+func TestFailover_AllCandidatesTruncated(t *testing.T) {
+	truncateHandler := func(hitCounter *int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			*hitCounter++
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("hijacker not available")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("hijack: %v", err)
+			}
+			defer conn.Close()
+			headers := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n"
+			body := strings.Repeat("x", 100)
+			_, _ = conn.Write([]byte(headers + body))
+		}
+	}
+
+	var p0Hits, p1Hits int
+	p0Srv := httptest.NewServer(http.HandlerFunc(truncateHandler(&p0Hits)))
+	defer p0Srv.Close()
+	p1Srv := httptest.NewServer(http.HandlerFunc(truncateHandler(&p1Hits)))
+	defer p1Srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL},
+			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+					{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	// All candidates truncated → exhaustion → 503 (lastStatus=502 >= 500 → 503).
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 after all candidates truncated, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if p0Hits != 1 {
+		t.Fatalf("expected P0 hit once (MaxRetries=0), got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once (MaxRetries=0), got %d", p1Hits)
+	}
+
+	log := waitForLog(t, store)
+	if log.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected log status 503, got %d", log.StatusCode)
+	}
+	if len(log.Chain) != 2 {
+		t.Fatalf("expected 2 chain entries (1 per candidate), got %d: %+v", len(log.Chain), log.Chain)
+	}
+	for i, entry := range log.Chain {
+		if entry.StatusCode != http.StatusBadGateway {
+			t.Fatalf("chain entry %d: expected synthetic 502, got %d", i, entry.StatusCode)
+		}
+		if entry.Error != "upstream response truncated" {
+			t.Fatalf("chain entry %d: expected 'upstream response truncated', got %q", i, entry.Error)
+		}
+	}
+}
+
+func waitForLog(t *testing.T, store *mockStore) model.RequestLog {
+	t.Helper()
+	deadline, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		log, ok := store.LastLog()
+		if ok && log.StatusCode != 0 {
+			return log
+		}
+		select {
+		case <-deadline.Done():
+			log, _ := store.LastLog()
+			t.Fatalf("timed out waiting for log entry; status=%d", log.StatusCode)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}

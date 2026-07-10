@@ -110,7 +110,15 @@ function formatTime(ts: number): string {
 function formatLatency(ms: number): string {
   if (ms <= 0) return '—'
   if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(2)}s`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+/** Returns a CSS class for latency-based color coding. */
+function timingClass(ms: number, green: number, orange: number): string {
+  if (ms <= 0) return ''
+  if (ms < green) return 'timing-fast'
+  if (ms < orange) return 'timing-medium'
+  return 'timing-slow'
 }
 
 function statusBadgeClass(statusCode: number): string {
@@ -228,25 +236,25 @@ const columnCount = computed(() => columns)
           <!-- 5. Input (with cache sub-line) -->
           <td class="num">
             <div class="cell-tokens">
-              <span>{{ log.input_tokens > 0 ? log.input_tokens.toLocaleString() : '—' }}</span>
+              <span :title="log.input_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.input_tokens > 0 ? log.input_tokens.toLocaleString() : '—' }}</span>
               <span v-if="log.cache_hit > 0" class="cache-sub" :title="t('usage.logTable.inputCache')">R{{ log.cache_hit.toLocaleString() }}</span>
             </div>
           </td>
 
           <!-- 6. Output -->
-          <td class="num">{{ log.output_tokens > 0 ? log.output_tokens.toLocaleString() : '—' }}</td>
+          <td class="num"><span :title="log.output_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.output_tokens > 0 ? log.output_tokens.toLocaleString() : '—' }}</span></td>
 
           <!-- 7. Total cost -->
-          <td class="num">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</td>
+          <td class="num"><span :title="log.cost > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</span></td>
 
           <!-- 8. TTFT / Latency + stream suffix + expand chevron -->
           <td class="right cell-timing">
             <div class="timing-values">
               <template v-if="log.first_token_ms > 0">
-                <span class="timing-ttft">{{ (log.first_token_ms / 1000).toFixed(2) }}s</span>
+                <span class="timing-ttft" :class="timingClass(log.first_token_ms, 1000, 3000)">{{ (log.first_token_ms / 1000).toFixed(1) }}s</span>
                 <span class="timing-sep">/</span>
               </template>
-              <span class="timing-latency">{{ (log.latency_ms / 1000).toFixed(2) }}s</span>
+              <span class="timing-latency" :class="timingClass(log.latency_ms, 3000, 8000)">{{ (log.latency_ms / 1000).toFixed(1) }}s</span>
               <span class="stream-suffix" :class="log.is_stream ? 'stream' : 'nostream'">{{ log.is_stream ? t('usage.logTable.streamSuffix') : t('usage.logTable.nonStreamSuffix') }}</span>
             </div>
             <span
@@ -420,6 +428,9 @@ const columnCount = computed(() => columns)
   font-weight: 500;
   color: var(--fg);
 }
+.timing-ttft.timing-fast { color: var(--positive); }
+.timing-ttft.timing-medium { color: var(--warning); }
+.timing-ttft.timing-slow { color: var(--negative); }
 .timing-sep {
   color: var(--muted);
   font-size: 11px;
@@ -428,6 +439,9 @@ const columnCount = computed(() => columns)
 .timing-latency {
   color: var(--muted);
 }
+.timing-latency.timing-fast { color: var(--positive); }
+.timing-latency.timing-medium { color: var(--warning); }
+.timing-latency.timing-slow { color: var(--negative); }
 .stream-suffix {
   display: inline-flex;
   align-items: center;

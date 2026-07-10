@@ -10,6 +10,10 @@ export function ClearLogs() {
   return window['go']['api']['App']['ClearLogs']();
 }
 
+export function ClearProviderModels(arg1) {
+  return window['go']['api']['App']['ClearProviderModels'](arg1);
+}
+
 export function CreateAPIKey(arg1) {
   return window['go']['api']['App']['CreateAPIKey'](arg1);
 }
@@ -132,6 +136,10 @@ export function QueryLogs(arg1) {
 
 export function Quit() {
   return window['go']['api']['App']['Quit']();
+}
+
+export function ReorderModelRuleTargets(arg1, arg2) {
+  return window['go']['api']['App']['ReorderModelRuleTargets'](arg1, arg2);
 }
 
 export function ReorderModelRules(arg1) {

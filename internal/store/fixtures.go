@@ -37,10 +37,10 @@ func seedIfEmpty(db *sql.DB) {
 		isCustom                  bool
 	}
 	providers := []providerSeed{
-		{"p01", "OpenAI", "https://api.openai.com", "connected", []byte("enc-openai-p01"), []byte("nonce-p01"), "sk-proj-****3fA9", 4, 3420000, 320, false},
-		{"p02", "Anthropic", "https://api.anthropic.com", "connected", []byte("enc-anthropic-p02"), []byte("nonce-p02"), "sk-ant-****Bc12", 3, 890000, 480, false},
-		{"p03", "DeepSeek", "https://api.deepseek.com", "connected", []byte("enc-deepseek-p03"), []byte("nonce-p03"), "sk-deep-****9xY7", 2, 2100000, 210, false},
-		{"p04", "Moonshot", "https://api.moonshot.cn", "error", []byte("enc-moonshot-p04"), []byte("nonce-p04"), "ms-****KpL2", 1, 450000, 680, false},
+		{"p01", "OpenAI", "https://api.openai.com", "connected", []byte{}, []byte{}, "sk-proj-****3fA9", 4, 3420000, 320, false},
+		{"p02", "Anthropic", "https://api.anthropic.com", "connected", []byte{}, []byte{}, "sk-ant-****Bc12", 3, 890000, 480, false},
+		{"p03", "DeepSeek", "https://api.deepseek.com", "connected", []byte{}, []byte{}, "sk-deep-****9xY7", 2, 2100000, 210, false},
+		{"p04", "Moonshot", "https://api.moonshot.cn", "error", []byte{}, []byte{}, "ms-****KpL2", 1, 450000, 680, false},
 		{"p05", "GLM", "https://open.bigmodel.cn/api/paas/v4", "unknown", []byte{}, []byte{}, "", 0, 0, 0, false},
 	}
 	for _, p := range providers {

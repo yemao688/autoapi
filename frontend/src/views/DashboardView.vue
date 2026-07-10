@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
+import { usePolling } from '@/composables/usePolling'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
 
@@ -18,7 +19,6 @@ const { data: dashboardData, loading, execute: fetchDashboard } = useApi(api.das
 const { data: proxyStatus, execute: fetchProxyStatus } = useApi(api.proxyStatus)
 
 const initialLoading = ref(true)
-let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const stats = computed(() => dashboardData.value?.stats || [])
 const recentActivity = computed(() => dashboardData.value?.recent_activity.slice(0, 10) || [])
@@ -87,16 +87,7 @@ async function exportReport() {
   await download('all_json')
 }
 
-onMounted(() => {
-  void fetchAll()
-  pollTimer = setInterval(() => {
-    void fetchAll()
-  }, 5000)
-})
-
-onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer)
-})
+usePolling(fetchAll, 15000)
 </script>
 
 <template>
@@ -123,7 +114,6 @@ onUnmounted(() => {
           v-for="(stat, idx) in stats"
           :key="stat.label + idx"
           class="stat-card"
-          :class="{ dark: stat.label === 'dashboard.stats.activeProviders' }"
         >
           <div class="stat-label">{{ t(stat.label) }}</div>
           <div class="stat-value">{{ stat.value }}</div>

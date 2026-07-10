@@ -62,6 +62,10 @@ export const api = {
     ensureWails()
     return wails.DeleteModel(providerId, modelName) as Promise<void>
   },
+  clearProviderModels: (providerId: string): Promise<void> => {
+    ensureWails()
+    return wails.ClearProviderModels(providerId) as Promise<void>
+  },
   updateModelName: (providerId: string, oldName: string, newName: string): Promise<void> => {
     ensureWails()
     return wails.UpdateModelName(providerId, oldName, newName) as Promise<void>
@@ -95,6 +99,10 @@ export const api = {
   updateModelRule: (id: string, input: model.ModelRuleInput): Promise<model.ModelRule> => {
     ensureWails()
     return wails.UpdateModelRule(id, input) as Promise<model.ModelRule>
+  },
+  reorderRuleTargets: (ruleId: string, targetIds: string[]): Promise<void> => {
+    ensureWails()
+    return wails.ReorderModelRuleTargets(ruleId, targetIds) as Promise<void>
   },
   deleteModelRule: (id: string): Promise<void> => {
     ensureWails()

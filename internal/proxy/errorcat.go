@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"syscall"
 )
 
@@ -107,6 +108,26 @@ func isNetError(err error) bool {
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) || errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+	return false
+}
+
+// isConnReset reports whether the error indicates the upstream connection was
+// reset or closed prematurely — a truncated response. This catches raw
+// *net.OpError connection-reset errors that don't unwrap to io.ErrUnexpectedEOF.
+func isConnReset(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		s := opErr.Err.Error()
+		if strings.Contains(s, "connection reset") || strings.Contains(s, "broken pipe") {
+			return true
+		}
 	}
 	return false
 }
