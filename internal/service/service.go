@@ -10,6 +10,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -338,7 +339,7 @@ func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, er
 	}
 
 	status := model.ProviderStatusConnected
-	if err := s.store.UpdateProviderTestResult(providerID, status, len(models), latencyMs, ""); err != nil {
+	if err := s.store.UpdateProviderTestResult(providerID, status, latencyMs, ""); err != nil {
 		return nil, fmt.Errorf("service: update provider test result: %w", err)
 	}
 
@@ -353,9 +354,8 @@ func (s *Service) TestProvider(providerID string) (*model.ProviderTestResult, er
 	}, nil
 }
 
-// FetchUpstreamModels loads a provider's upstream model list from /v1/models,
-// upserts them into the local database (preserving active/latency state), and
-// returns the persisted list.
+// FetchUpstreamModels loads a provider's upstream model list from /v1/models and
+// returns the raw upstream model list without modifying the local database.
 func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) {
 	prov, err := s.store.GetProvider(providerID)
 	if err != nil {
@@ -421,18 +421,10 @@ func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) 
 		}
 	}
 
-	if err := s.store.UpsertModels(providerID, models); err != nil {
-		return nil, fmt.Errorf("service: upsert models: %w", err)
-	}
-
-	stored, err := s.store.ListModels(providerID)
-	if err != nil {
-		return nil, err
-	}
 	slog.Info("service: fetch upstream models succeeded",
 		"provider_id", providerID, "provider_name", prov.Name,
-		"count", len(stored), "latency_ms", latencyMs)
-	return stored, nil
+		"count", len(models), "latency_ms", latencyMs)
+	return models, nil
 }
 
 // TestModelLatency returns the latency recorded for a single model by
@@ -459,9 +451,12 @@ func (s *Service) TestModelLatency(providerID, modelName string) (*model.ModelTe
 	}
 
 	if err := s.store.UpdateModelLatency(providerID, modelName, latencyMs); err != nil {
-		return nil, fmt.Errorf("service: update model latency: %w", err)
+		// Model exists upstream but not in local catalog — that's fine for a test.
+		// Only tolerate ErrNotFound; surface real persistence errors.
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("service: update model latency: %w", err)
+		}
 	}
-
 	return &model.ModelTestResult{OK: true, LatencyMs: latencyMs}, nil
 }
 
@@ -512,6 +507,38 @@ func (s *Service) TestAllProviders() ([]model.ProviderTestResult, error) {
 	slog.Info("service: test all providers complete",
 		"total", len(providers), "success", success, "failed", failed)
 	return results, nil
+}
+
+// AddProviderModels adds model names to a provider's local catalog. Names are
+// AddProviderModels adds model names to a provider's local catalog. Names are
+// trimmed and deduplicated. Existing models are not modified (insert-or-ignore).
+// The provider's models_count is recalculated within the same transaction.
+func (s *Service) AddProviderModels(providerID string, names []string) error {
+	// Trim and deduplicate
+	seen := make(map[string]bool)
+	var models []model.Model
+	now := time.Now().UnixMilli()
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		models = append(models, model.Model{
+			ProviderID: providerID,
+			Name:       name,
+			Active:     true,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		})
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	if err := s.store.InsertModelsIfAbsent(providerID, models); err != nil {
+		return fmt.Errorf("service: add provider models: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

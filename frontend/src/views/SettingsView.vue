@@ -27,6 +27,61 @@ const runtimePaths = ref<apiModels.RuntimePaths | null>(null)
 const runtimePathsLoading = ref(false)
 const runtimePathsError = ref<string | null>(null)
 
+// Proxy service status
+const proxyRunning = ref<boolean | null>(null)
+const proxyBusy = ref(false)
+
+async function refreshProxyStatus() {
+  try {
+    const status = await api.proxyStatus()
+    proxyRunning.value = status.running
+  } catch {
+    proxyRunning.value = null
+  }
+}
+
+async function handleStartProxy() {
+  proxyBusy.value = true
+  try {
+    await api.startProxy()
+    await refreshProxyStatus()
+    toast.push(t('settings.server.started'), 'success')
+  } catch (e: any) {
+    toast.push((e?.message || String(e)), 'error')
+    await refreshProxyStatus()
+  } finally {
+    proxyBusy.value = false
+  }
+}
+
+async function handleStopProxy() {
+  proxyBusy.value = true
+  try {
+    await api.stopProxy()
+    await refreshProxyStatus()
+    toast.push(t('settings.server.stopped'), 'success')
+  } catch (e: any) {
+    toast.push((e?.message || String(e)), 'error')
+    await refreshProxyStatus()
+  } finally {
+    proxyBusy.value = false
+  }
+}
+
+async function handleRestartProxy() {
+  proxyBusy.value = true
+  try {
+    await api.restartProxy()
+    await refreshProxyStatus()
+    toast.push(t('settings.server.restarted'), 'success')
+  } catch (e: any) {
+    toast.push((e?.message || String(e)), 'error')
+    await refreshProxyStatus()
+  } finally {
+    proxyBusy.value = false
+  }
+}
+
 function defaultSettings(): model.Settings {
   return {
     general: {
@@ -235,6 +290,7 @@ function notImplemented() {
 onMounted(() => {
   void loadSettings()
   void loadRuntimePaths()
+  void refreshProxyStatus()
 })
 
 watch(activeTheme, (t) => {
@@ -581,6 +637,56 @@ watch(activeTheme, (t) => {
                 <div class="section-sub">{{ t('settings.server.subtitle') }}</div>
               </div>
             </div>
+
+            <div class="field">
+              <div class="row-between" style="flex-wrap: wrap; gap: 12px;">
+                <div>
+                  <div class="field-label">{{ t('settings.server.serviceStatus') }}</div>
+                  <div class="row" style="gap: 6px; align-items: center; margin-top: 4px;">
+                    <span class="dot" :class="proxyRunning ? 'green' : 'red'"></span>
+                    <span v-if="proxyRunning === null" class="text-muted" style="font-size: 13px;">{{ t('settings.server.statusUnknown') }}</span>
+                    <span v-else-if="proxyRunning" style="font-size: 13px; font-weight: 500;">{{ t('settings.server.statusRunning') }}</span>
+                    <span v-else style="font-size: 13px; font-weight: 500; color: var(--negative);">{{ t('settings.server.statusStopped') }}</span>
+                  </div>
+                </div>
+                <div class="row" style="gap: 8px;">
+                  <button
+                    v-if="!proxyRunning"
+                    class="btn btn-primary"
+                    style="font-size: 12.5px; padding: 5px 14px;"
+                    :disabled="proxyBusy || isDirty"
+                    :title="isDirty ? t('settings.server.saveFirst') : ''"
+                    @click="handleStartProxy"
+                  >
+                    <svg viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px;"><path d="M8 5v14l11-7z"/></svg>
+                    {{ t('settings.server.start') }}
+                  </button>
+                  <button
+                    v-else
+                    class="btn btn-secondary"
+                    style="font-size: 12.5px; padding: 5px 14px;"
+                    :disabled="proxyBusy || isDirty"
+                    :title="isDirty ? t('settings.server.saveFirst') : ''"
+                    @click="handleStopProxy"
+                  >
+                    <svg viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px;"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                    {{ t('settings.server.stop') }}
+                  </button>
+                  <button
+                    v-if="proxyRunning"
+                    class="btn btn-secondary"
+                    style="font-size: 12.5px; padding: 5px 14px;"
+                    :disabled="proxyBusy || isDirty"
+                    :title="isDirty ? t('settings.server.saveFirst') : ''"
+                    @click="handleRestartProxy"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+                    {{ t('settings.server.restart') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="h-divider"></div>
 
             <div class="field">
               <div class="field-label">{{ t('settings.server.port') }}</div>

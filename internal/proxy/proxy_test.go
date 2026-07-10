@@ -159,7 +159,7 @@ func TestCurrentSettingsDefaultPortFallbacks(t *testing.T) {
 
 func TestNewZeroDefaultPortFallback(t *testing.T) {
 	p := New(&mockStore{}, nil, 0, nil)
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	settings, err := p.currentSettings()
 	if err != nil {
 		t.Fatalf("currentSettings: %v", err)
@@ -172,7 +172,7 @@ func TestNewZeroDefaultPortFallback(t *testing.T) {
 func TestStartPropagatesSettingsError(t *testing.T) {
 	wantErr := errors.New("read failed")
 	p := New(&mockStore{}, nil, 18344, func() (*model.Settings, error) { return nil, wantErr })
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	if err := p.Start(); !errors.Is(err, wantErr) {
 		t.Fatalf("Start error = %v, want wrapped %v", err, wantErr)
 	}
@@ -189,7 +189,7 @@ func TestRestartSettingsErrorKeepsListener(t *testing.T) {
 		}
 		return &model.Settings{Server: model.ServerSettings{Port: 0, BindAddress: "127.0.0.1"}}, nil
 	})
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestRestartOccupiedPortKeepsOldServerLive(t *testing.T) {
 	initialPort := reserveTCPPort(t)
 	settings := &model.Settings{Server: model.ServerSettings{Port: initialPort, BindAddress: "127.0.0.1"}}
 	p := New(&mockStore{}, nil, 0, func() (*model.Settings, error) { return settings, nil })
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestRestartOccupiedPortKeepsOldServerLive(t *testing.T) {
 func TestRestartSuccessfullySwitchesListener(t *testing.T) {
 	settings := &model.Settings{Server: model.ServerSettings{Port: reserveTCPPort(t), BindAddress: "127.0.0.1"}}
 	p := New(&mockStore{}, nil, 0, func() (*model.Settings, error) { return settings, nil })
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRestartSuccessfullySwitchesListener(t *testing.T) {
 func TestRestartSameAddressIsNoOp(t *testing.T) {
 	settings := &model.Settings{Server: model.ServerSettings{Port: reserveTCPPort(t), BindAddress: "127.0.0.1"}}
 	p := New(&mockStore{}, nil, 0, func() (*model.Settings, error) { return settings, nil })
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestRestartSamePortChangesBindAddress(t *testing.T) {
 			port := reserveTCPPort(t)
 			settings := &model.Settings{Server: model.ServerSettings{Port: port, BindAddress: tt.from}}
 			p := New(&mockStore{}, nil, 0, func() (*model.Settings, error) { return settings, nil })
-			t.Cleanup(func() { _ = p.Stop() })
+			t.Cleanup(func() { _ = p.Shutdown() })
 			if err := p.Start(); err != nil {
 				t.Fatalf("Start: %v", err)
 			}
@@ -313,7 +313,7 @@ func TestRestartSamePortBindFailureRestoresOldListener(t *testing.T) {
 	port := reserveTCPPort(t)
 	settings := &model.Settings{Server: model.ServerSettings{Port: port, BindAddress: "127.0.0.1"}}
 	p := New(&mockStore{}, nil, 0, func() (*model.Settings, error) { return settings, nil })
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestRestartSamePortReportsRestoreFailure(t *testing.T) {
 	port := reserveTCPPort(t)
 	settings := &model.Settings{Server: model.ServerSettings{Port: port, BindAddress: "127.0.0.1"}}
 	p := New(&mockStore{}, nil, 0, func() (*model.Settings, error) { return settings, nil })
-	t.Cleanup(func() { _ = p.Stop() })
+	t.Cleanup(func() { _ = p.Shutdown() })
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -365,6 +365,42 @@ func TestRestartSamePortReportsRestoreFailure(t *testing.T) {
 	}
 	if p.IsRunning() {
 		t.Fatal("proxy reports running when listener restoration failed")
+	}
+}
+
+// TestStopStartKeepsLogWriterAvailable verifies that a user-initiated Stop/Start
+// cycle does NOT permanently stop the log writer. The writer is created once in
+// New and must survive across Stop/Start so request logging keeps working.
+func TestStopStartKeepsLogWriterAvailable(t *testing.T) {
+	port := reserveTCPPort(t)
+	settings := &model.Settings{Server: model.ServerSettings{Port: port, BindAddress: "127.0.0.1"}}
+	p := New(&mockStore{}, nil, 0, func() (*model.Settings, error) { return settings, nil })
+	defer p.Shutdown()
+
+	if err := p.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !p.IsRunning() {
+		t.Fatal("proxy should be running after Start")
+	}
+
+	if err := p.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if p.IsRunning() {
+		t.Fatal("proxy should not be running after Stop")
+	}
+
+	if err := p.Start(); err != nil {
+		t.Fatalf("Start after Stop: %v", err)
+	}
+	if !p.IsRunning() {
+		t.Fatal("proxy should be running after second Start")
+	}
+
+	// The log writer must still accept entries after Stop/Start.
+	if !p.writer.Enqueue(model.RequestLog{ID: "log-after-restart"}) {
+		t.Fatal("log writer Enqueue returned false after Stop/Start")
 	}
 }
 
@@ -439,8 +475,8 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
-	defer p.Stop()
+	defer p.Shutdown()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -499,7 +535,7 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	for i := 0; i < failureThreshold; i++ {
 		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
@@ -567,7 +603,7 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -615,7 +651,7 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -655,7 +691,7 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	// Open the breaker.
 	cb := p.breakerFor("p0")
@@ -709,7 +745,7 @@ func TestNoMatchingRuleReturns503(t *testing.T) {
 		},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return store.settings, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"user-requested-model","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -742,7 +778,7 @@ func TestNoMatchingRuleReturns503(t *testing.T) {
 func TestTokenStatsRequiresAuth(t *testing.T) {
 	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/stats/tokens", nil)
 	rec := httptest.NewRecorder()
@@ -790,7 +826,7 @@ func TestGenericOpenAI_ImagesRoute(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{"model":"dall-e-3","prompt":"a cat"}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -842,7 +878,7 @@ func TestStreaming_PassThrough(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -909,7 +945,7 @@ func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -982,7 +1018,7 @@ func TestFailover_RetryBoundedExhaustedFallsThrough(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -1053,7 +1089,7 @@ func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1132,7 +1168,7 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1154,7 +1190,7 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 	cancel()                   // disconnect
 
 	time.Sleep(500 * time.Millisecond)
-	p.Stop() // drain the async writer
+	p.Shutdown() // drain the async writer
 
 	if !p.breakerFor("p0").WouldAllow() {
 		log, _ := store.LastLog()
@@ -1234,7 +1270,7 @@ func TestStreaming_RetriesOnRetryable5xxBeforeFirstByte(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1319,7 +1355,7 @@ func TestStreaming_RetriesPerTargetBeforeFailover(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1401,7 +1437,7 @@ func TestStreaming_FailoverOnNetworkError(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1483,7 +1519,7 @@ func TestStreaming_FailoverOnFirstByteTimeout(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1567,7 +1603,7 @@ func TestStreaming_TruePassThrough(t *testing.T) {
 		settings: &model.Settings{},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return store.settings, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1735,7 +1771,7 @@ func TestStreaming_FirstByteTimeoutFailover(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1861,7 +1897,7 @@ func TestStreaming_CumulativeLatency(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -1974,7 +2010,7 @@ func TestStreaming_UsageParsedFromStream(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2069,7 +2105,7 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2105,7 +2141,7 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 	// Wait a moment for the proxy to observe the close and penalize
 	// the breaker, then drain the async writer.
 	time.Sleep(200 * time.Millisecond)
-	p.Stop() // drain async writer
+	p.Shutdown() // drain async writer
 
 	// The breaker should have recorded a failure (since the stream
 	// ended without [DONE]). Use the exported accessors.
@@ -2192,7 +2228,7 @@ func TestStreaming_LongBodyNotKilledByFirstByteTimeout(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2258,9 +2294,9 @@ func TestStreaming_LongBodyNotKilledByFirstByteTimeout(t *testing.T) {
 
 	// Provider health must NOT be penalized — the stream ended
 	// cleanly with [DONE], so the mid-stream-failure path must not
-	// fire. Use a short wait + Stop to drain the async log writer.
+	// fire. Use a short wait + Shutdown to drain the async log writer.
 	time.Sleep(200 * time.Millisecond)
-	p.Stop()
+	p.Shutdown()
 	prov, _ := store.GetProvider("p0")
 	if prov.Status == model.ProviderStatusError {
 		t.Fatalf("expected provider status != error after clean long stream, got %q (err=%q)",
@@ -2335,7 +2371,7 @@ func TestStreaming_FirstByteBudgetExcludesBodyTime(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2400,10 +2436,10 @@ func TestStreaming_FirstByteBudgetExcludesBodyTime(t *testing.T) {
 	}
 
 	// Provider health must NOT be penalized — the stream ended
-	// cleanly with [DONE]. Use a short wait + Stop to drain the
+	// cleanly with [DONE]. Use a short wait + Shutdown to drain the
 	// async log writer.
 	time.Sleep(200 * time.Millisecond)
-	p.Stop()
+	p.Shutdown()
 	prov, _ := store.GetProvider("p0")
 	if prov.Status == model.ProviderStatusError {
 		t.Fatalf("expected provider status != error after clean long stream, got %q (err=%q)",
@@ -2485,7 +2521,7 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2532,7 +2568,7 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 	// Give the proxy time to observe the disconnect, then drain
 	// the async log writer.
 	time.Sleep(300 * time.Millisecond)
-	p.Stop()
+	p.Shutdown()
 
 	if upstreamHits != 1 {
 		t.Fatalf("expected exactly 1 upstream hit, got %d", upstreamHits)
@@ -2654,7 +2690,7 @@ func TestStreaming_DoneThenClientCancel_IsSuccess(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2706,7 +2742,7 @@ func TestStreaming_DoneThenClientCancel_IsSuccess(t *testing.T) {
 
 	// Let the proxy finish its end-of-stream handling + flush the log.
 	time.Sleep(200 * time.Millisecond)
-	p.Stop()
+	p.Shutdown()
 
 	log, ok := store.LastLog()
 	if !ok {
@@ -2779,7 +2815,7 @@ func TestFailover_GlobalAttemptCap(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2879,7 +2915,7 @@ func TestFailover_BackoffBetweenRetries(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	proxySrv := httptest.NewServer(p.router)
 	defer proxySrv.Close()
@@ -2970,7 +3006,7 @@ func TestFailover_UnknownStatusFailover(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
@@ -3064,7 +3100,7 @@ func TestFailover_RespectsRetryAfter(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	start := time.Now()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
@@ -3120,9 +3156,9 @@ func TestFailover_RuleFirstByteBudgetExceeded(t *testing.T) {
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
-		// Sleep just long enough that the budget fires before
+		// Sleep long enough that the cumulative budget fires before
 		// the chain can complete.
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":"slow"}`))
 	}))
@@ -3144,7 +3180,7 @@ func TestFailover_RuleFirstByteBudgetExceeded(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1"}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Stop()
+	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")

@@ -916,7 +916,7 @@ func TestProviderTestHelpers(t *testing.T) {
 
 	p, _ := s.CreateProvider(model.ProviderInput{Name: "Test", BaseURL: "https://test.example.com"})
 
-	if err := s.UpdateProviderTestResult(p.ID, model.ProviderStatusConnected, 3, 150, ""); err != nil {
+	if err := s.UpdateProviderTestResult(p.ID, model.ProviderStatusConnected, 150, ""); err != nil {
 		t.Fatalf("UpdateProviderTestResult: %v", err)
 	}
 
@@ -924,8 +924,12 @@ func TestProviderTestHelpers(t *testing.T) {
 	if got.Status != model.ProviderStatusConnected {
 		t.Fatalf("expected status 'connected', got %q", got.Status)
 	}
-	if got.ModelsCount != 3 {
-		t.Fatalf("expected models_count 3, got %d", got.ModelsCount)
+	if got.AvgLatencyMs != 150 {
+		t.Fatalf("expected avg_latency_ms 150, got %d", got.AvgLatencyMs)
+	}
+	// models_count should NOT be updated by UpdateProviderTestResult.
+	if got.ModelsCount != 0 {
+		t.Fatalf("expected models_count unchanged (0), got %d", got.ModelsCount)
 	}
 }
 

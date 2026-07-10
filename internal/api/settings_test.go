@@ -56,6 +56,16 @@ func (p *rollbackProxy) Restart() error {
 	return err
 }
 
+func (p *rollbackProxy) Shutdown() error {
+	p.calls++
+	if len(p.errors) == 0 {
+		return nil
+	}
+	err := p.errors[0]
+	p.errors = p.errors[1:]
+	return err
+}
+
 func TestSaveSettingsRollsBackAfterRestartFailure(t *testing.T) {
 	old := model.Settings{Server: model.ServerSettings{Port: 8344}}
 	store := &rollbackStore{settings: old}

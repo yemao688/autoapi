@@ -4,6 +4,8 @@ import {model} from '../models';
 import {api} from '../models';
 import {context} from '../models';
 
+export function AddProviderModels(arg1:string,arg2:Array<string>):Promise<void>;
+
 export function ClearLogs():Promise<number>;
 
 export function CreateAPIKey(arg1:model.ApiKeyInput):Promise<model.ApiKey>;
@@ -13,6 +15,8 @@ export function CreateModelRule(arg1:model.ModelRuleInput):Promise<model.ModelRu
 export function CreateProvider(arg1:model.ProviderInput):Promise<model.Provider>;
 
 export function DeleteAPIKey(arg1:string):Promise<void>;
+
+export function DeleteModel(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteModelRule(arg1:string):Promise<void>;
 
@@ -27,6 +31,8 @@ export function GetDashboard():Promise<model.DashboardData>;
 export function GetModelRule(arg1:string):Promise<model.ModelRule>;
 
 export function GetProvider(arg1:string):Promise<model.Provider>;
+
+export function GetProviderKey(arg1:string):Promise<string>;
 
 export function GetProxyStatus():Promise<api.ProxyStatus>;
 
@@ -78,6 +84,10 @@ export function ShowWindow():Promise<void>;
 
 export function Shutdown(arg1:context.Context):Promise<void>;
 
+export function StartProxy():Promise<void>;
+
+export function StopProxy():Promise<void>;
+
 export function TestAllProviders():Promise<Array<model.ProviderTestResult>>;
 
 export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTestResult>;
@@ -85,6 +95,8 @@ export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTes
 export function TestProvider(arg1:string):Promise<model.ProviderTestResult>;
 
 export function UpdateAPIKey(arg1:string,arg2:model.ApiKeyInput):Promise<model.ApiKey>;
+
+export function UpdateModelName(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function UpdateModelRule(arg1:string,arg2:model.ModelRuleInput):Promise<model.ModelRule>;
 

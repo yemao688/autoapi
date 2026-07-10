@@ -211,6 +211,36 @@ func (s *Store) UpsertModels(providerID string, models []model.Model) error {
 	})
 }
 
+// InsertModelsIfAbsent inserts new models for a provider without overwriting
+// metadata (context_window, owned_by) of existing rows. On conflict, the
+// existing row is left untouched. Used by AddProviderModels where the caller
+// only provides names, not full metadata.
+func (s *Store) InsertModelsIfAbsent(providerID string, models []model.Model) error {
+	now := nowMs()
+	return s.execTx(func(tx *sql.Tx) error {
+		for _, m := range models {
+			id := m.ID
+			if id == "" {
+				id = makeID()
+			}
+			_, err := tx.Exec(`
+				INSERT INTO models (id, provider_id, name, context_window, owned_by, active, latency_ms, updated_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(provider_id, name) DO NOTHING
+`,
+				id, providerID, m.Name, m.ContextWindow, m.OwnedBy, boolInt(m.Active), m.LatencyMs, now, now)
+			if err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(`
+			UPDATE providers SET models_count = (SELECT COUNT(*) FROM models WHERE provider_id = ?), updated_at = ?
+			WHERE id = ?`,
+			providerID, now, providerID)
+		return err
+	})
+}
+
 // UpdateModelLatency sets the measured latency for a single model.
 func (s *Store) UpdateModelLatency(providerID, modelName string, latencyMs int) error {
 	now := nowMs()
@@ -256,14 +286,57 @@ func (s *Store) SetModelsActive(providerID string, modelNames []string, active b
 }
 
 // UpdateProviderTestResult updates provider test outcome fields.
-func (s *Store) UpdateProviderTestResult(id string, status model.ProviderStatus, modelsCount int, avgLatency int, errMsg string) error {
+func (s *Store) UpdateProviderTestResult(id string, status model.ProviderStatus, avgLatency int, errMsg string) error {
 	now := nowMs()
 	return s.execTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-			UPDATE providers SET status=?, models_count=?, avg_latency_ms=?,
+			UPDATE providers SET status=?, avg_latency_ms=?,
 			                     last_tested_at=?, error_message=?, updated_at=?
 			WHERE id=?`,
-			status, modelsCount, avgLatency, now, errMsg, now, id)
+			status, avgLatency, now, errMsg, now, id)
+		return err
+	})
+}
+
+// DeleteModel removes a single model from a provider's catalog and recalculates
+// the provider's models_count.
+func (s *Store) DeleteModel(providerID, modelName string) error {
+	now := nowMs()
+	return s.execTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM models WHERE provider_id = ? AND name = ?`, providerID, modelName)
+		if err != nil {
+			return fmt.Errorf("store: delete model %q for provider %q: %w", modelName, providerID, err)
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("store: delete model %q for provider %q: %w", modelName, providerID, ErrNotFound)
+		}
+		_, err = tx.Exec(`UPDATE providers SET models_count = (SELECT COUNT(*) FROM models WHERE provider_id = ?), updated_at = ? WHERE id = ?`, providerID, now, providerID)
+		return err
+	})
+}
+
+// UpdateModelName renames a model in a provider's catalog.
+func (s *Store) UpdateModelName(providerID, oldName, newName string) error {
+	now := nowMs()
+	return s.execTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE models SET name = ?, updated_at = ? WHERE provider_id = ? AND name = ?`, newName, now, providerID, oldName)
+		if err != nil {
+			return fmt.Errorf("store: rename model %q to %q for provider %q: %w", oldName, newName, providerID, err)
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("store: rename model %q for provider %q: %w", oldName, providerID, ErrNotFound)
+		}
+		return nil
+	})
+}
+
+// RecalcModelsCount recalculates and stores the model count for a provider.
+func (s *Store) RecalcModelsCount(providerID string) error {
+	now := nowMs()
+	return s.execTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE providers SET models_count = (SELECT COUNT(*) FROM models WHERE provider_id = ?), updated_at = ? WHERE id = ?`, providerID, now, providerID)
 		return err
 	})
 }

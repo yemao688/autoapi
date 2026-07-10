@@ -54,6 +54,22 @@ export const api = {
     ensureWails()
     return wails.FetchUpstreamModels(providerId) as Promise<model.Model[]>
   },
+  addProviderModels: (providerId: string, names: string[]): Promise<void> => {
+    ensureWails()
+    return wails.AddProviderModels(providerId, names) as Promise<void>
+  },
+  deleteModel: (providerId: string, modelName: string): Promise<void> => {
+    ensureWails()
+    return wails.DeleteModel(providerId, modelName) as Promise<void>
+  },
+  updateModelName: (providerId: string, oldName: string, newName: string): Promise<void> => {
+    ensureWails()
+    return wails.UpdateModelName(providerId, oldName, newName) as Promise<void>
+  },
+  getProviderKey: (providerId: string): Promise<string> => {
+    ensureWails()
+    return wails.GetProviderKey(providerId) as Promise<string>
+  },
   testModelLatency: (providerId: string, modelName: string): Promise<model.ModelTestResult> => {
     ensureWails()
     return wails.TestModelLatency(providerId, modelName) as Promise<model.ModelTestResult>
@@ -159,6 +175,18 @@ export const api = {
   proxyStatus: (): Promise<apiModels.ProxyStatus> => {
     ensureWails()
     return wails.GetProxyStatus() as Promise<apiModels.ProxyStatus>
+  },
+  startProxy: (): Promise<void> => {
+    ensureWails()
+    return wails.StartProxy() as Promise<void>
+  },
+  stopProxy: (): Promise<void> => {
+    ensureWails()
+    return wails.StopProxy() as Promise<void>
+  },
+  restartProxy: (): Promise<void> => {
+    ensureWails()
+    return wails.RestartProxy() as Promise<void>
   },
   listEndpoints: (): Promise<model.Endpoint[]> => {
     ensureWails()

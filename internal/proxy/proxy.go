@@ -260,8 +260,9 @@ type serverInstance struct {
 	server   *http.Server
 }
 
-// Stop performs a graceful shutdown of the http.Server and log writer. It is
-// safe to call multiple times; subsequent calls are no-ops.
+// Stop performs a graceful shutdown of the HTTP listener/server only. It does
+// NOT stop the log writer, so request logging remains available across
+// Stop/Start cycles. Use Shutdown for final teardown.
 func (p *Proxy) Stop() error {
 	p.lifecycleMu.Lock()
 	defer p.lifecycleMu.Unlock()
@@ -271,10 +272,23 @@ func (p *Proxy) Stop() error {
 	if err := shutdownServer(instance); err != nil {
 		return err
 	}
+	return nil
+}
+
+// Shutdown performs a graceful shutdown of the HTTP listener/server and stops
+// the log writer, flushing any pending logs. This is intended for final app
+// teardown only. The log writer is always stopped even if HTTP shutdown fails.
+func (p *Proxy) Shutdown() error {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
+	slog.Info("proxy: shutting down")
+	instance := p.detachServer()
+	httpErr := shutdownServer(instance)
 	if p.writer != nil {
 		p.writer.Stop()
 	}
-	return nil
+	return httpErr
 }
 
 func (p *Proxy) detachServer() serverInstance {

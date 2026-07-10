@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	stdruntime "runtime"
+	"strings"
 	"time"
 
 	"autoapi/internal/logger"
@@ -51,6 +52,10 @@ type StoreService interface {
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
 	SetModelsActive(providerID string, modelNames []string, active bool) error
+	DeleteModel(providerID, modelName string) error
+	UpdateModelName(providerID, oldName, newName string) error
+	RecalcModelsCount(providerID string) error
+	UpdateProviderTestResult(id string, status model.ProviderStatus, avgLatency int, errMsg string) error
 
 	// API keys are simple access tokens; the App layer no longer encrypts here.
 	ListAPIKeys() ([]model.ApiKey, error)
@@ -105,12 +110,18 @@ type BusinessService interface {
 	// upstream provider keys before passing ciphertext to the store.
 	Encrypt(plaintext []byte) (ciphertext, nonce []byte, err error)
 	Decrypt(ciphertext, nonce []byte) ([]byte, error)
+
+	// ResolveProviderKey returns the decrypted upstream key for a provider.
+	ResolveProviderKey(providerID string) (string, error)
+	// AddProviderModels adds model names to a provider's local catalog.
+	AddProviderModels(providerID string, names []string) error
 }
 
 // ProxyService controls the local OpenAI-compatible HTTP gateway.
 type ProxyService interface {
 	Start() error
 	Stop() error
+	Shutdown() error
 	IsRunning() bool
 	URL() string
 	// Restart rebinds the listener (called when the user changes port/bind in settings).
@@ -191,7 +202,7 @@ func (a *App) PingLogEvent() {
 func (a *App) Shutdown(ctx context.Context) {
 	slog.Info("app: shutting down")
 	if a.deps.Proxy != nil {
-		_ = a.deps.Proxy.Stop()
+		_ = a.deps.Proxy.Shutdown()
 	}
 }
 
@@ -274,6 +285,23 @@ func (a *App) RestartProxy() error {
 		return errNotImpl
 	}
 	return a.deps.Proxy.Restart()
+}
+
+// StartProxy starts the local HTTP listener.
+func (a *App) StartProxy() error {
+	if a.deps.Proxy == nil {
+		return errNotImpl
+	}
+	return a.deps.Proxy.Start()
+}
+
+// StopProxy stops the local HTTP listener without tearing down the log writer,
+// so it can be restarted later without losing request logging.
+func (a *App) StopProxy() error {
+	if a.deps.Proxy == nil {
+		return errNotImpl
+	}
+	return a.deps.Proxy.Stop()
 }
 
 // ----- Providers -----
@@ -394,6 +422,44 @@ func (a *App) ListModels(providerID string) ([]model.Model, error) {
 		return nil, errNotImpl
 	}
 	return a.deps.Store.ListModels(providerID)
+}
+
+// AddProviderModels adds the given model names to a provider's local catalog.
+func (a *App) AddProviderModels(providerID string, names []string) error {
+	if a.deps.Service == nil {
+		return errNotImpl
+	}
+	return a.deps.Service.AddProviderModels(providerID, names)
+}
+
+// DeleteModel removes a single model from a provider's catalog.
+func (a *App) DeleteModel(providerID, modelName string) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	return a.deps.Store.DeleteModel(providerID, modelName)
+}
+
+// UpdateModelName renames a model in a provider's catalog. Both names are
+// trimmed; an empty new name is rejected.
+func (a *App) UpdateModelName(providerID, oldName, newName string) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return fmt.Errorf("model name must not be empty")
+	}
+	return a.deps.Store.UpdateModelName(providerID, oldName, newName)
+}
+
+// GetProviderKey returns the decrypted upstream key for display in the UI.
+func (a *App) GetProviderKey(providerID string) (string, error) {
+	if a.deps.Service == nil {
+		return "", errNotImpl
+	}
+	return a.deps.Service.ResolveProviderKey(providerID)
 }
 
 // ----- API keys -----
