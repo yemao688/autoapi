@@ -338,6 +338,12 @@ ALTER TABLE rule_targets ADD COLUMN timeout_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE model_rules ADD COLUMN first_byte_timeout_ms INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		ID: "015_request_uri",
+		SQL: `
+ALTER TABLE request_logs ADD COLUMN request_uri TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have

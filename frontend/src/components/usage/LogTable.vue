@@ -278,6 +278,10 @@ const columnCount = computed(() => columns)
                   <span class="log-detail-value text-mono">{{ log.request_id || '—' }}</span>
                 </div>
                 <div class="log-detail-item">
+                  <span class="log-detail-label">{{ t('usage.logTable.requestUri') }}</span>
+                  <span class="log-detail-value text-mono">{{ log.request_uri || '—' }}</span>
+                </div>
+                <div class="log-detail-item">
                   <span class="log-detail-label">{{ t('usage.logTable.userAgent') }}</span>
                   <span class="log-detail-value text-mono log-detail-ua">{{ log.user_agent || '—' }}</span>
                 </div>

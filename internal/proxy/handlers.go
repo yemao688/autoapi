@@ -57,6 +57,7 @@ func enrichLogFromRequest(r *http.Request, logEntry *model.RequestLog) {
 	logEntry.RequestID = middleware.GetReqID(r.Context())
 	logEntry.UserAgent = r.UserAgent()
 	logEntry.ClientIP = clientIPFromAddr(r.RemoteAddr)
+	logEntry.RequestURI = r.URL.Path
 }
 
 type chatRequest struct {

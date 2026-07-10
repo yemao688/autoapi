@@ -153,7 +153,7 @@ func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {
 		       route_id, route_label,
 		       api_key_id, COALESCE(error, ''),
 		       cache_creation, cache_hit,
-		       COALESCE(chain_json, ''), user_agent, client_ip, request_id
+		       COALESCE(chain_json, ''), user_agent, client_ip, request_id, request_uri
 		FROM request_logs
 		ORDER BY timestamp_ms DESC
 		LIMIT ?`, limit)
@@ -174,7 +174,7 @@ func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {
 			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
 			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error,
 			&l.CacheCreation, &l.CacheHit,
-			&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID,
+			&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID, &l.RequestURI,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan recent log: %w", err)
 		}

@@ -668,6 +668,54 @@ func TestRequestLogEmptyChainPersistsAsEmpty(t *testing.T) {
 	}
 }
 
+// TestRequestLogURIRoundTrip verifies that request_uri survives the
+// insert → query round trip and is NOT erased by the two-phase update.
+// The URI is immutable request context known at insert time; the
+// completion update must leave it untouched.
+
+func TestRequestLogURIRoundTrip(t *testing.T) {
+	s := newLogsTestStore(t)
+
+	in := model.RequestLog{
+		ID:         "log-uri",
+		Timestamp:  1700000002000,
+		StatusCode: 200,
+		Model:      "gpt-4o",
+		RequestURI: "/v1/chat/completions",
+	}
+	if err := s.InsertRequestLog(in); err != nil {
+		t.Fatalf("InsertRequestLog: %v", err)
+	}
+
+	// Simulate the two-phase update: the completion-time fields overwrite
+	// status/tokens/cost/etc. but must leave request_uri alone.
+	in.StatusCode = 200
+	in.InputTokens = 100
+	in.OutputTokens = 50
+	in.RequestURI = "" // intentionally left blank on the update side
+	if err := s.UpdateRequestLog(in); err != nil {
+		t.Fatalf("UpdateRequestLog: %v", err)
+	}
+
+	logs, _, err := s.QueryLogs(model.LogQuery{Page: 1, PageSize: 5})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	got := logs[0]
+	if got.RequestURI != "/v1/chat/completions" {
+		t.Fatalf("RequestURI: want %q, got %q", "/v1/chat/completions", got.RequestURI)
+	}
+	if got.StatusCode != 200 {
+		t.Fatalf("StatusCode: want 200, got %d", got.StatusCode)
+	}
+	if got.InputTokens != 100 {
+		t.Fatalf("InputTokens: want 100, got %d", got.InputTokens)
+	}
+}
+
 // ----- helpers -----
 
 func equalStringSlices(a, b []string) bool {

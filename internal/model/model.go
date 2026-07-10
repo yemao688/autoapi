@@ -155,6 +155,13 @@ type RequestLog struct {
 	ClientIP  string `json:"client_ip"`
 	RequestID string `json:"request_id"`
 
+	// RequestURI is the path component of the proxied request URL (e.g.
+	// "/v1/chat/completions"). Captured at request start and immutable —
+	// the two-phase update does not overwrite it. Query string is
+	// intentionally excluded to avoid persisting API keys or sensitive
+	// parameters.
+	RequestURI string `json:"request_uri"`
+
 	// Chain captures the per-attempt history of a single proxied request.
 	// Non-streaming requests with failover may have multiple entries; a
 	// single successful attempt produces one entry; preflight failures

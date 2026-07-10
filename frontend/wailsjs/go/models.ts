@@ -193,6 +193,7 @@ export namespace model {
 	    user_agent: string;
 	    client_ip: string;
 	    request_id: string;
+	    request_uri: string;
 	    chain: RequestLogChainEntry[];
 	
 	    static createFrom(source: any = {}) {
@@ -222,6 +223,7 @@ export namespace model {
 	        this.user_agent = source["user_agent"];
 	        this.client_ip = source["client_ip"];
 	        this.request_id = source["request_id"];
+	        this.request_uri = source["request_uri"];
 	        this.chain = this.convertValues(source["chain"], RequestLogChainEntry);
 	    }
 	

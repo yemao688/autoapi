@@ -553,6 +553,7 @@
       "expand": "展开详情",
       "collapse": "折叠详情",
       "requestId": "请求 ID",
+      "requestUri": "请求路径",
       "userAgent": "User Agent",
       "clientIp": "客户端 IP",
       "chain": "链路",

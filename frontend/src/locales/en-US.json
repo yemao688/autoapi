@@ -553,6 +553,7 @@
       "expand": "Expand details",
       "collapse": "Collapse details",
       "requestId": "Request ID",
+      "requestUri": "Request URI",
       "userAgent": "User Agent",
       "clientIp": "Client IP",
       "chain": "Chain",
