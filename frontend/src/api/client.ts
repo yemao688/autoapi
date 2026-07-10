@@ -132,9 +132,9 @@ export const api = {
   },
 
   // Usage & Logs
-  usageStats: (): Promise<model.UsageStats> => {
+  usageStats: (query?: model.LogQuery): Promise<model.UsageStats> => {
     ensureWails()
-    return wails.GetUsageStats() as Promise<model.UsageStats>
+    return wails.GetUsageStats(query || ({} as model.LogQuery)) as Promise<model.UsageStats>
   },
   queryLogs: (query: model.LogQuery): Promise<model.LogQueryResult> => {
     ensureWails()

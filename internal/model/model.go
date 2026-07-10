@@ -248,16 +248,18 @@ type ServiceHealth struct {
 	APIAddress        string  `json:"api_address"` // e.g. "http://192.168.1.5:8344" — host-reachable URL with the local IPv4; empty when proxy is not running
 }
 
-// UsageStats aggregates the usage-stats page data (token view + log view).
+// UsageStats aggregates the usage-stats page data. All fields are
+// computed under the same LogQuery filter so cards, charts, and lists
+// stay consistent with each other.
+//
+// TokenTrend30, Logs, and LogTotal were removed: the frontend fetches
+// usage trends via GetUsageTrends and paginated logs via QueryLogs
+// independently, each with their own filter snapshot.
 type UsageStats struct {
-	TokenStats   []Stat            `json:"token_stats"`
-	TokenTrend30 []TokenTrendPoint `json:"token_trend_30"` // last 30 days
-	Providers    []ProviderShare   `json:"providers"`
-	ModelRanking []ModelRanking    `json:"model_ranking"`
-
-	LogStats []Stat       `json:"log_stats"`
-	Logs     []RequestLog `json:"logs"`
-	LogTotal int64        `json:"log_total"`
+	TokenStats   []Stat          `json:"token_stats"`
+	Providers    []ProviderShare `json:"providers"`
+	ModelRanking []ModelRanking  `json:"model_ranking"`
+	LogStats     []Stat          `json:"log_stats"`
 }
 
 // ----- Settings -----

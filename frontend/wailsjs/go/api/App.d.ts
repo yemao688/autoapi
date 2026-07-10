@@ -44,7 +44,7 @@ export function GetSettings():Promise<model.Settings>;
 
 export function GetSystemHealth():Promise<model.ServiceHealth>;
 
-export function GetUsageStats():Promise<model.UsageStats>;
+export function GetUsageStats(arg1:model.LogQuery):Promise<model.UsageStats>;
 
 export function GetUsageTrends(arg1:model.UsageTrendsQuery):Promise<model.UsageTrends>;
 

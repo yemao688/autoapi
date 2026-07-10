@@ -26,11 +26,16 @@ const { download } = useExportDownload();
 const toast = useToast();
 const confirm = useConfirm();
 
+// usageFilter is the current filter snapshot passed to usageStats. It
+// is updated by buildLogQuery() before each fetch so the KPI cards,
+// provider shares, and model ranking stay in sync with the filter bar.
+const usageFilter = ref<model.LogQuery | null>(null);
+
 const {
   data: usageData,
   loading,
   execute: fetchUsage,
-} = useApi(api.usageStats);
+} = useApi(() => api.usageStats(usageFilter.value || undefined));
 
 const activePane = ref<"logs" | "tokens">("logs");
 // liveSync is the shared, persisted refresh mode for this view. Allowed
@@ -92,11 +97,16 @@ const chartData = ref<model.UsageTrends>(
   }),
 );
 
+// allProviders is the unfiltered list of upstream providers, loaded
+// once on mount. This is intentionally separate from the filtered
+// providerShares in usageData so the dropdown always shows all
+// available providers regardless of the active filter.
+const allProviders = ref<model.Provider[]>([]);
+
 const providerOptions = computed<ProviderOption[]>(() => {
-  const list = usageData.value?.providers || [];
   return [
     { name: t("usage.status.all"), id: "" },
-    ...list.map((p) => ({ name: p.provider_name, id: p.provider_id })),
+    ...allProviders.value.map((p) => ({ name: p.name, id: p.id })),
   ];
 });
 
@@ -135,7 +145,10 @@ const totalTokenValue = computed(() => {
   }
   return "—";
 });
-const logTotalValue = computed(() => usageData.value?.log_total || 0);
+// logTotalValue is the filtered log count shown as a badge on the
+// "请求日志" tab. Uses the filtered logTotal from QueryLogs, not the
+// (now-removed) usageData.log_total.
+const logTotalValue = computed(() => logTotal.value || 0);
 
 // totalPages is used to bound `goToPage` callers and to gate hasNextPage.
 const totalPages = computed(() => {
@@ -198,25 +211,30 @@ function getSelectedRange(): { start_date: number; end_date: number } {
   }
 }
 
-async function queryLogs() {
+// buildLogQuery constructs a LogQuery from the current filter state.
+// All three data calls (usageStats, queryLogs, usageTrends) share the
+// same snapshot so cards, charts, and table always agree on the same
+// filtered row set. The function reads Date.now() once per call for
+// the end bound.
+function buildLogQuery(): model.LogQuery {
   const { start_date, end_date } = getSelectedRange();
-  const provider = selectedProviderId.value;
-  const route_id = selectedRouteId.value;
-  const modelName = modelFilter.value.trim();
-  const search = searchText.value.trim();
-  const status = statusMap[statusFilter.value] || "";
+  return new model.LogQuery({
+    start_date,
+    end_date,
+    provider: selectedProviderId.value,
+    route_id: selectedRouteId.value,
+    model: modelFilter.value.trim(),
+    search: searchText.value.trim(),
+    status: statusMap[statusFilter.value] || "",
+    page: logPage.value,
+    page_size: logPageSize.value,
+  });
+}
+
+async function queryLogs() {
+  const filter = buildLogQuery();
   try {
-    const result = await api.queryLogs({
-      start_date,
-      end_date,
-      provider,
-      route_id,
-      model: modelName,
-      search,
-      status,
-      page: logPage.value,
-      page_size: logPageSize.value,
-    });
+    const result = await api.queryLogs(filter);
     logs.value = result?.logs || [];
     logTotal.value = result?.total || 0;
   } catch (e: any) {
@@ -225,19 +243,15 @@ async function queryLogs() {
 }
 
 async function loadCharts() {
-  const { start_date, end_date } = getSelectedRange();
-  const provider = selectedProviderId.value;
-  const route_id = selectedRouteId.value;
-  const modelName = modelFilter.value.trim();
-  const search = searchText.value.trim();
+  const filter = buildLogQuery();
   try {
     const result = await api.usageTrends({
-      start_date,
-      end_date,
-      provider,
-      route_id,
-      model: modelName,
-      search,
+      start_date: filter.start_date,
+      end_date: filter.end_date,
+      provider: filter.provider,
+      route_id: filter.route_id,
+      model: filter.model,
+      search: filter.search,
     });
     chartData.value =
       result ||
@@ -270,11 +284,45 @@ async function refreshAll() {
     }
   }, 15000);
   try {
-    await fetchUsage().catch((e) =>
-      toast.push(e?.message || String(e), "error"),
-    );
-    await queryLogs();
-    await loadCharts();
+    const filter = buildLogQuery();
+    usageFilter.value = filter;
+    // Fire all three data calls in parallel using the same filter
+    // snapshot. They are independent and can overlap safely.
+    await Promise.all([
+      fetchUsage().catch((e) =>
+        toast.push(e?.message || String(e), "error"),
+      ),
+      (async () => {
+        try {
+          const result = await api.queryLogs(filter);
+          logs.value = result?.logs || [];
+          logTotal.value = result?.total || 0;
+        } catch (e: any) {
+          toast.push(e?.message || String(e), "error");
+        }
+      })(),
+      (async () => {
+        try {
+          const result = await api.usageTrends({
+            start_date: filter.start_date,
+            end_date: filter.end_date,
+            provider: filter.provider,
+            route_id: filter.route_id,
+            model: filter.model,
+            search: filter.search,
+          });
+          chartData.value =
+            result ||
+            new model.UsageTrends({
+              range: "",
+              bucket_size: "day",
+              buckets: [],
+            });
+        } catch (e: any) {
+          toast.push(e?.message || String(e), "error");
+        }
+      })(),
+    ]);
   } finally {
     if (refreshTimeout) {
       clearTimeout(refreshTimeout);
@@ -369,8 +417,7 @@ function switchPane(paneId: "logs" | "tokens") {
 
 async function applyFilters() {
   logPage.value = 1;
-  await queryLogs();
-  await loadCharts();
+  await refreshAll();
 }
 
 async function clearFilters() {
@@ -380,8 +427,7 @@ async function clearFilters() {
   modelFilter.value = "";
   searchText.value = "";
   logPage.value = 1;
-  await queryLogs();
-  await loadCharts();
+  await refreshAll();
 }
 
 async function purgeLogs() {
@@ -473,6 +519,10 @@ onMounted(() => {
   void fetchModelRules().catch((e) =>
     toast.push(e?.message || String(e), "error"),
   );
+  // Load the unfiltered provider list for the dropdown options.
+  api.providers().then((list) => {
+    allProviders.value = list || [];
+  }).catch((e) => toast.push(e?.message || String(e), "error"));
 });
 
 onUnmounted(() => {

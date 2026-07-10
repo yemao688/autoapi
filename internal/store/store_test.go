@@ -998,7 +998,7 @@ func TestDashboardAndUsage(t *testing.T) {
 		t.Fatal("Dashboard returned nil")
 	}
 
-	u, err := s.UsageStats()
+	u, err := s.UsageStats(model.LogQuery{})
 	if err != nil {
 		t.Fatalf("UsageStats (empty): %v", err)
 	}

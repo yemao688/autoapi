@@ -46,34 +46,17 @@ func chartRangeLabel(startDate, endDate int64) string {
 }
 
 func buildChartFilter(q model.UsageTrendsQuery) (where string, args []interface{}) {
-	where = "WHERE status_code != 0"
-	args = []interface{}{}
-	if q.StartDate > 0 {
-		where += " AND timestamp_ms >= ?"
-		args = append(args, q.StartDate)
-	}
-	if q.EndDate > 0 {
-		where += " AND timestamp_ms <= ?"
-		args = append(args, q.EndDate)
-	}
-	if q.Provider != "" {
-		where += " AND provider_id = ?"
-		args = append(args, q.Provider)
-	}
-	if q.RouteID != "" {
-		where += " AND route_id = ?"
-		args = append(args, q.RouteID)
-	}
-	if q.Model != "" {
-		where += " AND model = ?"
-		args = append(args, q.Model)
-	}
-	if q.Search != "" {
-		where += " AND (model LIKE ? OR route_label LIKE ? OR error LIKE ?)"
-		pattern := "%" + q.Search + "%"
-		args = append(args, pattern, pattern, pattern)
-	}
-	return where, args
+	// Convert UsageTrendsQuery to LogQuery and reuse the shared filter
+	// builder. UsageTrendsQuery has no Status field, so it maps to an
+	// empty status — which buildLogFilter treats as "no status filter".
+	return buildLogFilter(model.LogQuery{
+		StartDate: q.StartDate,
+		EndDate:   q.EndDate,
+		Provider:  q.Provider,
+		RouteID:   q.RouteID,
+		Model:     q.Model,
+		Search:    q.Search,
+	}, false)
 }
 
 func (s *Store) chartBuckets(bucketExpr, where string, args []interface{}) ([]model.UsageTrendBucket, error) {

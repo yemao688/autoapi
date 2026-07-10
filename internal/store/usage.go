@@ -5,120 +5,88 @@ import (
 	"log/slog"
 	"math"
 	"sort"
-	"time"
 
 	"autoapi/internal/model"
 )
 
-// UsageStats aggregates data for the usage-stats page.
-func (s *Store) UsageStats() (*model.UsageStats, error) {
+// UsageStats aggregates data for the usage-stats page under the given
+// filter. All sub-queries (tokenStats, logStats, providerShares,
+// modelRanking) receive the same filter snapshot so cards, charts, and
+// lists always agree on the same filtered row set.
+//
+// Pagination fields (Page, PageSize) in q are ignored — the aggregations
+// span the entire filtered range.
+func (s *Store) UsageStats(q model.LogQuery) (*model.UsageStats, error) {
 	u := &model.UsageStats{}
 
-	// Token stats
 	var err error
-	u.TokenStats, err = s.tokenStats()
+	u.TokenStats, err = s.tokenStatsFiltered(q)
 	if err != nil {
 		return nil, err
 	}
 
-	// Token trend (30 days)
-	u.TokenTrend30, err = s.tokenTrend(30)
+	u.Providers, err = s.providerSharesFiltered(q)
 	if err != nil {
 		return nil, err
 	}
 
-	// Provider shares
-	u.Providers, err = s.providerShares()
+	u.ModelRanking, err = s.modelRankingFiltered(q, 8)
 	if err != nil {
 		return nil, err
 	}
 
-	// Model ranking (top 5)
-	u.ModelRanking, err = s.modelRanking(5)
+	u.LogStats, err = s.logStatsFiltered(q)
 	if err != nil {
 		return nil, err
 	}
-
-	// Log stats
-	u.LogStats, err = s.logStats()
-	if err != nil {
-		return nil, err
-	}
-
-	// Recent logs (last 50)
-	logs, total, err := s.QueryLogs(model.LogQuery{
-		Page:     1,
-		PageSize: 50,
-	})
-	if err != nil {
-		return nil, err
-	}
-	u.Logs = logs
-	u.LogTotal = total
 
 	return u, nil
 }
 
-// tokenStats computes 30-day aggregate KPI cards.
-func (s *Store) tokenStats() ([]model.Stat, error) {
-	now := time.Now()
-	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).UnixMilli()
-	startOfPrevMonth := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).UnixMilli()
+// tokenStatsFiltered computes KPI cards for the filtered range. Unlike
+// the old tokenStats() which compared calendar months, filtered stats
+// show totals for the selected period with no delta (shown as "—" in
+// the UI) because comparison-period semantics under arbitrary date
+// ranges are ambiguous and were not requested.
+func (s *Store) tokenStatsFiltered(q model.LogQuery) ([]model.Stat, error) {
+	where, args := buildLogFilter(q, false)
 
-	thisMonth := s.sumTokensSince(startOfMonth)
-	prevMonth := s.sumTokensSince(startOfPrevMonth) - thisMonth
-	if prevMonth < 0 {
-		prevMonth = 0
-	}
+	var totalTokens int64
+	var totalCost float64
+	var totalReqs int64
 
-	thisCost := s.sumCostSince(startOfMonth)
-	prevCost := s.sumCostSince(startOfPrevMonth) - thisCost
-	if prevCost < 0 {
-		prevCost = 0
-	}
-
-	thisRequests := s.countRequestsSince(startOfMonth)
-	prevRequests := s.countRequestsSince(startOfPrevMonth) - thisRequests
-	if prevRequests < 0 {
-		prevRequests = 0
+	// Single query for tokens + cost + count to avoid three scans.
+	row := s.db.QueryRow(fmt.Sprintf(`
+		SELECT
+			COALESCE(SUM(input_tokens + output_tokens), 0),
+			COALESCE(SUM(cost), 0),
+			COUNT(*)
+		FROM request_logs %s`, where), args...)
+	if err := row.Scan(&totalTokens, &totalCost, &totalReqs); err != nil {
+		slog.Error("store: tokenStatsFiltered scan", "err", err)
 	}
 
 	return []model.Stat{
-		makeStat("usage.stats.totalRequests", fmt.Sprintf("%d", thisRequests), deltaStr(thisRequests, prevRequests), ""),
-		makeStat("usage.stats.totalTokens", fmt.Sprintf("%d", thisMonth), deltaStr(thisMonth, prevMonth), ""),
-		makeStat("usage.stats.estimatedCost", fmt.Sprintf("$%.2f", thisCost), deltaCostStr(thisCost, prevCost), ""),
+		makeStat("usage.stats.totalRequests", fmt.Sprintf("%d", totalReqs), "—", ""),
+		makeStat("usage.stats.totalTokens", fmt.Sprintf("%d", totalTokens), "—", ""),
+		makeStat("usage.stats.estimatedCost", fmt.Sprintf("$%.2f", totalCost), "—", ""),
 	}, nil
 }
 
-func (s *Store) sumCostSince(startMs int64) float64 {
-	row := s.db.QueryRow(`
-		SELECT COALESCE(SUM(cost), 0)
-		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, startMs)
-	var total float64
-	if err := row.Scan(&total); err != nil {
-		slog.Error("store: sumCostSince", "err", err)
-	}
-	return total
-}
-
-func (s *Store) countRequestsSince(startMs int64) int64 {
-	row := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, startMs)
-	var n int64
-	if err := row.Scan(&n); err != nil {
-		slog.Error("store: countRequestsSince scan failed", "err", err)
-	}
-	return n
-}
-
-// providerShares computes the percentage breakdown by provider for the last 30 days.
-func (s *Store) providerShares() ([]model.ProviderShare, error) {
-	cutoff := time.Now().AddDate(0, 0, -30).UnixMilli()
-	rows, err := s.db.Query(`
-		SELECT COALESCE(provider_id, ''), COALESCE(provider_name, ''), COALESCE(SUM(input_tokens + output_tokens), 0), COALESCE(SUM(cost), 0)
-		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0
-		GROUP BY provider_id ORDER BY 3 DESC`, cutoff)
+// providerSharesFiltered computes the percentage breakdown by upstream
+// provider under the given filter.
+func (s *Store) providerSharesFiltered(q model.LogQuery) ([]model.ProviderShare, error) {
+	where, args := buildLogFilter(q, false)
+	query := fmt.Sprintf(`
+		SELECT COALESCE(provider_id, ''), COALESCE(provider_name, ''),
+		       COALESCE(SUM(input_tokens + output_tokens), 0),
+		       COALESCE(SUM(cost), 0)
+		FROM request_logs %s
+		GROUP BY provider_id
+		ORDER BY 3 DESC`, where)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: provider shares: %w", err)
+		return nil, fmt.Errorf("store: provider shares filtered: %w", err)
 	}
 	defer rows.Close()
 
@@ -135,7 +103,6 @@ func (s *Store) providerShares() ([]model.ProviderShare, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
 	if grandTotal > 0 {
 		for i := range shares {
 			shares[i].Percent = math.Round(float64(shares[i].Tokens)/float64(grandTotal)*10000) / 100
@@ -147,20 +114,23 @@ func (s *Store) providerShares() ([]model.ProviderShare, error) {
 	return shares, nil
 }
 
-// modelRanking returns the top N models by token count in the last 30 days.
-func (s *Store) modelRanking(limit int) ([]model.ModelRanking, error) {
-	cutoff := time.Now().AddDate(0, 0, -30).UnixMilli()
-	rows, err := s.db.Query(`
+// modelRankingFiltered returns the top N models by request count under
+// the given filter. Ordered by request count descending.
+func (s *Store) modelRankingFiltered(q model.LogQuery, limit int) ([]model.ModelRanking, error) {
+	where, args := buildLogFilter(q, false)
+	query := fmt.Sprintf(`
 		SELECT model, COALESCE(provider_name, ''),
 		       COUNT(*) AS reqs,
 		       COALESCE(SUM(input_tokens + output_tokens), 0),
 		       COALESCE(SUM(cost), 0)
-		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0
+		FROM request_logs %s
 		GROUP BY model
 		ORDER BY reqs DESC
-		LIMIT ?`, cutoff, limit)
+		LIMIT ?`, where)
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: model ranking: %w", err)
+		return nil, fmt.Errorf("store: model ranking filtered: %w", err)
 	}
 	defer rows.Close()
 
@@ -178,24 +148,19 @@ func (s *Store) modelRanking(limit int) ([]model.ModelRanking, error) {
 	return rankings, rows.Err()
 }
 
-// logStats computes aggregate statistics on request_logs.
-func (s *Store) logStats() ([]model.Stat, error) {
-	cutoff := time.Now().AddDate(0, 0, -30).UnixMilli()
-
-	// Total logs, success count, error count, p95 latency
-	type logAgg struct {
-		total     int64
-		success   int64
-		errCount  int64
-		latencies []int
-	}
-
-	rows, err := s.db.Query(`
+// logStatsFiltered computes aggregate quality-of-service stats under
+// the given filter: total requests, success rate, p95 latency, error
+// count. Deltas are not shown ("—") because comparison-period
+// semantics are ambiguous under arbitrary filters.
+func (s *Store) logStatsFiltered(q model.LogQuery) ([]model.Stat, error) {
+	where, args := buildLogFilter(q, false)
+	query := fmt.Sprintf(`
 		SELECT status_code, latency_ms,
 		       CASE WHEN error != '' THEN 1 ELSE 0 END AS has_err
-		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, cutoff)
+		FROM request_logs %s`, where)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: log stats: %w", err)
+		return nil, fmt.Errorf("store: log stats filtered: %w", err)
 	}
 	defer rows.Close()
 
@@ -225,11 +190,50 @@ func (s *Store) logStats() ([]model.Stat, error) {
 	p95 := computeP95(latencies)
 
 	return []model.Stat{
-		makeStat("usage.stats.totalRequests30d", fmt.Sprintf("%d", total), "", ""),
-		makeStat("usage.stats.successRate", fmt.Sprintf("%.1f%%", successRate), "", ""),
-		makeStat("usage.stats.p95Latency", formatLatencyMs(p95), "", ""),
-		makeStat("usage.stats.errors30d", fmt.Sprintf("%d", errCount), "", ""),
+		makeStat("usage.stats.totalRequests30d", fmt.Sprintf("%d", total), "—", ""),
+		makeStat("usage.stats.successRate", fmt.Sprintf("%.1f%%", successRate), "—", ""),
+		makeStat("usage.stats.p95Latency", formatLatencyMs(p95), "—", ""),
+		makeStat("usage.stats.errors30d", fmt.Sprintf("%d", errCount), "—", ""),
 	}, nil
+}
+
+func computeP95(values []int) int {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := make([]int, len(values))
+	copy(sorted, values)
+	sort.Ints(sorted)
+	idx := int(math.Ceil(float64(len(sorted))*0.95) - 1)
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
+}
+
+// ----- Dashboard helpers (used by dashboard.go, not filtered) -----
+
+func (s *Store) sumCostSince(startMs int64) float64 {
+	row := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0)
+		FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, startMs)
+	var total float64
+	if err := row.Scan(&total); err != nil {
+		slog.Error("store: sumCostSince", "err", err)
+	}
+	return total
+}
+
+func (s *Store) countRequestsSince(startMs int64) int64 {
+	row := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE timestamp_ms >= ? AND status_code != 0`, startMs)
+	var n int64
+	if err := row.Scan(&n); err != nil {
+		slog.Error("store: countRequestsSince scan failed", "err", err)
+	}
+	return n
 }
 
 // formatLatencyMs renders a millisecond count with the unit scaled to
@@ -246,25 +250,6 @@ func formatLatencyMs(ms int) string {
 		return fmt.Sprintf("%dms", ms)
 	}
 	return fmt.Sprintf("%.1fs", float64(ms)/1000)
-}
-
-func computeP95(values []int) int {
-	if len(values) == 0 {
-		return 0
-	}
-	// Sort-based 95th percentile. sort.Ints is O(n log n) — required because
-	// request-log slices can grow into the 100K+ range over months of use.
-	sorted := make([]int, len(values))
-	copy(sorted, values)
-	sort.Ints(sorted)
-	idx := int(math.Ceil(float64(len(sorted))*0.95) - 1)
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
 }
 
 func deltaCostStr(current, previous float64) string {

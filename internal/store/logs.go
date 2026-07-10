@@ -50,49 +50,10 @@ func chainFromJSON(raw string) []model.RequestLogChainEntry {
 // keep the index plan simple; the parameterised placeholder protects against
 // SQL injection regardless of the user-supplied content.
 func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
-	// Build dynamic WHERE clause. args is shared between the COUNT and DATA
-	// queries so both apply identical filters.
-	where := "WHERE 1=1"
-	args := []interface{}{}
-
-	if q.StartDate > 0 {
-		where += " AND timestamp_ms >= ?"
-		args = append(args, q.StartDate)
-	}
-	if q.EndDate > 0 {
-		where += " AND timestamp_ms <= ?"
-		args = append(args, q.EndDate)
-	}
-	if q.Provider != "" {
-		where += " AND provider_id = ?"
-		args = append(args, q.Provider)
-	}
-	if q.RouteID != "" {
-		where += " AND route_id = ?"
-		args = append(args, q.RouteID)
-	}
-	if q.Model != "" {
-		where += " AND model = ?"
-		args = append(args, q.Model)
-	}
-	if q.Status != "" {
-		switch q.Status {
-		case "success":
-			where += " AND status_code >= 200 AND status_code < 300"
-		case "failed":
-			where += " AND (status_code >= 400 OR error != '')"
-		case "rate_limited":
-			where += " AND status_code = 429"
-		}
-	}
-	if q.Search != "" {
-		// LIKE is case-insensitive for ASCII by default in SQLite. The
-		// pattern is fully parameterised so user input cannot escape the
-		// literal context.
-		where += " AND (model LIKE ? OR route_label LIKE ? OR error LIKE ?)"
-		pattern := "%" + q.Search + "%"
-		args = append(args, pattern, pattern, pattern)
-	}
+	// Build the shared WHERE clause (includes pending rows so the log
+	// table can show in-flight requests). args is shared between the
+	// COUNT and DATA queries so both apply identical filters.
+	where, args := buildLogFilter(q, true)
 
 	// Total count
 	var total int64

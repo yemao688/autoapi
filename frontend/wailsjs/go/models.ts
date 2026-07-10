@@ -790,12 +790,9 @@ export namespace model {
 	
 	export class UsageStats {
 	    token_stats: Stat[];
-	    token_trend_30: TokenTrendPoint[];
 	    providers: ProviderShare[];
 	    model_ranking: ModelRanking[];
 	    log_stats: Stat[];
-	    logs: RequestLog[];
-	    log_total: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new UsageStats(source);
@@ -804,12 +801,9 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.token_stats = this.convertValues(source["token_stats"], Stat);
-	        this.token_trend_30 = this.convertValues(source["token_trend_30"], TokenTrendPoint);
 	        this.providers = this.convertValues(source["providers"], ProviderShare);
 	        this.model_ranking = this.convertValues(source["model_ranking"], ModelRanking);
 	        this.log_stats = this.convertValues(source["log_stats"], Stat);
-	        this.logs = this.convertValues(source["logs"], RequestLog);
-	        this.log_total = source["log_total"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

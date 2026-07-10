@@ -82,7 +82,7 @@ type StoreService interface {
 	// Logs & stats
 	QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error)
 	Dashboard() (*model.DashboardData, error)
-	UsageStats() (*model.UsageStats, error)
+	UsageStats(q model.LogQuery) (*model.UsageStats, error)
 	GetUsageTrends(q model.UsageTrendsQuery) (*model.UsageTrends, error)
 	PurgeLogs(olderThanDays int) (int, error)
 	ClearLogs() (int, error)
@@ -578,11 +578,11 @@ func (a *App) GetDashboard() (*model.DashboardData, error) {
 	return d, nil
 }
 
-func (a *App) GetUsageStats() (*model.UsageStats, error) {
+func (a *App) GetUsageStats(q model.LogQuery) (*model.UsageStats, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.UsageStats()
+	return a.deps.Store.UsageStats(q)
 }
 
 func (a *App) QueryLogs(q model.LogQuery) (*model.LogQueryResult, error) {

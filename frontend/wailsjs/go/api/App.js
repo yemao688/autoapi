@@ -82,8 +82,8 @@ export function GetSystemHealth() {
   return window['go']['api']['App']['GetSystemHealth']();
 }
 
-export function GetUsageStats() {
-  return window['go']['api']['App']['GetUsageStats']();
+export function GetUsageStats(arg1) {
+  return window['go']['api']['App']['GetUsageStats'](arg1);
 }
 
 export function GetUsageTrends(arg1) {
