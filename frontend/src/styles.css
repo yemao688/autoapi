@@ -205,8 +205,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   .col-2-3-7 { grid-template-columns: 1fr; }
   .col-3-7 { grid-template-columns: 1fr; }
 
-  /* Four-up metric grid goes 2x2 before going single column on phones. */
-  .stat-grid-4 { grid-template-columns: repeat(2, 1fr); }
+  /* .stat-grid-4 is auto-fit minmax(180px,1fr), so it already wraps by
+     itself as the viewport narrows — no extra breakpoint rule needed. */
 
   /* Header: let title + actions wrap instead of overflowing. */
   .main-header {
@@ -236,9 +236,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 
 @media (max-width: 480px) {
-  /* Last step down to a single column. */
-  .stat-grid-4 { grid-template-columns: 1fr; }
-  .stat-grid { grid-template-columns: 1fr; }
+  /* .stat-grid is auto-fit minmax(160px,1fr) — already collapses to
+     one column around this width; no override needed. */
 
   /* Title block: smaller title, hide the subtitle to save room. */
   .main-title { font-size: 18px; }
@@ -250,6 +249,12 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
   /* Status bar: allow the row to wrap when the address gets long. */
   .statusbar .status-row { flex-wrap: wrap; gap: 4px; }
+
+  /* Metric card values (e.g. "1,234,567" or "65.1s") are 36px at
+     desktop. Below 480px we drop to 26px so a wrapped, narrower card
+     doesn't push the value onto its own line or worse, overflow. */
+  .metric-card .metric-value { font-size: 26px; }
+  .metric-card .metric-value .unit { font-size: 14px; }
 }
 
 .sidebar {
@@ -745,10 +750,14 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   .toggle-slider, .toggle-slider::before { transition: none; }
 }
 
-/* Stat cards — large variant for usage-stats */
+/* Stat cards — large variant for usage-stats. auto-fit lets the row
+   wrap gracefully on narrow viewports: at full desktop width we get
+   4 columns; as the viewport shrinks, columns drop to a new row once
+   they would have been crushed below 180px. Beats the previous fixed
+   `repeat(4, 1fr)` which clipped the last card at narrow widths. */
 .stat-grid-4 {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
 }
 

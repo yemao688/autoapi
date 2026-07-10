@@ -227,9 +227,25 @@ func (s *Store) logStats() ([]model.Stat, error) {
 	return []model.Stat{
 		makeStat("usage.stats.totalRequests30d", fmt.Sprintf("%d", total), "", ""),
 		makeStat("usage.stats.successRate", fmt.Sprintf("%.1f%%", successRate), "", ""),
-		makeStat("usage.stats.p95Latency", fmt.Sprintf("%dms", p95), "", ""),
+		makeStat("usage.stats.p95Latency", formatLatencyMs(p95), "", ""),
 		makeStat("usage.stats.errors30d", fmt.Sprintf("%d", errCount), "", ""),
 	}, nil
+}
+
+// formatLatencyMs renders a millisecond count with the unit scaled to
+// keep the displayed value readable. Below 1s we keep "ms" (a value like
+// "247ms" is more meaningful than "0.25s"); at and above 1s we switch to
+// one-decimal seconds. Mirrors the frontend `formatLatency` in
+// frontend/src/components/usage/LogTable.vue so the same number reads
+// the same in the metric card and in the log row.
+func formatLatencyMs(ms int) string {
+	if ms <= 0 {
+		return "—"
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000)
 }
 
 func computeP95(values []int) int {

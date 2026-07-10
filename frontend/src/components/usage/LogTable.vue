@@ -353,10 +353,57 @@ const columnCount = computed(() => columns)
   vertical-align: middle;
 }
 
-/* ── Column 3: Request model ── */
+/* ── Column min-widths ──────────────────────────────────────────────
+   The 8-column log table is naturally wider than the narrowest
+   viewports we support (~760px after sidebar + padding). Without
+   min-widths the browser squeezes every column down to fit, which
+   character-wraps the Chinese headers ("请求模型", "命中模型") one
+   glyph per line. Forcing a minimum width per column tells the
+   browser "this column cannot shrink further"; once the sum exceeds
+   .tbl-wrap, the wrapper's overflow-x:auto kicks in and the table
+   scrolls horizontally instead of breaking layout.
+
+   The widths are tuned to comfortably hold the largest realistic
+   content per column (status badge, model name, hit-model icon+name,
+   token numbers, latency/TTFT suffix, etc.). */
+.tbl th:nth-child(1),
+.tbl td:nth-child(1) { min-width: 78px; }   /* Time             (07/10 23:28) */
+.tbl th:nth-child(2),
+.tbl td:nth-child(2) { min-width: 64px; }   /* Status           (● 200) */
+.tbl th:nth-child(3),
+.tbl td:nth-child(3) { min-width: 120px; }  /* Request model    (minimax-m3 / claude-3-5-…) */
+.tbl th:nth-child(4),
+.tbl td:nth-child(4) { min-width: 150px; }  /* Hit model        (provider + model) */
+.tbl th:nth-child(5),
+.tbl td:nth-child(5) { min-width: 64px; }   /* Input            (12345 + cache sub) */
+.tbl th:nth-child(6),
+.tbl td:nth-child(6) { min-width: 64px; }   /* Output           (1234) */
+.tbl th:nth-child(7),
+.tbl td:nth-child(7) { min-width: 72px; }   /* Total cost       ($0.123) */
+.tbl th:nth-child(8),
+.tbl td:nth-child(8) { min-width: 130px; }  /* Latency/TTFT     (3.2s/6.8s · stream) */
+
+/* nowrap on the header cells prevents the column titles from
+   character-wrapping even before min-widths are reached. */
+.tbl th {
+  white-space: nowrap;
+}
+
+/* ── Column 3: Request model ────────────────────────────────────────
+   The route_label / model can be long ("claude-3-5-sonnet-20241022")
+   and Chinese column headers squeeze this column at narrow widths,
+   which used to character-wrap individual CJK glyphs. Forcing nowrap
+   with overflow ellipsis keeps a single line; the cell's max-width
+   caps the worst case so the table can scroll horizontally inside
+   .tbl-wrap when the column does need to extend. */
 .cell-request-model {
   font-size: 12.5px;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  max-width: 220px;
+  vertical-align: middle;
 }
 
 /* ── Column 4: Hit model (provider / model) ── */
