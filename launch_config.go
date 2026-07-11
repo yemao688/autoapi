@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 
+	"autoapi/internal/config"
 	"autoapi/internal/model"
 )
 
@@ -65,4 +66,15 @@ func resolveLaunchConfig(s *model.Settings) launchConfig {
 	}
 
 	return cfg
+}
+
+// singleInstanceLockID returns a profile-specific Wails lock identifier.
+// Production retains the original ID so an upgraded production app still
+// detects an already-running older build. Development uses its own ID so
+// `wails dev` can run alongside the packaged application.
+func singleInstanceLockID(profile config.Profile) string {
+	if profile.Name == "production" {
+		return "dev.local.autoapi"
+	}
+	return "dev.local.autoapi." + profile.Name
 }

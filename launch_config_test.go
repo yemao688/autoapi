@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"autoapi/internal/config"
 	"autoapi/internal/model"
 )
 
@@ -155,6 +156,38 @@ func TestResolveLaunchConfig(t *testing.T) {
 			}
 			if cfg.enableTray != tt.wantEnableTray {
 				t.Errorf("enableTray = %v, want %v", cfg.enableTray, tt.wantEnableTray)
+			}
+		})
+	}
+}
+
+func TestSingleInstanceLockID(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile config.Profile
+		want    string
+	}{
+		{
+			name:    "production retains existing ID for upgrade compatibility",
+			profile: config.Profile{Name: "production"},
+			want:    "dev.local.autoapi",
+		},
+		{
+			name:    "development gets isolated ID",
+			profile: config.Profile{Name: "development"},
+			want:    "dev.local.autoapi.development",
+		},
+		{
+			name:    "custom profile gets isolated ID",
+			profile: config.Profile{Name: "preview"},
+			want:    "dev.local.autoapi.preview",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := singleInstanceLockID(tt.profile); got != tt.want {
+				t.Errorf("singleInstanceLockID() = %q, want %q", got, tt.want)
 			}
 		})
 	}

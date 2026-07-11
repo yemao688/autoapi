@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log/slog"
 
+	"autoapi/internal/config"
 	"autoapi/internal/tray"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -19,6 +20,7 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
+	profile := config.Current()
 
 	// Resolve static lifecycle options from persisted settings before
 	// wails.Run. These options are evaluated once by Wails at startup and
@@ -102,7 +104,7 @@ func main() {
 		StartHidden:       cfg.startHidden,
 		HideWindowOnClose: cfg.hideOnClose,
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: "dev.local.autoapi",
+			UniqueId: singleInstanceLockID(profile),
 			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
 				if err := app.ShowApp(); err != nil {
 					slog.Warn("launch: failed to show window for second instance", "error", err)
