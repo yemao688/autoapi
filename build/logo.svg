@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="logoTitle logoDesc">
+  <title id="logoTitle">Autoapi</title>
+  <desc id="logoDesc">A geometric split-flow icon. A gateway portal on the left fans out through three curved paths to three provider nodes, expressing API request routing and load distribution.</desc>
+
+  <defs>
+    <!-- Background: restrained blue-cyan diagonal gradient -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6FBDF5"/>
+      <stop offset="55%" stop-color="#2A7AE5"/>
+      <stop offset="100%" stop-color="#0F3A92"/>
+    </linearGradient>
+
+    <!-- Soft top-left sheen for dimensionality -->
+    <radialGradient id="sheen" cx="28%" cy="20%" r="55%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="60%" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Subtle bottom vignette for depth -->
+    <radialGradient id="vignette" cx="50%" cy="100%" r="65%">
+      <stop offset="0%" stop-color="#08206B" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#08206B" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Node gradient: subtle spherical gloss -->
+    <radialGradient id="node" cx="32%" cy="28%" r="85%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#F2F8FF"/>
+      <stop offset="100%" stop-color="#C9E0F8"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Base: Big Sur-style rounded square -->
+  <rect width="1024" height="1024" rx="224" ry="224" fill="url(#bg)"/>
+
+  <!-- Atmospheric layers -->
+  <rect width="1024" height="1024" rx="224" ry="224" fill="url(#sheen)"/>
+  <rect width="1024" height="1024" rx="224" ry="224" fill="url(#vignette)"/>
+
+  <!-- Edge highlight for that Apple glass edge -->
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="222.5" ry="222.5"
+        fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="3"/>
+
+  <!-- Split-flow paths: one gateway portal fans out to three routes -->
+  <g stroke="#FFFFFF" stroke-linecap="round" fill="none" stroke-width="52" stroke-opacity="0.98">
+    <!-- Top route -->
+    <path d="M 426 451 C 540 451 620 321 695 321"/>
+    <!-- Primary (center) route -->
+    <line x1="440" y1="512" x2="748" y2="512"/>
+    <!-- Bottom route -->
+    <path d="M 426 573 C 540 573 620 703 695 703"/>
+  </g>
+
+  <!-- Provider nodes (drawn after paths so they cap the lines) -->
+  <circle cx="760" cy="290" r="72" fill="url(#node)"/>
+  <circle cx="820" cy="512" r="72" fill="url(#node)"/>
+  <circle cx="760" cy="734" r="72" fill="url(#node)"/>
+
+  <!-- Gateway hub: the dominant input node -->
+  <circle cx="300" cy="512" r="140" fill="url(#node)"/>
+  <!-- Inner portal cutout: a darker blue core that reads as a gateway socket -->
+  <circle cx="300" cy="512" r="88" fill="#1B62C5"/>
+  <!-- Subtle portal rim -->
+  <circle cx="300" cy="512" r="88" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="3"/>
+  <!-- Outer rim highlight -->
+  <circle cx="300" cy="512" r="140" fill="none" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="3"/>
+
+  <!-- Provider-node rim highlights -->
+  <circle cx="760" cy="290" r="72" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="2.5"/>
+  <circle cx="820" cy="512" r="72" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="2.5"/>
+  <circle cx="760" cy="734" r="72" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="2.5"/>
+</svg>
