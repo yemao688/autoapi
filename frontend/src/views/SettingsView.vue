@@ -477,8 +477,8 @@ watch(activeTheme, (t) => {
               <select class="select" style="max-width: 320px;" v-model="settings.general.close_action" @change="markSettingsDirty">
                 <option value="background">{{ t('settings.general.closeBackground') }}</option>
                 <option value="quit">{{ t('settings.general.closeQuit') }}</option>
-                <option value="ask">{{ t('settings.general.closeAsk') }}</option>
               </select>
+              <div class="field-help">{{ t('settings.general.closeActionHint') }}</div>
             </div>
 
             <div class="h-divider" style="margin: 18px 0 14px;"></div>

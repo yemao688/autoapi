@@ -124,7 +124,7 @@ func (s *Store) defaultSettings() model.Settings {
 			LaunchAtLogin: false,
 			StartupAction: "show_window",
 			MenuBarItem:   true,
-			CloseAction:   "background",
+			CloseAction:   model.CloseActionBackground,
 		},
 		Appearance: model.AppearanceSettings{
 			Theme:       "system",

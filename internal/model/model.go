@@ -288,6 +288,11 @@ type Settings struct {
 	Logging    LoggingSettings    `json:"logging"`
 }
 
+const (
+	CloseActionBackground = "background"
+	CloseActionQuit       = "quit"
+)
+
 type GeneralSettings struct {
 	LaunchAtLogin bool   `json:"launch_at_login"`
 	StartupAction string `json:"startup_action"` // "show_window" | "minimize_menubar" | "no_window"

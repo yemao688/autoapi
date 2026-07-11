@@ -58,7 +58,7 @@
       "closeAction": "When main window is closed",
       "closeBackground": "Keep running in background",
       "closeQuit": "Quit Autoapi",
-      "closeAsk": "Ask every time",
+      "closeActionHint": "Requires restarting Autoapi to take effect",
       "restoreDefaultsLabel": "Restore default settings",
       "restoreDefaultsHelp": "Reset every option in this section to factory defaults · routes, keys, and logs are not affected"
     },

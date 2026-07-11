@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 
+	"autoapi/internal/model"
 	"autoapi/internal/tray"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -18,6 +19,23 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
+
+	// Read close_action setting before wails.Run to set the static
+	// HideWindowOnClose option. HideWindowOnClose is evaluated once by
+	// Wails at startup and cannot be changed at runtime, so changes to
+	// close_action only take effect after an app restart.
+	hideOnClose := true // default: background mode
+	if s, sErr := app.GetSettings(); sErr == nil && s != nil {
+		switch s.General.CloseAction {
+		case model.CloseActionQuit:
+			hideOnClose = false
+		case model.CloseActionBackground:
+			hideOnClose = true
+		default:
+			// Unknown/empty/legacy "ask" value: normalize to background.
+			hideOnClose = true
+		}
+	}
 
 	// Build the application menu (top-of-screen on macOS, window menu on
 	// Windows/Linux). The Wails v2.12.0 release used here does not expose a
@@ -81,11 +99,12 @@ func main() {
 	startTray()
 
 	err := wails.Run(&options.App{
-		Title:     "Autoapi",
-		Width:     1280,
-		Height:    800,
-		MinWidth:  480,
-		MinHeight: 400,
+		Title:             "Autoapi",
+		Width:             1280,
+		Height:            800,
+		MinWidth:          480,
+		MinHeight:         400,
+		HideWindowOnClose: hideOnClose,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

@@ -243,19 +243,16 @@ func (a *App) GetSystemHealth() (model.ServiceHealth, error) {
 // while the runtime is still wiring up), and runtime.* helpers below would
 // otherwise log.Fatal on a nil context.
 
-// ShowWindow makes the main window visible. On a hidden or minimised window
-// this both shows and un-minimises it. Returns an error only when ctx is
-// unavailable; runtime.WindowShow is a no-op when the window is already
-// visible, so we do not propagate its lack of return value.
+// ShowWindow restores and activates the main window. runtime.Show is needed
+// on macOS because HideWindowOnClose hides the entire application (NSApp),
+// not just the window. WindowShow handles the case where the window was
+// individually hidden via WindowHide. WindowUnminimise handles minimised state.
 func (a *App) ShowWindow() error {
 	if a.ctx == nil {
 		return fmt.Errorf("app: ShowWindow called before Startup")
 	}
+	runtime.Show(a.ctx)
 	runtime.WindowShow(a.ctx)
-	// WindowUnminimise has no effect if the window is not minimised; calling
-	// it ensures the window is brought back to the foreground on platforms
-	// where Show alone leaves a minimised window hidden. Wails v2 has no
-	// WindowRaise, so this is the closest portable approximation.
 	runtime.WindowUnminimise(a.ctx)
 	return nil
 }

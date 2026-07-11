@@ -58,7 +58,7 @@
       "closeAction": "关闭主窗口时",
       "closeBackground": "继续在后台运行",
       "closeQuit": "退出 Autoapi",
-      "closeAsk": "每次询问",
+      "closeActionHint": "更改后需重启 Autoapi 生效",
       "restoreDefaultsLabel": "恢复默认设置",
       "restoreDefaultsHelp": "将本节所有选项重置为出厂默认值 · 不影响路由规则、密钥与日志"
     },
