@@ -84,6 +84,8 @@ export function SaveSettings(arg1:model.Settings):Promise<void>;
 
 export function SetModelsActive(arg1:string,arg2:Array<string>,arg3:boolean):Promise<void>;
 
+export function SetProviderEnabled(arg1:string,arg2:boolean):Promise<void>;
+
 export function ShowWindow():Promise<void>;
 
 export function Shutdown(arg1:context.Context):Promise<void>;
@@ -93,6 +95,8 @@ export function StartProxy():Promise<void>;
 export function StopProxy():Promise<void>;
 
 export function TestAllProviders():Promise<Array<model.ProviderTestResult>>;
+
+export function TestModelChat(arg1:string,arg2:string):Promise<model.ModelChatTestResult>;
 
 export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTestResult>;
 

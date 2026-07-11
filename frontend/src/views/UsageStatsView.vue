@@ -9,6 +9,7 @@ import { useLiveSync, type SyncMode } from "@/composables/useLiveSync";
 import { useToast } from "@/composables/useToast";
 import { useConfirm } from "@/composables/useConfirm";
 import { useTabKeyboard } from "@/composables/useTabKeyboard";
+import { useCompactNumber } from "@/composables/useCompactNumber";
 import type { ProviderOption } from "@/types/usage";
 import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
 import TokensPane from "@/components/usage/TokensPane.vue";
@@ -23,6 +24,7 @@ const { t } = useI18n();
 const { download } = useExportDownload();
 const toast = useToast();
 const confirm = useConfirm();
+const { format: compact } = useCompactNumber();
 
 // usageFilter is the current filter snapshot passed to usageStats. It
 // is updated by buildLogQuery() before each fetch so the KPI cards,
@@ -164,7 +166,7 @@ const routeOptions = computed<RouteOption[]>(() => {
 const tokenStats = computed(() =>
   (usageData.value?.token_stats || []).slice(0, 4),
 );
-const logStats = computed(() => (usageData.value?.log_stats || []).slice(0, 4));
+const logStats = computed(() => usageData.value?.log_stats || []);
 const providerShares = computed(() => usageData.value?.providers || []);
 // modelRanking is the top-5 list for the ranking card. modelRankingFull
 // is the untruncated list passed to the donut chart so it can group
@@ -180,12 +182,15 @@ const totalTokenValue = computed(() => {
   const stat = tokenStats.value.find(
     (s) => s.label === "usage.stats.totalTokens",
   );
-  if (stat?.value) return stat.value;
+  if (stat?.value) {
+    const n = Number(stat.value);
+    if (Number.isFinite(n) && n > 0) return compact(n);
+  }
   // Fallback: derive from provider shares if the stat isn't present yet
   // (e.g. before the first refresh completes).
   if (providerShares.value.length > 0) {
     const total = providerShares.value.reduce((sum, p) => sum + p.tokens, 0);
-    return total > 0 ? total.toLocaleString() : "—";
+    return total > 0 ? compact(total) : "—";
   }
   return "—";
 });
@@ -402,13 +407,15 @@ function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
     if (liveSync.value !== mode) {
       return;
     }
-    nextPollAt.value = null;
-    pollCountdown.value = "";
+    // Set the next deadline BEFORE refreshing so the countdown never blanks
+    // out while the request is in flight. Do NOT clear pollCountdown — let
+    // the running interval update it from the new deadline.
+    nextPollAt.value = Date.now() + ms;
+    updateCountdownLabel();
     void refreshAll().finally(() => {
       if (liveSync.value !== mode) {
         return;
       }
-      nextPollAt.value = Date.now() + ms;
       startCountdownTimer();
       pollTimer = setTimeout(tick, ms);
     });
@@ -680,7 +687,6 @@ watch([modelFilter, searchText], () => {
           aria-live="polite"
         >
           <span class="sse-dot" :class="sseState"></span>
-          <span class="sse-label">{{ t(`usage.sseStatus.${sseState}`) }}</span>
         </div>
         <div
           v-else-if="liveSync === '5s' || liveSync === '30s'"
@@ -847,7 +853,10 @@ watch([modelFilter, searchText], () => {
 .sse-status {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  min-width: 36px;
+  min-height: 28px;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;

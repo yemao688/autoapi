@@ -241,7 +241,8 @@
       "test": "测试",
       "testing": "测试中…",
       "testSuccess": "连接成功 · 延迟 {ms}ms",
-      "testFailed": "连接失败"
+      "testFailed": "连接失败",
+      "providerDisabled": "上游已禁用"
     }
   },
   "providers": {
@@ -286,6 +287,8 @@
       "error": "异常",
       "notConnected": "未连接"
     },
+    "enable": "启用上游",
+    "disable": "禁用上游",
     "testResult": {
       "success": "测试成功：延迟 {ms}ms，模型 {count} 个",
       "failed": "测试失败：{error}",
@@ -337,7 +340,9 @@
       "context": "上下文",
       "latency": "延迟",
       "enabled": "启用",
-      "testLatency": "测试延迟"
+      "testLatency": "测试延迟",
+      "createAndContinue": "创建并继续",
+      "createdCanManage": "上游已创建，现在可以管理可用模型"
     }
   },
   "targets": {
@@ -461,13 +466,11 @@
     "loading": "加载中…",
     "ariaLabel": "使用统计视图",
     "stats": {
-      "totalRequests": "总请求数",
-      "totalTokens": "总 Token 数",
+      "totalRequests": "请求数",
+      "totalTokens": "Token 数",
       "estimatedCost": "预估成本",
-      "totalRequests30d": "30 天请求数",
       "successRate": "成功率",
-      "p95Latency": "P95 延迟",
-      "errors30d": "30 天错误数"
+      "errors": "错误数"
     },
     "tabs": {
       "logs": "请求日志",
@@ -546,7 +549,7 @@
       "output": "输出",
       "cost": "成本",
       "totalCost": "总成本",
-      "latencyTtft": "首字·用时",
+      "latencyTtft": "首字/用时",
       "ttft": "首字",
       "defaultRoute": "默认",
       "streamSuffix": "流",
@@ -585,6 +588,16 @@
     "clearAllMessage": "此操作将永久删除全部请求日志，且无法恢复。确定继续吗？",
     "clearAllConfirm": "清空全部",
     "clearAllDone": "已清空 {count} 条统计日志"
+  },
+  "testModel": {
+    "title": "测试模型",
+    "sending": "正在发送...",
+    "prompt": "提示词",
+    "response": "响应",
+    "latency": "延迟",
+    "error": "错误",
+    "close": "关闭",
+    "waiting": "等待响应..."
   },
   "common": {
     "save": "保存",

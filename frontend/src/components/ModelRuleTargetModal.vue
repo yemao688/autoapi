@@ -5,6 +5,7 @@ import { model } from '../../wailsjs/go/models'
 import { api } from '@/api/client'
 import { useToast } from '@/composables/useToast'
 import AutoComplete from '@/components/AutoComplete.vue'
+import TestModelChatModal from '@/components/TestModelChatModal.vue'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -32,6 +33,7 @@ const form = ref<model.ModelRuleTarget>(new model.ModelRuleTarget({
 const availableModels = ref<string[]>([])
 const loadingModels = ref(false)
 const testing = ref(false)
+const chatModal = ref({ open: false })
 
 // Track the provider ID we're loading models for, to guard against stale responses
 let loadingForProvider = ''
@@ -68,8 +70,8 @@ watch(() => props.target, (t) => {
   }
 }, { immediate: true })
 
-// When the user changes the upstream, load its available models
-// and clear the model name (unless it was set by the watcher above)
+// Load available models when the upstream changes. The watcher covers
+// both initialization (from the target watcher above) and user changes.
 watch(() => form.value.provider_id, (newId, oldId) => {
   if (newId === oldId) return
   if (newId) {
@@ -77,11 +79,13 @@ watch(() => form.value.provider_id, (newId, oldId) => {
   } else {
     availableModels.value = []
   }
-  // Clear model name when upstream changes (user-initiated, not initial load)
-  if (oldId !== undefined) {
-    form.value.model_name = ''
-  }
 })
+
+// User-initiated provider change: clear the stale model name. The watcher
+// above handles loading models — no need to call it again here.
+function onProviderChange() {
+  form.value.model_name = ''
+}
 
 async function loadAvailableModels(providerId: string) {
   loadingForProvider = providerId
@@ -166,7 +170,7 @@ async function testModel() {
         <div class="modal-title">{{ isEdit ? t('modelRules.targets.edit') : t('modelRules.targets.add') }}</div>
         <div class="field">
           <label class="field-label">{{ t('modelRules.targets.provider') }}</label>
-          <select v-model="form.provider_id" class="select" :disabled="saving">
+          <select v-model="form.provider_id" class="select" :disabled="saving" @change="onProviderChange">
             <option value="" disabled>{{ t('modelRules.targets.providerPlaceholder') }}</option>
             <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
@@ -200,9 +204,24 @@ async function testModel() {
           >
             {{ testing ? t('modelRules.targets.testing') : t('modelRules.targets.test') }}
           </button>
+          <button
+            class="btn btn-secondary"
+            :disabled="saving || testing || !isValid"
+            @click="chatModal.open = true"
+          >
+            {{ t('testModel.title') }}
+          </button>
           <button class="btn btn-primary" :disabled="saving || !isValid" @click="save">{{ saving ? t('modelRules.targets.saving') : t('modelRules.targets.save') }}</button>
         </div>
       </div>
     </div>
   </Teleport>
+
+  <TestModelChatModal
+    :open="chatModal.open"
+    :provider-id="form.provider_id"
+    :provider-name="providers.find(p => p.id === form.provider_id)?.name || ''"
+    :model-name="trimmedModelName"
+    @close="chatModal.open = false"
+  />
 </template>

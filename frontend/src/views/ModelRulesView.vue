@@ -76,6 +76,12 @@ const providerNameMap = computed(() => {
   return map
 })
 
+const providerEnabledMap = computed(() => {
+  const map: Record<string, boolean> = {}
+  ;(providers.value || []).forEach((p) => (map[p.id] = !!p.enabled))
+  return map
+})
+
 function targetIconStyle(providerId: string) {
   const name = providerNameMap.value[providerId] || ''
   return {
@@ -478,7 +484,7 @@ onMounted(() => {
                     v-for="(target, tidx) in rule.targets"
                     :key="target.id || tidx"
                     class="target-row"
-                    :class="{ 'target-disabled': !target.enabled }"
+                    :class="{ 'target-disabled': !target.enabled, 'target-provider-disabled': providerEnabledMap[target.provider_id] === false }"
                   >
                     <span
                       class="drag-handle"
@@ -494,6 +500,11 @@ onMounted(() => {
                       <span class="target-model">{{ target.model_name || t('modelRules.targetDefault') }}</span>
                       <span v-if="target.max_retries > 0" class="badge mono">{{ t('modelRules.targetRetries', { count: target.max_retries }) }}</span>
                       <span v-if="!target.enabled" class="badge" style="font-size: 10px; padding: 1px 6px;">{{ t('modelRules.targetDisabled') }}</span>
+                      <span
+                        v-else-if="providerEnabledMap[target.provider_id] === false"
+                        class="badge badge-provider-disabled"
+                        :title="t('modelRules.targets.providerDisabled')"
+                      >{{ t('modelRules.targets.providerDisabled') }}</span>
                     </div>
                     <div class="target-counters">
                       <span>{{ t('modelRules.targetHits', { count: formatHits(target.hit_count) }) }}</span>
@@ -779,6 +790,34 @@ html[data-theme="dark"] .drag-handle:hover {
 }
 .target-disabled .target-icon {
   opacity: 0.5;
+}
+
+/* Target row whose upstream (provider) itself has been disabled. We keep
+   the row readable — the mapping is still valid, it just can't be reached
+   right now — and rely on the warning badge plus a soft dim to signal it. */
+.target-provider-disabled {
+  opacity: 0.62;
+}
+.target-provider-disabled .target-icon {
+  opacity: 0.55;
+  filter: grayscale(0.4);
+}
+.target-provider-disabled:hover {
+  opacity: 0.85;
+}
+
+/* Warn-tinted badge used for "Provider disabled" so it visually differs
+   from the muted-gray "Mapping disabled" badge above it. Amber conveys
+   "something is wrong upstream" without being an error. */
+.badge-provider-disabled {
+  font-size: 10px;
+  padding: 1px 6px;
+  background: rgba(245, 166, 35, 0.14);
+  color: var(--warning);
+}
+html[data-theme="dark"] .badge-provider-disabled {
+  background: rgba(255, 159, 10, 0.18);
+  color: #ffb340;
 }
 
 .rule-footer {

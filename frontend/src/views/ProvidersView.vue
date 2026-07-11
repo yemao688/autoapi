@@ -3,16 +3,15 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../api/client'
 import { useApi } from '../composables/useApi'
-import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderStyle } from '../composables/useProviderStyle'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
+import TestModelChatModal from '@/components/TestModelChatModal.vue'
 import type { model } from '../../wailsjs/go/models'
 
 const { t } = useI18n()
-const { format } = useRelativeTime()
 const { color: providerColor, initial: providerLetter } = useProviderStyle()
 const { tokens: fmtTokens, latency: fmtLatency } = useFormatters()
 const toast = useToast()
@@ -40,6 +39,12 @@ const testingIds = ref<Set<string>>(new Set())
 
 const models = ref<model.Model[]>([])
 const testingModelIds = ref<Set<string>>(new Set())
+const chatTestModal = ref({
+  open: false,
+  providerId: '',
+  providerName: '',
+  modelName: '',
+})
 const fetchingModels = ref(false)
 
 // Monotonic generation token to guard against stale async responses after
@@ -50,7 +55,7 @@ const modalGeneration = ref(0)
 const mutationBusy = ref(false)
 
 // API key visibility / dirty tracking
-const keyVisible = ref(true)
+const keyVisible = ref(false)
 const keyDirty = ref(false)
 const originalKey = ref('')
 const loadingKey = ref(false)
@@ -119,20 +124,17 @@ const allSelected = computed(
     selectedModelNames.value.size === addableFetchedModels.value.length
 )
 
-function statusLabel(status: string): string {
-  if (status === 'connected') return t('providers.status.connected')
-  if (status === 'error') return t('providers.status.error')
-  return t('providers.status.notConnected')
-}
-
-function statusBadgeClass(status: string): string {
-  if (status === 'connected') return 'success'
-  return 'error'
-}
-
-function statusDotClass(status: string): string {
-  if (status === 'connected') return 'green'
-  return 'red'
+async function toggleProviderEnabled(provider: model.Provider) {
+  // Optimistic update — flip locally first so the card reacts instantly.
+  const prev = provider.enabled
+  provider.enabled = !prev
+  try {
+    await api.setProviderEnabled(provider.id, !prev)
+  } catch (e: any) {
+    // Revert on failure so UI stays consistent with server.
+    provider.enabled = prev
+    toast.push(t('toast.toggleFailed') + ': ' + (e?.message || String(e)), 'error')
+  }
 }
 
 async function loadModels() {
@@ -452,6 +454,15 @@ async function testModelLatency(m: model.Model) {
   }
 }
 
+function openChatTest(model: model.Model) {
+  chatTestModal.value = {
+    open: true,
+    providerId: editingId.value,
+    providerName: form.value.name,
+    modelName: model.name,
+  }
+}
+
 function resetModalState() {
   // Clear all secondary modal state to prevent stale data leaking between sessions.
   selectionModalOpen.value = false
@@ -461,7 +472,7 @@ function resetModalState() {
   manualAddName.value = ''
   editingModelId.value = ''
   editingModelName.value = ''
-  keyVisible.value = true
+  keyVisible.value = false
   keyDirty.value = false
   originalKey.value = ''
   loadingKey.value = false
@@ -545,13 +556,41 @@ async function saveProvider() {
     }
     if (modalMode.value === 'edit') {
       await api.updateProvider(editingId.value, payload)
+      modalOpen.value = false
+      resetModalState()
+      await refresh()
+      toast.push(t('toast.providerSaved'), 'success')
     } else {
-      await api.createProvider(payload)
+      // After successful creation, stay in the modal but switch to edit
+      // mode so the user can immediately manage the upstream's available
+      // models without going through the list again.
+      const created = await api.createProvider(payload)
+      // Bump the generation token so any in-flight openEdit() callbacks
+      // from a previous session drop their results against stale state.
+      modalGeneration.value++
+      editingId.value = created.id
+      modalMode.value = 'edit'
+      originalKey.value = form.value.upstream_key
+      keyDirty.value = false
+      // Sequential refresh: load providers first so the model map has
+      // the new provider, then load models for the new provider.
+      await loadProviders()
+      await loadModels()
+      // Load this provider's models for the modal section. Use a fresh
+      // generation token so the result lands cleanly.
+      const gen = modalGeneration.value
+      try {
+        const list = await api.listModels(created.id)
+        if (modalGeneration.value === gen && editingId.value === created.id) {
+          models.value = list
+        }
+      } catch {
+        if (modalGeneration.value === gen && editingId.value === created.id) {
+          models.value = []
+        }
+      }
+      toast.push(t('providers.modal.createdCanManage'), 'success')
     }
-    modalOpen.value = false
-    resetModalState()
-    await refresh()
-    toast.push(t('toast.providerSaved'), 'success')
   } catch (e: any) {
     toast.push(t('toast.saveFailed') + ': ' + (e?.message || String(e)), 'error')
   } finally {
@@ -675,21 +714,34 @@ onMounted(() => {
 
         <!-- Provider cards grid -->
         <section v-else class="col-2">
-          <article v-for="provider in filteredProviders" :key="provider.id" class="card card-hover" :style="{ opacity: provider.status === 'connected' ? 1 : 0.78 }">
+          <article
+            v-for="provider in filteredProviders"
+            :key="provider.id"
+            class="card card-hover provider-card"
+            :class="{ 'provider-disabled': !provider.enabled }"
+          >
             <div class="row-between" style="margin-bottom: 14px;">
-              <div class="row" style="gap: 12px;">
+              <div class="row" style="gap: 12px; min-width: 0;">
                 <div class="list-icon" :style="{ background: providerColor(provider.name), color: 'white', width: '38px', height: '38px', fontSize: '15px' }">
                   {{ providerLetter(provider.name) }}
                 </div>
-                <div>
+                <div style="min-width: 0;">
                   <div style="font-size: 15px; font-weight: 600;">{{ provider.name }}</div>
-                  <div class="text-mono text-muted" style="font-size: 11.5px; margin-top: 1px;">{{ provider.base_url }}</div>
+                  <div class="text-mono text-muted" style="font-size: 11.5px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ provider.base_url }}</div>
                 </div>
               </div>
-              <span class="badge" :class="statusBadgeClass(provider.status)">
-                <span class="dot" :class="statusDotClass(provider.status)"></span>
-                {{ statusLabel(provider.status) }}
-              </span>
+              <label
+                class="toggle toggle-sm"
+                :aria-label="provider.enabled ? t('providers.disable') : t('providers.enable')"
+                @click.stop
+              >
+                <input
+                  type="checkbox"
+                  :checked="provider.enabled"
+                  @change="toggleProviderEnabled(provider)"
+                >
+                <span class="toggle-slider blue"></span>
+              </label>
             </div>
             <div class="h-divider" style="margin: 0 0 14px;"></div>
             <div class="row-between" style="margin-bottom: 10px;">
@@ -708,40 +760,37 @@ onMounted(() => {
               </template>
               <span v-else class="badge mono" style="color: var(--muted);">{{ t('providers.modelCount', { count: provider.models_count }) }}</span>
             </div>
-            <div class="row-between">
-              <span class="text-muted" style="font-size: 11px;" :data-time="provider.last_tested_at">{{ provider.status === 'connected' ? t('providers.testedAt') : t('providers.failedAt') }} {{ format(provider.last_tested_at) }}</span>
-              <div class="row" style="gap: 4px;">
-                <button
-                  class="btn"
-                  :class="provider.status === 'connected' ? 'btn-secondary' : 'btn-primary'"
-                  style="padding: 4px 10px; font-size: 12px;"
-                  :disabled="testingIds.has(provider.id)"
-                  @click="testOne(provider.id)"
-                >
-                  {{ testingIds.has(provider.id) ? t('providers.testing') : (provider.status === 'connected' ? t('providers.test') : t('providers.reconnect')) }}
-                </button>
-                <button class="btn btn-icon" :title="t('common.edit')" @click="openEdit(provider)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
-                </button>
-                <DropdownMenu :menu-id="provider.id">
-                  <template #trigger="{ toggle, open }">
-                    <button
-                      class="btn btn-icon"
-                      :title="t('providers.more')"
-                      :aria-expanded="open"
-                      aria-haspopup="menu"
-                      :aria-label="t('providers.moreActions', { name: provider.name })"
-                      @click="toggle"
-                    >
-                      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-                    </button>
-                  </template>
-                  <template #menu="{ close }">
-                    <button class="dropdown-item" role="menuitem" @click="openEdit(provider); close()">{{ t('common.edit') }}</button>
-                    <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteProvider(provider.id, provider.name); close()">{{ t('common.delete') }}</button>
-                  </template>
-                </DropdownMenu>
-              </div>
+            <div class="row" style="justify-content: flex-end; gap: 4px;">
+              <button
+                class="btn"
+                :class="provider.status === 'connected' ? 'btn-secondary' : 'btn-primary'"
+                style="padding: 4px 10px; font-size: 12px;"
+                :disabled="testingIds.has(provider.id)"
+                @click="testOne(provider.id)"
+              >
+                {{ testingIds.has(provider.id) ? t('providers.testing') : (provider.status === 'connected' ? t('providers.test') : t('providers.reconnect')) }}
+              </button>
+              <button class="btn btn-icon" :title="t('common.edit')" @click="openEdit(provider)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
+              </button>
+              <DropdownMenu :menu-id="provider.id">
+                <template #trigger="{ toggle, open }">
+                  <button
+                    class="btn btn-icon"
+                    :title="t('providers.more')"
+                    :aria-expanded="open"
+                    aria-haspopup="menu"
+                    :aria-label="t('providers.moreActions', { name: provider.name })"
+                    @click="toggle"
+                  >
+                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                  </button>
+                </template>
+                <template #menu="{ close }">
+                  <button class="dropdown-item" role="menuitem" @click="openEdit(provider); close()">{{ t('common.edit') }}</button>
+                  <button class="dropdown-item danger" role="menuitem" :disabled="deleting" @click="deleteProvider(provider.id, provider.name); close()">{{ t('common.delete') }}</button>
+                </template>
+              </DropdownMenu>
             </div>
           </article>
 
@@ -941,9 +990,14 @@ onMounted(() => {
                     </label>
                   </td>
                   <td class="right">
-                    <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" :title="t('providers.modal.testLatency')" :aria-label="t('providers.modal.testLatency')" @click="testModelLatency(m)">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                    </button>
+                    <div class="row" style="gap: 4px; justify-content: flex-end;">
+                      <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" :title="t('providers.modal.testLatency')" :aria-label="t('providers.modal.testLatency')" @click="testModelLatency(m)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                      </button>
+                      <button class="btn btn-icon" :title="t('testModel.title')" :aria-label="t('testModel.title')" @click="openChatTest(m)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      </button>
+                    </div>
                   </td>
                   <td class="right">
                     <DropdownMenu :menu-id="`model-${m.id}`" :min-width="140">
@@ -973,7 +1027,7 @@ onMounted(() => {
 
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? t('common.processing') : t('common.save') }}</button>
+          <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? t('common.processing') : (modalMode === 'add' ? t('providers.modal.createAndContinue') : t('common.save')) }}</button>
         </div>
       </div>
     </div>
@@ -1030,6 +1084,14 @@ onMounted(() => {
       </div>
     </div>
   </Teleport>
+
+  <TestModelChatModal
+    :open="chatTestModal.open"
+    :provider-id="chatTestModal.providerId"
+    :provider-name="chatTestModal.providerName"
+    :model-name="chatTestModal.modelName"
+    @close="chatTestModal.open = false"
+  />
 </template>
 
 <style scoped>
@@ -1045,5 +1107,33 @@ onMounted(() => {
 .btn-danger-text:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Disabled provider card — fade the whole card but keep text legible enough
+   for users to still scan, identify, and re-enable the upstream. */
+.provider-card.provider-disabled {
+  opacity: 0.55;
+}
+.provider-card.provider-disabled:hover {
+  opacity: 0.7;
+}
+
+/* Compact toggle used inside provider cards. Smaller than the default
+   36x22 so it fits naturally next to the header identity block. */
+.toggle.toggle-sm {
+  width: 32px;
+  height: 18px;
+}
+.toggle.toggle-sm .toggle-slider {
+  border-radius: 9px;
+}
+.toggle.toggle-sm .toggle-slider::before {
+  width: 14px;
+  height: 14px;
+  top: 2px;
+  left: 2px;
+}
+.toggle.toggle-sm input:checked + .toggle-slider::before {
+  transform: translateX(14px);
 }
 </style>

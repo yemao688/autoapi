@@ -178,10 +178,10 @@ const columnCount = computed(() => columns)
         <th>{{ t('usage.logTable.status') }}</th>
         <th>{{ t('usage.logTable.requestModel') }}</th>
         <th>{{ t('usage.logTable.hitModel') }}</th>
+        <th class="right">{{ t('usage.logTable.latencyTtft') }}</th>
         <th class="right">{{ t('usage.logTable.input') }}</th>
         <th class="right">{{ t('usage.logTable.output') }}</th>
         <th class="right">{{ t('usage.logTable.totalCost') }}</th>
-        <th class="right">{{ t('usage.logTable.latencyTtft') }}</th>
       </tr>
     </thead>
     <tbody>
@@ -237,28 +237,18 @@ const columnCount = computed(() => columns)
             </template>
           </td>
 
-          <!-- 5. Input (with cache sub-line) -->
-          <td class="num">
-            <div class="cell-tokens">
-              <span :title="log.input_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.input_tokens > 0 ? log.input_tokens.toLocaleString() : '—' }}</span>
-              <span v-if="log.cache_hit > 0" class="cache-sub" :title="t('usage.logTable.inputCache')">R{{ log.cache_hit.toLocaleString() }}</span>
-            </div>
-          </td>
-
-          <!-- 6. Output -->
-          <td class="num"><span :title="log.output_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.output_tokens > 0 ? log.output_tokens.toLocaleString() : '—' }}</span></td>
-
-          <!-- 7. Total cost -->
-          <td class="num"><span :title="log.cost > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</span></td>
-
-          <!-- 8. TTFT / Latency + stream suffix + expand chevron -->
+          <!-- 5. TTFT / Latency + stream suffix + expand chevron -->
           <td class="right cell-timing">
             <div class="timing-values">
               <template v-if="log.first_token_ms > 0">
-                <span class="timing-ttft" :class="timingClass(log.first_token_ms, 1000, 3000)">{{ (log.first_token_ms / 1000).toFixed(1) }}s</span>
+                <span class="timing-badge" :class="timingClass(log.first_token_ms, 3000, 10000)">{{ (log.first_token_ms / 1000).toFixed(1) }}s</span>
                 <span class="timing-sep">/</span>
               </template>
-              <span class="timing-latency" :class="timingClass(log.latency_ms, 3000, 8000)">{{ (log.latency_ms / 1000).toFixed(1) }}s</span>
+              <template v-else>
+                <span class="timing-badge timing-neutral">—</span>
+                <span class="timing-sep">/</span>
+              </template>
+              <span class="timing-badge" :class="timingClass(log.latency_ms, 100000, 180000)">{{ (log.latency_ms / 1000).toFixed(1) }}s</span>
               <span class="stream-suffix" :class="log.is_stream ? 'stream' : 'nostream'">{{ log.is_stream ? t('usage.logTable.streamSuffix') : t('usage.logTable.nonStreamSuffix') }}</span>
             </div>
             <span
@@ -268,6 +258,20 @@ const columnCount = computed(() => columns)
               aria-hidden="true"
             >›</span>
           </td>
+
+          <!-- 6. Input (with cache sub-line) -->
+          <td class="num">
+            <div class="cell-tokens">
+              <span :title="log.input_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.input_tokens > 0 ? log.input_tokens.toLocaleString() : '—' }}</span>
+              <span v-if="log.cache_hit > 0" class="cache-sub" :title="t('usage.logTable.inputCache')">R{{ log.cache_hit.toLocaleString() }}</span>
+            </div>
+          </td>
+
+          <!-- 7. Output -->
+          <td class="num"><span :title="log.output_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.output_tokens > 0 ? log.output_tokens.toLocaleString() : '—' }}</span></td>
+
+          <!-- 8. Total cost -->
+          <td class="num"><span :title="log.cost > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</span></td>
         </tr>
         <tr v-if="isExpanded(log)" class="log-detail-row">
           <td :colspan="columnCount">
@@ -382,13 +386,13 @@ const columnCount = computed(() => columns)
 .tbl th:nth-child(4),
 .tbl td:nth-child(4) { min-width: 150px; }  /* Hit model        (provider + model) */
 .tbl th:nth-child(5),
-.tbl td:nth-child(5) { min-width: 64px; }   /* Input            (12345 + cache sub) */
+.tbl td:nth-child(5) { min-width: 130px; }  /* Latency/TTFT     (3.2s/6.8s · stream) */
 .tbl th:nth-child(6),
-.tbl td:nth-child(6) { min-width: 64px; }   /* Output           (1234) */
+.tbl td:nth-child(6) { min-width: 64px; }   /* Input            (12345 + cache sub) */
 .tbl th:nth-child(7),
-.tbl td:nth-child(7) { min-width: 72px; }   /* Total cost       ($0.123) */
+.tbl td:nth-child(7) { min-width: 64px; }   /* Output           (1234) */
 .tbl th:nth-child(8),
-.tbl td:nth-child(8) { min-width: 130px; }  /* Latency/TTFT     (3.2s/6.8s · stream) */
+.tbl td:nth-child(8) { min-width: 72px; }   /* Total cost       ($0.123) */
 
 /* nowrap on the header cells prevents the column titles from
    character-wrapping even before min-widths are reached. */
@@ -452,7 +456,7 @@ const columnCount = computed(() => columns)
   text-overflow: ellipsis;
 }
 
-/* ── Column 5: Input tokens + cache sub-line ── */
+/* ── Column 6: Input tokens + cache sub-line ── */
 .cell-tokens {
   display: flex;
   flex-direction: column;
@@ -468,7 +472,7 @@ const columnCount = computed(() => columns)
   line-height: 1;
 }
 
-/* ── Column 8: TTFT / Latency + stream suffix ── */
+/* ── Column 5: TTFT / Latency + stream suffix ── */
 .cell-timing {
   white-space: nowrap;
 }
@@ -480,24 +484,24 @@ const columnCount = computed(() => columns)
   font-variant-numeric: tabular-nums;
   font-size: 12.5px;
 }
-.timing-ttft {
+.timing-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
   font-weight: 500;
-  color: var(--fg);
+  font-variant-numeric: tabular-nums;
 }
-.timing-ttft.timing-fast { color: var(--positive); }
-.timing-ttft.timing-medium { color: var(--warning); }
-.timing-ttft.timing-slow { color: var(--negative); }
+.timing-badge.timing-fast { background: color-mix(in srgb, var(--positive) 12%, transparent); color: var(--positive); }
+.timing-badge.timing-medium { background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--warning); }
+.timing-badge.timing-slow { background: color-mix(in srgb, var(--negative) 12%, transparent); color: var(--negative); }
+.timing-badge.timing-neutral { background: var(--bg-secondary); color: var(--muted); }
 .timing-sep {
   color: var(--muted);
   font-size: 11px;
   margin: 0 1px;
 }
-.timing-latency {
-  color: var(--muted);
-}
-.timing-latency.timing-fast { color: var(--positive); }
-.timing-latency.timing-medium { color: var(--warning); }
-.timing-latency.timing-slow { color: var(--negative); }
 .stream-suffix {
   display: inline-flex;
   align-items: center;

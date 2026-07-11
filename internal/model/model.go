@@ -46,6 +46,7 @@ type Provider struct {
 	LastTestedAt  int64          `json:"last_tested_at"` // ms; 0 = never
 	ErrorMessage  string         `json:"error_message,omitempty"`
 	IsCustom      bool           `json:"is_custom"` // true for self-hosted / OpenAI-compatible gateways
+	Enabled       bool           `json:"enabled"`
 	CreatedAt     int64          `json:"created_at"`
 	UpdatedAt     int64          `json:"updated_at"`
 }
@@ -66,6 +67,14 @@ type Model struct {
 // ModelTestResult is returned by the per-model latency test.
 type ModelTestResult struct {
 	OK        bool   `json:"ok"`
+	LatencyMs int    `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ModelChatTestResult is returned by the per-provider model chat test.
+type ModelChatTestResult struct {
+	OK        bool   `json:"ok"`
+	Response  string `json:"response"`
 	LatencyMs int    `json:"latency_ms"`
 	Error     string `json:"error,omitempty"`
 }

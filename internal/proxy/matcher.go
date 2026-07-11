@@ -94,12 +94,17 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		if !t.Enabled {
 			continue
 		}
-		if isOpen(t.ProviderID, breakers) {
-			continue
-		}
 		p, err := getProvider(t.ProviderID)
 		if err != nil {
 			return nil, fmt.Errorf("matched provider not found")
+		}
+		// Disabled providers cause every target that references them to be
+		// skipped, regardless of circuit-breaker state.
+		if !p.Enabled {
+			continue
+		}
+		if isOpen(t.ProviderID, breakers) {
+			continue
 		}
 		out = append(out, candidate{
 			provider:        p,

@@ -10,7 +10,7 @@ import (
 )
 
 func makeProvider(id string) *model.Provider {
-	return &model.Provider{ID: id, Name: id, BaseURL: "http://" + id}
+	return &model.Provider{ID: id, Name: id, BaseURL: "http://" + id, Enabled: true}
 }
 
 func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {

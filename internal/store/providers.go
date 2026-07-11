@@ -14,7 +14,7 @@ func (s *Store) ListProviders() ([]model.Provider, error) {
 		SELECT id, name, base_url, status,
 		       key_ciphertext, key_nonce, key_masked,
 		       models_count, monthly_tokens, avg_latency_ms,
-		       last_tested_at, error_message, is_custom,
+		       last_tested_at, error_message, is_custom, enabled,
 		       created_at, updated_at
 		FROM providers ORDER BY name ASC`)
 	if err != nil {
@@ -29,7 +29,7 @@ func (s *Store) ListProviders() ([]model.Provider, error) {
 			&p.ID, &p.Name, &p.BaseURL, &p.Status,
 			&p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked,
 			&p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs,
-			&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom,
+			&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.Enabled,
 			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan provider: %w", err)
@@ -48,7 +48,7 @@ func (s *Store) GetProvider(id string) (*model.Provider, error) {
 		SELECT id, name, base_url, status,
 		       key_ciphertext, key_nonce, key_masked,
 		       models_count, monthly_tokens, avg_latency_ms,
-		       last_tested_at, error_message, is_custom,
+		       last_tested_at, error_message, is_custom, enabled,
 		       created_at, updated_at
 		FROM providers WHERE id = ?`, id)
 
@@ -57,7 +57,7 @@ func (s *Store) GetProvider(id string) (*model.Provider, error) {
 		&p.ID, &p.Name, &p.BaseURL, &p.Status,
 		&p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked,
 		&p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs,
-		&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom,
+		&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.Enabled,
 		&p.CreatedAt, &p.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -81,6 +81,7 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 		BaseURL:   in.BaseURL,
 		Status:    model.ProviderStatusUnknown,
 		IsCustom:  in.IsCustom,
+		Enabled:   true,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -90,12 +91,13 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 			INSERT INTO providers (id, name, base_url, status,
 			                       key_ciphertext, key_nonce, key_masked,
 			                       models_count, monthly_tokens, avg_latency_ms,
-			                       last_tested_at, error_message, is_custom,
+			                       last_tested_at, error_message, is_custom, enabled,
 			                       created_at, updated_at)
 			VALUES (?, ?, ?, ?,
 			        NULL, NULL, '',
 			        0, 0, 0,
-			        0, '', ?, ?, ?)`,
+			        0, '', ?, 1,
+			        ?, ?)`,
 			p.ID, p.Name, p.BaseURL, p.Status,
 			boolInt(p.IsCustom), p.CreatedAt, p.UpdatedAt)
 		return err
@@ -165,6 +167,26 @@ func (s *Store) UpdateProviderHealth(id string, status model.ProviderStatus, err
 		n, _ := res.RowsAffected()
 		if n == 0 {
 			return fmt.Errorf("store: update provider health %q: %w", id, ErrNotFound)
+		}
+		return nil
+	})
+}
+
+// SetProviderEnabled enables or disables a provider.
+func (s *Store) SetProviderEnabled(id string, enabled bool) error {
+	now := nowMs()
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	return s.execTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE providers SET enabled = ?, updated_at = ? WHERE id = ?`, enabledInt, now, id)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("store: set provider enabled %q: %w", id, ErrNotFound)
 		}
 		return nil
 	})

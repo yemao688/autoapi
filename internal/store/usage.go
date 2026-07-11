@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"sort"
 
 	"autoapi/internal/model"
 )
@@ -149,69 +148,34 @@ func (s *Store) modelRankingFiltered(q model.LogQuery, limit int) ([]model.Model
 }
 
 // logStatsFiltered computes aggregate quality-of-service stats under
-// the given filter: total requests, success rate, p95 latency, error
-// count. Deltas are not shown ("—") because comparison-period
-// semantics are ambiguous under arbitrary filters.
+// the given filter: total requests, success rate, and error count.
+// Deltas are not shown ("—") because comparison-period semantics are
+// ambiguous under arbitrary filters.
 func (s *Store) logStatsFiltered(q model.LogQuery) ([]model.Stat, error) {
 	where, args := buildLogFilter(q, false)
-	query := fmt.Sprintf(`
-		SELECT status_code, latency_ms,
-		       CASE WHEN error != '' THEN 1 ELSE 0 END AS has_err
-		FROM request_logs %s`, where)
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: log stats filtered: %w", err)
-	}
-	defer rows.Close()
 
 	var total, success, errCount int64
-	var latencies []int
-	for rows.Next() {
-		var status int
-		var lat int
-		var hasErr int
-		if err := rows.Scan(&status, &lat, &hasErr); err != nil {
-			continue
-		}
-		total++
-		if status >= 200 && status < 300 && hasErr == 0 {
-			success++
-		}
-		if hasErr == 1 || status >= 400 {
-			errCount++
-		}
-		latencies = append(latencies, lat)
+
+	row := s.db.QueryRow(fmt.Sprintf(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 AND error = '' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN error != '' OR status_code >= 400 THEN 1 ELSE 0 END), 0)
+		FROM request_logs %s`, where), args...)
+	if err := row.Scan(&total, &success, &errCount); err != nil {
+		return nil, fmt.Errorf("store: log stats filtered: %w", err)
 	}
 
 	successRate := 0.0
 	if total > 0 {
 		successRate = float64(success) / float64(total) * 100
 	}
-	p95 := computeP95(latencies)
 
 	return []model.Stat{
-		makeStat("usage.stats.totalRequests30d", fmt.Sprintf("%d", total), "—", ""),
+		makeStat("usage.stats.totalRequests", fmt.Sprintf("%d", total), "—", ""),
 		makeStat("usage.stats.successRate", fmt.Sprintf("%.1f%%", successRate), "—", ""),
-		makeStat("usage.stats.p95Latency", formatLatencyMs(p95), "—", ""),
-		makeStat("usage.stats.errors30d", fmt.Sprintf("%d", errCount), "—", ""),
+		makeStat("usage.stats.errors", fmt.Sprintf("%d", errCount), "—", ""),
 	}, nil
-}
-
-func computeP95(values []int) int {
-	if len(values) == 0 {
-		return 0
-	}
-	sorted := make([]int, len(values))
-	copy(sorted, values)
-	sort.Ints(sorted)
-	idx := int(math.Ceil(float64(len(sorted))*0.95) - 1)
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
 }
 
 // ----- Dashboard helpers (used by dashboard.go, not filtered) -----
@@ -234,22 +198,6 @@ func (s *Store) countRequestsSince(startMs int64) int64 {
 		slog.Error("store: countRequestsSince scan failed", "err", err)
 	}
 	return n
-}
-
-// formatLatencyMs renders a millisecond count with the unit scaled to
-// keep the displayed value readable. Below 1s we keep "ms" (a value like
-// "247ms" is more meaningful than "0.25s"); at and above 1s we switch to
-// one-decimal seconds. Mirrors the frontend `formatLatency` in
-// frontend/src/components/usage/LogTable.vue so the same number reads
-// the same in the metric card and in the log row.
-func formatLatencyMs(ms int) string {
-	if ms <= 0 {
-		return "—"
-	}
-	if ms < 1000 {
-		return fmt.Sprintf("%dms", ms)
-	}
-	return fmt.Sprintf("%.1fs", float64(ms)/1000)
 }
 
 func deltaCostStr(current, previous float64) string {

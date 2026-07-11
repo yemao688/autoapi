@@ -82,6 +82,14 @@ export const api = {
     ensureWails()
     return wails.SetModelsActive(providerId, modelNames, active) as Promise<void>
   },
+  setProviderEnabled: (id: string, enabled: boolean): Promise<void> => {
+    ensureWails()
+    return wails.SetProviderEnabled(id, enabled) as Promise<void>
+  },
+  testModelChat: (providerId: string, modelName: string): Promise<model.ModelChatTestResult> => {
+    ensureWails()
+    return wails.TestModelChat(providerId, modelName) as Promise<model.ModelChatTestResult>
+  },
 
   // Model rules
   modelRules: (): Promise<model.ModelRule[]> => {

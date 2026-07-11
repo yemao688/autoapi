@@ -473,8 +473,8 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -533,8 +533,8 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -601,8 +601,8 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -649,8 +649,8 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -691,7 +691,7 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -749,7 +749,7 @@ func TestNoMatchingRuleReturns503(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"default": {ID: "default", Name: "Default", BaseURL: srv.URL},
+			"default": {ID: "default", Name: "Default", BaseURL: srv.URL, Enabled: true},
 		},
 		rules:   []model.ModelRule{}, // no rules registered
 		apiKeys: []model.ApiKey{{ID: "key1"}},
@@ -826,7 +826,7 @@ func TestGenericOpenAI_ImagesRoute(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -878,7 +878,7 @@ func TestStreaming_PassThrough(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -943,8 +943,8 @@ func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1016,8 +1016,8 @@ func TestFailover_RetryBoundedExhaustedFallsThrough(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1089,7 +1089,7 @@ func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1168,7 +1168,7 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1268,8 +1268,8 @@ func TestStreaming_RetriesOnRetryable5xxBeforeFirstByte(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1353,8 +1353,8 @@ func TestStreaming_RetriesPerTargetBeforeFailover(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1435,8 +1435,8 @@ func TestStreaming_FailoverOnNetworkError(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: "http://" + closedAddr},
-			"p1": {ID: "p1", Name: "P1", BaseURL: okSrv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: "http://" + closedAddr, Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: okSrv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1515,8 +1515,8 @@ func TestStreaming_FailoverOnFirstByteTimeout(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL},
-			"p1": {ID: "p1", Name: "P1", BaseURL: okSrv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL, Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: okSrv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1602,7 +1602,7 @@ func TestStreaming_TruePassThrough(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1767,8 +1767,8 @@ func TestStreaming_FirstByteTimeoutFailover(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL},
-			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL, Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -1891,9 +1891,9 @@ func TestStreaming_CumulativeLatency(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL},
-			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL},
-			"p2": {ID: "p2", Name: "P2", BaseURL: p2Srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL, Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL, Enabled: true},
+			"p2": {ID: "p2", Name: "P2", BaseURL: p2Srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2010,7 +2010,7 @@ func TestStreaming_UsageParsedFromStream(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2105,7 +2105,7 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2223,7 +2223,7 @@ func TestStreaming_LongBodyNotKilledByFirstByteTimeout(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2367,7 +2367,7 @@ func TestStreaming_FirstByteBudgetExcludesBodyTime(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2521,7 +2521,7 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: hangSrv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: hangSrv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2690,7 +2690,7 @@ func TestStreaming_DoneThenClientCancel_IsSuccess(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: upstreamSrv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: upstreamSrv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2811,9 +2811,9 @@ func TestFailover_GlobalAttemptCap(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
-			"p2": {ID: "p2", Name: "P2", BaseURL: srv.URL + "/p2"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+			"p2": {ID: "p2", Name: "P2", BaseURL: srv.URL + "/p2", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -2915,7 +2915,7 @@ func TestFailover_BackoffBetweenRetries(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -3004,8 +3004,8 @@ func TestFailover_UnknownStatusFailover(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -3098,8 +3098,8 @@ func TestFailover_RespectsRetryAfter(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
-			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -3179,7 +3179,7 @@ func TestFailover_RuleFirstByteBudgetExceeded(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0"},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -3262,8 +3262,8 @@ func TestFailover_TruncatedNonStreaming(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL},
-			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL, Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -3339,7 +3339,7 @@ func TestFailover_SuccessImplicit200(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -3413,8 +3413,8 @@ func TestFailover_AllCandidatesTruncated(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL},
-			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: p0Srv.URL, Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: p1Srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{
@@ -3504,7 +3504,7 @@ func TestChatMultimodal_Passthrough(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{
@@ -3573,7 +3573,7 @@ func TestChatLargeMultimodalBody(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{
@@ -3626,7 +3626,7 @@ func TestMultipartAudioTranscription(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{ID: "r1", Name: "whisper-1", Enabled: true, Targets: []model.ModelRuleTarget{
@@ -3687,7 +3687,7 @@ func TestUpstreamErrorBodyInLog(t *testing.T) {
 
 	store := &mockStore{
 		providers: map[string]*model.Provider{
-			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL},
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true},
 		},
 		rules: []model.ModelRule{
 			{ID: "r1", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{

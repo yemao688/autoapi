@@ -5,6 +5,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -462,6 +463,115 @@ func (s *Service) TestModelLatency(providerID, modelName string) (*model.ModelTe
 		}
 	}
 	return &model.ModelTestResult{OK: true, LatencyMs: latencyMs}, nil
+}
+
+// TestModelChat sends a minimal non-streaming chat completion request to the
+// provider using the supplied model name and returns the result (success or
+// a structured error) without raising an error for downstream failures.
+func (s *Service) TestModelChat(providerID, modelName string) (*model.ModelChatTestResult, error) {
+	p, err := s.store.GetProvider(providerID)
+	if err != nil {
+		return nil, fmt.Errorf("provider not found: %w", err)
+	}
+
+	apiKey, err := s.ResolveProviderKey(providerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve API key: %w", err)
+	}
+
+	requestBody := map[string]interface{}{
+		"model":      modelName,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens": 32,
+		"stream":     false,
+	}
+	bodyBytes, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	chatURL := store.JoinProviderURL(p.BaseURL, "/v1/chat/completions")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return &model.ModelChatTestResult{
+			OK:        false,
+			Error:     err.Error(),
+			LatencyMs: int(time.Since(start).Milliseconds()),
+		}, nil
+	}
+	defer resp.Body.Close()
+
+	latencyMs := int(time.Since(start).Milliseconds())
+
+	// Read up to 64 KiB + 1 byte. The extra byte lets us detect overflow
+	// so we can report it explicitly instead of silently truncating a valid
+	// JSON response into a confusing parse error.
+	const maxBodySize = 64*1024 + 1
+	limitedReader := io.LimitReader(resp.Body, maxBodySize)
+	respBody, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return &model.ModelChatTestResult{
+			OK:        false,
+			Error:     fmt.Sprintf("read body: %v", err),
+			LatencyMs: latencyMs,
+		}, nil
+	}
+	if len(respBody) == maxBodySize {
+		return &model.ModelChatTestResult{
+			OK:        false,
+			Error:     "response body too large (>64 KiB)",
+			LatencyMs: latencyMs,
+		}, nil
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return &model.ModelChatTestResult{
+			OK:        false,
+			Error:     fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody)),
+			LatencyMs: latencyMs,
+		}, nil
+	}
+
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return &model.ModelChatTestResult{
+			OK:        false,
+			Error:     fmt.Sprintf("parse response: %v", err),
+			LatencyMs: latencyMs,
+		}, nil
+	}
+
+	if len(chatResp.Choices) == 0 {
+		return &model.ModelChatTestResult{
+			OK:        false,
+			Error:     "empty choices in response",
+			LatencyMs: latencyMs,
+		}, nil
+	}
+
+	return &model.ModelChatTestResult{
+		OK:        true,
+		Response:  chatResp.Choices[0].Message.Content,
+		LatencyMs: latencyMs,
+	}, nil
 }
 
 // TestAllProviders tests every provider concurrently and returns results.

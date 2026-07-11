@@ -257,6 +257,7 @@ export namespace model {
 	    last_tested_at: number;
 	    error_message?: string;
 	    is_custom: boolean;
+	    enabled: boolean;
 	    created_at: number;
 	    updated_at: number;
 	
@@ -277,6 +278,7 @@ export namespace model {
 	        this.last_tested_at = source["last_tested_at"];
 	        this.error_message = source["error_message"];
 	        this.is_custom = source["is_custom"];
+	        this.enabled = source["enabled"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -511,6 +513,24 @@ export namespace model {
 	        this.latency_ms = source["latency_ms"];
 	        this.updated_at = source["updated_at"];
 	        this.created_at = source["created_at"];
+	    }
+	}
+	export class ModelChatTestResult {
+	    ok: boolean;
+	    response: string;
+	    latency_ms: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelChatTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.response = source["response"];
+	        this.latency_ms = source["latency_ms"];
+	        this.error = source["error"];
 	    }
 	}
 	export class ModelRanking {

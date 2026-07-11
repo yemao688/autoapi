@@ -344,6 +344,16 @@ ALTER TABLE model_rules ADD COLUMN first_byte_timeout_ms INTEGER NOT NULL DEFAUL
 ALTER TABLE request_logs ADD COLUMN request_uri TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// Provider-level enable/disable toggle. When false, the proxy
+		// skips every target that resolves to this provider. Existing
+		// providers default to enabled so behavior is unchanged.
+		ID:              "016_provider_enabled",
+		SkipIfRedundant: providersHasEnabled,
+		SQL: `
+ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
+`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have
@@ -484,6 +494,31 @@ func modelRulesHasFirstByteTimeout(tx *sql.Tx) (bool, error) {
 			}
 		}
 		rows.Close()
+	}
+	return false, nil
+}
+
+// providersHasEnabled reports whether the providers table already has an
+// "enabled" column. Used as a SkipIfRedundant predicate so the
+// 016_provider_enabled migration is safe on DBs that picked up the column
+// under a different migration ID or branch.
+func providersHasEnabled(tx *sql.Tx) (bool, error) {
+	rows, err := tx.Query(`PRAGMA table_info(providers)`)
+	if err != nil {
+		return false, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return false, fmt.Errorf("store: scan pragma table_info: %w", err)
+		}
+		if name == "enabled" {
+			return true, nil
+		}
 	}
 	return false, nil
 }

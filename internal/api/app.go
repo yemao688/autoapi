@@ -48,6 +48,7 @@ type StoreService interface {
 	CreateProvider(in model.ProviderInput) (*model.Provider, error)
 	UpdateProvider(id string, in model.ProviderInput) (*model.Provider, error)
 	DeleteProvider(id string) error
+	SetProviderEnabled(id string, enabled bool) error
 
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
@@ -105,6 +106,7 @@ type BusinessService interface {
 	TestAllProviders() ([]model.ProviderTestResult, error)
 	FetchUpstreamModels(providerID string) ([]model.Model, error)
 	TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error)
+	TestModelChat(providerID, modelName string) (*model.ModelChatTestResult, error)
 	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
@@ -384,6 +386,17 @@ func (a *App) DeleteProvider(id string) error {
 	return nil
 }
 
+func (a *App) SetProviderEnabled(id string, enabled bool) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	if err := a.deps.Store.SetProviderEnabled(id, enabled); err != nil {
+		return err
+	}
+	slog.Info("app: provider enabled updated", "id", id, "enabled", enabled)
+	return nil
+}
+
 func (a *App) TestProvider(id string) (*model.ProviderTestResult, error) {
 	if a.deps.Service == nil {
 		return nil, errNotImpl
@@ -410,6 +423,13 @@ func (a *App) TestModelLatency(providerID, modelName string) (*model.ModelTestRe
 		return nil, errNotImpl
 	}
 	return a.deps.Service.TestModelLatency(providerID, modelName)
+}
+
+func (a *App) TestModelChat(providerID, modelName string) (*model.ModelChatTestResult, error) {
+	if a.deps.Service == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Service.TestModelChat(providerID, modelName)
 }
 
 func (a *App) SetModelsActive(providerID string, modelNames []string, active bool) error {

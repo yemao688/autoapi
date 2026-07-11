@@ -162,6 +162,10 @@ export function SetModelsActive(arg1, arg2, arg3) {
   return window['go']['api']['App']['SetModelsActive'](arg1, arg2, arg3);
 }
 
+export function SetProviderEnabled(arg1, arg2) {
+  return window['go']['api']['App']['SetProviderEnabled'](arg1, arg2);
+}
+
 export function ShowWindow() {
   return window['go']['api']['App']['ShowWindow']();
 }
@@ -180,6 +184,10 @@ export function StopProxy() {
 
 export function TestAllProviders() {
   return window['go']['api']['App']['TestAllProviders']();
+}
+
+export function TestModelChat(arg1, arg2) {
+  return window['go']['api']['App']['TestModelChat'](arg1, arg2);
 }
 
 export function TestModelLatency(arg1, arg2) {

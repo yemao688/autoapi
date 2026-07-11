@@ -241,7 +241,8 @@
       "test": "Test",
       "testing": "Testing…",
       "testSuccess": "Connected · {ms}ms latency",
-      "testFailed": "Connection failed"
+      "testFailed": "Connection failed",
+      "providerDisabled": "Provider disabled"
     }
   },
   "providers": {
@@ -286,6 +287,8 @@
       "error": "Error",
       "notConnected": "Not connected"
     },
+    "enable": "Enable upstream",
+    "disable": "Disable upstream",
     "testResult": {
       "success": "Test succeeded: {ms}ms latency, {count} models",
       "failed": "Test failed: {error}",
@@ -337,7 +340,9 @@
       "context": "Context",
       "latency": "Latency",
       "enabled": "Enabled",
-      "testLatency": "Test latency"
+      "testLatency": "Test latency",
+      "createAndContinue": "Create & continue",
+      "createdCanManage": "Upstream created. You can now manage its available models."
     }
   },
   "targets": {
@@ -461,13 +466,11 @@
     "loading": "Loading…",
     "ariaLabel": "Usage stats view",
     "stats": {
-      "totalRequests": "Total Requests",
-      "totalTokens": "Total Tokens",
+      "totalRequests": "Requests",
+      "totalTokens": "Tokens",
       "estimatedCost": "Estimated Cost",
-      "totalRequests30d": "Total Requests (30d)",
       "successRate": "Success Rate",
-      "p95Latency": "P95 Latency",
-      "errors30d": "Errors (30d)"
+      "errors": "Errors"
     },
     "tabs": {
       "logs": "Request logs",
@@ -546,7 +549,7 @@
       "output": "Output",
       "cost": "Cost",
       "totalCost": "Cost",
-      "latencyTtft": "TTFT·Latency",
+      "latencyTtft": "TTFT/Latency",
       "ttft": "TTFT",
       "defaultRoute": "Default",
       "streamSuffix": "stream",
@@ -585,6 +588,16 @@
     "clearAllMessage": "This will permanently delete ALL request logs and cannot be undone. Continue?",
     "clearAllConfirm": "Clear all",
     "clearAllDone": "Cleared {count} stat log(s)"
+  },
+  "testModel": {
+    "title": "Test Model",
+    "sending": "Sending...",
+    "prompt": "Prompt",
+    "response": "Response",
+    "latency": "Latency",
+    "error": "Error",
+    "close": "Close",
+    "waiting": "Waiting for response..."
   },
   "common": {
     "save": "Save",

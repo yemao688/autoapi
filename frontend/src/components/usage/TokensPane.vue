@@ -27,6 +27,14 @@ const providerColors: Record<string, string> = {
 function providerColor(name: string): string {
   return providerColors[name.toLowerCase()] || '#6e6e73'
 }
+
+function formatStatValue(stat: { label: string; value: string }): string {
+  if (stat.label === 'usage.stats.totalTokens') {
+    const n = Number(stat.value)
+    if (Number.isFinite(n)) return compact(n)
+  }
+  return stat.value
+}
 </script>
 
 <template>
@@ -35,7 +43,7 @@ function providerColor(name: string): string {
     <section class="stat-grid-4" style="gap: 16px; margin-bottom: 24px;">
       <div v-for="(stat, idx) in tokenStats" :key="stat.label + idx" class="metric-card">
         <div class="metric-label">{{ t(stat.label) }}</div>
-        <div class="metric-value">{{ stat.value }}</div>
+        <div class="metric-value">{{ formatStatValue(stat) }}</div>
         <div class="metric-meta">
           <span class="metric-trend" :class="stat.trend">{{ stat.delta }}</span>
           <span>{{ stat.note }}</span>
