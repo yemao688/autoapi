@@ -286,6 +286,11 @@ func (p *Proxy) Shutdown() error {
 	slog.Info("proxy: shutting down")
 	instance := p.detachServer()
 	httpErr := shutdownServer(instance)
+	if p.transport != nil {
+		if t, ok := p.transport.(*http.Transport); ok {
+			t.CloseIdleConnections()
+		}
+	}
 	if p.writer != nil {
 		p.writer.Stop()
 	}
@@ -317,7 +322,7 @@ func shutdownServer(instance serverInstance) error {
 	if instance.listener != nil {
 		_ = instance.listener.Close()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := instance.server.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
 		slog.Error("proxy: shutdown failed", "err", err)
@@ -984,6 +989,7 @@ outer:
 				clone := t1.Clone()
 				clone.ResponseHeaderTimeout = remaining
 				proxy.Transport = clone
+				defer clone.CloseIdleConnections()
 			} else {
 				proxy.Transport = p.transport
 			}
@@ -1768,6 +1774,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	transport := p.transport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = timeout
 	client := &http.Client{Transport: transport}
+	defer transport.CloseIdleConnections()
 
 	attemptStart := time.Now()
 	resp, doErr := client.Do(attemptReq)

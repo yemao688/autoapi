@@ -86,9 +86,9 @@ export const api = {
     ensureWails()
     return wails.SetProviderEnabled(id, enabled) as Promise<void>
   },
-  testModelChat: (providerId: string, modelName: string): Promise<model.ModelChatTestResult> => {
+  testModelChat: (providerId: string, modelName: string, stream: boolean = false): Promise<model.ModelChatTestResult> => {
     ensureWails()
-    return wails.TestModelChat(providerId, modelName) as Promise<model.ModelChatTestResult>
+    return wails.TestModelChat(providerId, modelName, stream) as Promise<model.ModelChatTestResult>
   },
 
   // Model rules

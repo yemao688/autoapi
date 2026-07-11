@@ -8,12 +8,28 @@ import { useExportDownload } from '@/composables/useExportDownload'
 import { usePolling } from '@/composables/usePolling'
 import { useRelativeTime } from '@/composables/useRelativeTime'
 import { useToast } from '@/composables/useToast'
+import { useCompactNumber } from '@/composables/useCompactNumber'
 
 const { t } = useI18n()
 
 useRelativeTime()
 const { download } = useExportDownload()
 const toast = useToast()
+const { format: compact } = useCompactNumber()
+
+const tokenStatLabels = new Set([
+  'dashboard.stats.todayTokens',
+  'dashboard.stats.thisWeek',
+  'dashboard.stats.thisMonth',
+])
+
+function formatStatValue(stat: { label: string; value: string }): string {
+  if (tokenStatLabels.has(stat.label)) {
+    const n = Number(stat.value)
+    if (Number.isFinite(n)) return compact(n)
+  }
+  return stat.value
+}
 
 const { data: dashboardData, loading, execute: fetchDashboard } = useApi(api.dashboard)
 const { data: proxyStatus, execute: fetchProxyStatus } = useApi(api.proxyStatus)
@@ -46,12 +62,6 @@ function providerInitial(p: model.Provider): string {
     ? name[name.length - 1]
     : name.trim().charAt(0).toUpperCase()
   return code || name.charAt(0).toUpperCase()
-}
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
-  return String(n)
 }
 
 function formatUptime(seconds: number): string {
@@ -116,7 +126,7 @@ usePolling(fetchAll, 15000)
           class="stat-card"
         >
           <div class="stat-label">{{ t(stat.label) }}</div>
-          <div class="stat-value">{{ stat.value }}</div>
+          <div class="stat-value">{{ formatStatValue(stat) }}</div>
           <div class="stat-meta">
             <template v-if="stat.label === 'dashboard.stats.activeProviders'">
               <span :class="proxyRunning ? 'dot green' : 'dot red'"></span>
@@ -231,7 +241,7 @@ usePolling(fetchAll, 15000)
                    {{ p.status === 'connected' ? t('dashboard.modelCount', { count: p.models_count }) : (p.error_message || t('dashboard.notConnected')) }}
                 </div>
               </div>
-              <div class="list-meta">{{ p.monthly_tokens ? formatNumber(p.monthly_tokens) : '—' }}</div>
+              <div class="list-meta">{{ p.monthly_tokens ? compact(p.monthly_tokens) : '—' }}</div>
             </div>
           </div>
         </div>

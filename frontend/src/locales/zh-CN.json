@@ -597,7 +597,12 @@
     "latency": "延迟",
     "error": "错误",
     "close": "关闭",
-    "waiting": "等待响应..."
+    "waiting": "等待响应...",
+    "retry": "重新测试",
+    "mode": "模式",
+    "stream": "流式",
+    "nonStream": "非流式",
+    "finishReason": "结束原因"
   },
   "common": {
     "save": "保存",

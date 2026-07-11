@@ -186,8 +186,8 @@ export function TestAllProviders() {
   return window['go']['api']['App']['TestAllProviders']();
 }
 
-export function TestModelChat(arg1, arg2) {
-  return window['go']['api']['App']['TestModelChat'](arg1, arg2);
+export function TestModelChat(arg1, arg2, arg3) {
+  return window['go']['api']['App']['TestModelChat'](arg1, arg2, arg3);
 }
 
 export function TestModelLatency(arg1, arg2) {

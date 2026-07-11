@@ -20,9 +20,10 @@ const { t } = useI18n()
 const loading = ref(false)
 const result = ref<model.ModelChatTestResult | null>(null)
 const error = ref<string | null>(null)
+const streamMode = ref(false)
 
 // Monotonic generation token so a stale response from a closed/reopened
-// modal can't overwrite the current state.
+// modal or a mode-switch can't overwrite the current state.
 let testGeneration = 0
 
 async function runTest() {
@@ -31,7 +32,7 @@ async function runTest() {
   result.value = null
   error.value = null
   try {
-    const res = await api.testModelChat(props.providerId, props.modelName)
+    const res = await api.testModelChat(props.providerId, props.modelName, streamMode.value)
     if (gen !== testGeneration) return // stale — a newer test superseded this one
     if (res.ok) {
       result.value = res
@@ -48,10 +49,18 @@ async function runTest() {
   }
 }
 
+// Mode switch triggers retest (only when modal is open and not already loading).
+watch(streamMode, () => {
+  if (props.open) {
+    runTest()
+  }
+})
+
 watch(
   () => props.open,
   (open) => {
     if (open) {
+      streamMode.value = false // reset to non-stream on each open
       runTest()
     } else {
       // Invalidate any in-flight response so it can't land after close.
@@ -95,6 +104,25 @@ watch(
           <div class="test-prompt">hi</div>
         </div>
 
+        <!-- Mode toggle -->
+        <div class="field">
+          <label class="field-label">{{ t('testModel.mode') }}</label>
+          <div class="mode-toggle">
+            <button
+              class="mode-btn"
+              :class="{ active: !streamMode }"
+              :disabled="loading"
+              @click="streamMode = false"
+            >{{ t('testModel.nonStream') }}</button>
+            <button
+              class="mode-btn"
+              :class="{ active: streamMode }"
+              :disabled="loading"
+              @click="streamMode = true"
+            >{{ t('testModel.stream') }}</button>
+          </div>
+        </div>
+
         <div v-if="loading" class="test-state">
           <span class="spinner"></span>
           <span>{{ t('testModel.sending') }}</span>
@@ -108,12 +136,22 @@ watch(
         <div v-else-if="result" class="field" style="margin-bottom: 0;">
           <div class="row-between">
             <label class="field-label">{{ t('testModel.response') }}</label>
-            <span v-if="result.latency_ms" class="badge mono">{{ result.latency_ms }}ms</span>
+            <div class="row" style="gap: 6px; align-items: center;">
+              <span v-if="result.finish_reason" class="badge mono" style="font-size: 11px; opacity: 0.7;">{{ result.finish_reason }}</span>
+              <span v-if="result.latency_ms" class="badge mono">{{ result.latency_ms }}ms</span>
+            </div>
           </div>
           <pre class="test-response">{{ result.response }}</pre>
         </div>
 
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
+          <button
+            v-if="!loading"
+            class="btn btn-secondary"
+            @click="runTest"
+          >
+            {{ t('testModel.retry') }}
+          </button>
           <button class="btn btn-secondary" @click="emit('close')">
             {{ t('testModel.close') }}
           </button>
@@ -132,6 +170,38 @@ watch(
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   color: var(--fg);
+}
+
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.mode-btn {
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mode-btn:hover:not(:disabled) {
+  color: var(--fg);
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .test-state {

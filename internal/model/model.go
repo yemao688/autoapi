@@ -73,10 +73,11 @@ type ModelTestResult struct {
 
 // ModelChatTestResult is returned by the per-provider model chat test.
 type ModelChatTestResult struct {
-	OK        bool   `json:"ok"`
-	Response  string `json:"response"`
-	LatencyMs int    `json:"latency_ms"`
-	Error     string `json:"error,omitempty"`
+	OK           bool   `json:"ok"`
+	Response     string `json:"response"`
+	LatencyMs    int    `json:"latency_ms"`
+	FinishReason string `json:"finish_reason,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // ApiKey is an access token for the autoapi proxy. The token value is the row

@@ -519,6 +519,7 @@ export namespace model {
 	    ok: boolean;
 	    response: string;
 	    latency_ms: number;
+	    finish_reason?: string;
 	    error?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -530,6 +531,7 @@ export namespace model {
 	        this.ok = source["ok"];
 	        this.response = source["response"];
 	        this.latency_ms = source["latency_ms"];
+	        this.finish_reason = source["finish_reason"];
 	        this.error = source["error"];
 	    }
 	}

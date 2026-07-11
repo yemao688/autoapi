@@ -597,7 +597,12 @@
     "latency": "Latency",
     "error": "Error",
     "close": "Close",
-    "waiting": "Waiting for response..."
+    "waiting": "Waiting for response...",
+    "retry": "Retry",
+    "mode": "Mode",
+    "stream": "Stream",
+    "nonStream": "Non-stream",
+    "finishReason": "Finish reason"
   },
   "common": {
     "save": "Save",

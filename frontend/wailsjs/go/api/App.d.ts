@@ -96,7 +96,7 @@ export function StopProxy():Promise<void>;
 
 export function TestAllProviders():Promise<Array<model.ProviderTestResult>>;
 
-export function TestModelChat(arg1:string,arg2:string):Promise<model.ModelChatTestResult>;
+export function TestModelChat(arg1:string,arg2:string,arg3:boolean):Promise<model.ModelChatTestResult>;
 
 export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTestResult>;
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	stdruntime "runtime"
@@ -97,6 +98,9 @@ type StoreService interface {
 
 	// Export / import
 	Export(format model.ExportFormat) ([]byte, string, error) // (data, filename, err)
+
+	// Lifecycle
+	Close() error
 }
 
 // BusinessService is the higher-level logic implemented by internal/service
@@ -106,7 +110,7 @@ type BusinessService interface {
 	TestAllProviders() ([]model.ProviderTestResult, error)
 	FetchUpstreamModels(providerID string) ([]model.Model, error)
 	TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error)
-	TestModelChat(providerID, modelName string) (*model.ModelChatTestResult, error)
+	TestModelChat(providerID, modelName string, stream bool) (*model.ModelChatTestResult, error)
 	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
@@ -207,6 +211,12 @@ func (a *App) Shutdown(ctx context.Context) {
 	slog.Info("app: shutting down")
 	if a.deps.Proxy != nil {
 		_ = a.deps.Proxy.Shutdown()
+	}
+	if a.deps.Store != nil {
+		_ = a.deps.Store.Close()
+	}
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		t.CloseIdleConnections()
 	}
 }
 
@@ -425,11 +435,11 @@ func (a *App) TestModelLatency(providerID, modelName string) (*model.ModelTestRe
 	return a.deps.Service.TestModelLatency(providerID, modelName)
 }
 
-func (a *App) TestModelChat(providerID, modelName string) (*model.ModelChatTestResult, error) {
+func (a *App) TestModelChat(providerID, modelName string, stream bool) (*model.ModelChatTestResult, error) {
 	if a.deps.Service == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Service.TestModelChat(providerID, modelName)
+	return a.deps.Service.TestModelChat(providerID, modelName, stream)
 }
 
 func (a *App) SetModelsActive(providerID string, modelNames []string, active bool) error {

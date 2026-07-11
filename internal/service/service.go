@@ -5,6 +5,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/aes"
@@ -35,8 +36,9 @@ type Service struct {
 	store *store.Store
 	proxy ProxyRef
 
-	encKey    []byte // 32-byte AES key; loaded at construction from keyDir
-	startedAt time.Time
+	httpClient *http.Client
+	encKey     []byte // 32-byte AES key; loaded at construction from keyDir
+	startedAt  time.Time
 }
 
 // ProxyRef is the minimal proxy surface needed to compute live system health.
@@ -57,10 +59,11 @@ func New(s *store.Store, proxy ProxyRef, keyDir string) *Service {
 	}
 
 	svc := &Service{
-		store:     s,
-		proxy:     proxy,
-		encKey:    encKey,
-		startedAt: time.Now(),
+		store:      s,
+		proxy:      proxy,
+		httpClient: &http.Client{}, // no global timeout; per-request context timeout used
+		encKey:     encKey,
+		startedAt:  time.Now(),
 	}
 	slog.Info("service: initialized", "key_dir", keyDir, "key_bytes", len(encKey))
 	return svc
@@ -465,10 +468,11 @@ func (s *Service) TestModelLatency(providerID, modelName string) (*model.ModelTe
 	return &model.ModelTestResult{OK: true, LatencyMs: latencyMs}, nil
 }
 
-// TestModelChat sends a minimal non-streaming chat completion request to the
-// provider using the supplied model name and returns the result (success or
-// a structured error) without raising an error for downstream failures.
-func (s *Service) TestModelChat(providerID, modelName string) (*model.ModelChatTestResult, error) {
+// TestModelChat sends a minimal chat completion request to the provider using
+// the supplied model name and returns the result (success or a structured
+// error) without raising an error for downstream failures. The stream flag
+// controls whether the request is made in streaming mode.
+func (s *Service) TestModelChat(providerID, modelName string, stream bool) (*model.ModelChatTestResult, error) {
 	p, err := s.store.GetProvider(providerID)
 	if err != nil {
 		return nil, fmt.Errorf("provider not found: %w", err)
@@ -483,7 +487,7 @@ func (s *Service) TestModelChat(providerID, modelName string) (*model.ModelChatT
 		"model":      modelName,
 		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
 		"max_tokens": 32,
-		"stream":     false,
+		"stream":     stream,
 	}
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -492,86 +496,230 @@ func (s *Service) TestModelChat(providerID, modelName string) (*model.ModelChatT
 
 	chatURL := store.JoinProviderURL(p.BaseURL, "/v1/chat/completions")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	start := time.Now()
+	result := func(ok bool, response, errMsg, finishReason string) *model.ModelChatTestResult {
+		return &model.ModelChatTestResult{
+			OK:           ok,
+			Response:     response,
+			LatencyMs:    int(time.Since(start).Milliseconds()),
+			FinishReason: finishReason,
+			Error:        errMsg,
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, err
+		return result(false, "", err.Error(), ""), nil
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return &model.ModelChatTestResult{
-			OK:        false,
-			Error:     err.Error(),
-			LatencyMs: int(time.Since(start).Milliseconds()),
-		}, nil
+		return result(false, "", err.Error(), ""), nil
 	}
 	defer resp.Body.Close()
 
-	latencyMs := int(time.Since(start).Milliseconds())
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
+		return result(false, "", fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(errBody)), ""), nil
+	}
 
-	// Read up to 64 KiB + 1 byte. The extra byte lets us detect overflow
-	// so we can report it explicitly instead of silently truncating a valid
-	// JSON response into a confusing parse error.
+	if stream {
+		return s.parseChatStream(resp.Body, start), nil
+	}
+
+	// Non-stream mode: read up to 64 KiB + 1 byte so we can detect overflow.
 	const maxBodySize = 64*1024 + 1
 	limitedReader := io.LimitReader(resp.Body, maxBodySize)
 	respBody, err := io.ReadAll(limitedReader)
 	if err != nil {
-		return &model.ModelChatTestResult{
-			OK:        false,
-			Error:     fmt.Sprintf("read body: %v", err),
-			LatencyMs: latencyMs,
-		}, nil
+		return result(false, "", fmt.Sprintf("read body: %v", err), ""), nil
 	}
 	if len(respBody) == maxBodySize {
-		return &model.ModelChatTestResult{
-			OK:        false,
-			Error:     "response body too large (>64 KiB)",
-			LatencyMs: latencyMs,
-		}, nil
+		return result(false, "", "response body too large (>64 KiB)", ""), nil
 	}
+	return s.parseChatNonStream(respBody, start), nil
+}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &model.ModelChatTestResult{
-			OK:        false,
-			Error:     fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody)),
-			LatencyMs: latencyMs,
-		}, nil
-	}
+func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.ModelChatTestResult {
+	latencyMs := func() int { return int(time.Since(start).Milliseconds()) }
 
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return &model.ModelChatTestResult{
 			OK:        false,
 			Error:     fmt.Sprintf("parse response: %v", err),
-			LatencyMs: latencyMs,
-		}, nil
+			LatencyMs: latencyMs(),
+		}
 	}
 
 	if len(chatResp.Choices) == 0 {
 		return &model.ModelChatTestResult{
 			OK:        false,
 			Error:     "empty choices in response",
-			LatencyMs: latencyMs,
-		}, nil
+			LatencyMs: latencyMs(),
+		}
 	}
 
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	finishReason := chatResp.Choices[0].FinishReason
+	if content == "" {
+		errMsg := "empty response content"
+		if finishReason != "" {
+			errMsg = fmt.Sprintf("empty response content (finish_reason: %s)", finishReason)
+		}
+		return &model.ModelChatTestResult{
+			OK:           false,
+			Error:        errMsg,
+			LatencyMs:    latencyMs(),
+			FinishReason: finishReason,
+		}
+	}
 	return &model.ModelChatTestResult{
-		OK:        true,
-		Response:  chatResp.Choices[0].Message.Content,
-		LatencyMs: latencyMs,
-	}, nil
+		OK:           true,
+		Response:     chatResp.Choices[0].Message.Content,
+		LatencyMs:    latencyMs(),
+		FinishReason: finishReason,
+	}
+}
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelChatTestResult {
+	latencyMs := func() int { return int(time.Since(start).Milliseconds()) }
+	const maxWireBytes = 256 * 1024
+	const maxContentBytes = 64 * 1024
+
+	cr := &countingReader{r: io.LimitReader(body, maxWireBytes+1)}
+	reader := bufio.NewReader(cr)
+
+	var builder strings.Builder
+	finishReason := ""
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return &model.ModelChatTestResult{
+				OK:        false,
+				Error:     fmt.Sprintf("read stream: %v", err),
+				LatencyMs: latencyMs(),
+			}
+		}
+		if err == io.EOF && line == "" {
+			break
+		}
+		if cr.n > maxWireBytes {
+			return &model.ModelChatTestResult{
+				OK:        false,
+				Error:     "stream response too large (>256 KiB)",
+				LatencyMs: latencyMs(),
+			}
+		}
+
+		line = strings.TrimSuffix(line, "\n")
+		line = strings.TrimSuffix(line, "\r")
+
+		if line == "" || strings.HasPrefix(line, ":") {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			continue
+		}
+		if !strings.HasPrefix(line, "data") {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			continue
+		}
+
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			return &model.ModelChatTestResult{
+				OK:        false,
+				Error:     fmt.Sprintf("parse stream chunk: %v", err),
+				LatencyMs: latencyMs(),
+			}
+		}
+
+		if len(chunk.Choices) > 0 {
+			delta := chunk.Choices[0].Delta.Content
+			if chunk.Choices[0].FinishReason != "" {
+				finishReason = chunk.Choices[0].FinishReason
+			}
+			if delta != "" {
+				if builder.Len()+len(delta) > maxContentBytes {
+					return &model.ModelChatTestResult{
+						OK:        false,
+						Error:     "accumulated content too large (>64 KiB)",
+						LatencyMs: latencyMs(),
+					}
+				}
+				builder.WriteString(delta)
+			}
+		}
+
+		if errors.Is(err, io.EOF) {
+			break
+		}
+	}
+
+	content := strings.TrimSpace(builder.String())
+	if cr.n > maxWireBytes {
+		return &model.ModelChatTestResult{
+			OK:        false,
+			Error:     "stream response too large (>256 KiB)",
+			LatencyMs: latencyMs(),
+		}
+	}
+	if content == "" {
+		errMsg := "empty response content"
+		if finishReason != "" {
+			errMsg = fmt.Sprintf("empty response content (finish_reason: %s)", finishReason)
+		}
+		return &model.ModelChatTestResult{
+			OK:           false,
+			Error:        errMsg,
+			LatencyMs:    latencyMs(),
+			FinishReason: finishReason,
+		}
+	}
+	return &model.ModelChatTestResult{
+		OK:           true,
+		Response:     builder.String(),
+		LatencyMs:    latencyMs(),
+		FinishReason: finishReason,
+	}
 }
 
 // TestAllProviders tests every provider concurrently and returns results.
