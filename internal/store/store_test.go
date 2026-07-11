@@ -685,13 +685,13 @@ func TestReorderModelRuleTargets(t *testing.T) {
 		}
 	}
 
-	// Wrong number of IDs must fail.
-	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID}); err == nil {
-		t.Fatal("expected error for wrong ID count, got nil")
+	// Wrong number of IDs: skip silently (concurrent add/delete race).
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID}); err != nil {
+		t.Fatalf("expected nil for wrong ID count (silent skip), got %v", err)
 	}
 
-	// Unknown ID must fail.
-	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID, m3.ID, "unknown-id"}); err == nil {
+	// Unknown ID (same count, bad id) must fail.
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID, "unknown-id"}); err == nil {
 		t.Fatal("expected error for unknown ID, got nil")
 	}
 

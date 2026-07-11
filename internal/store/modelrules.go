@@ -389,9 +389,18 @@ func (s *Store) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		// Check count match
+		// Check count match. A mismatch means a concurrent add/delete
+		// changed the target set between the frontend reading it and
+		// submitting the reorder. Rather than failing the request, we
+		// skip the reorder silently — the next loadRules() will refresh
+		// the UI with the correct state. Reorder is non-destructive
+		// (only writes tier values) so skipping is always safe.
 		if len(orderedTargetIDs) != len(existing) {
-			return fmt.Errorf("store: reorder targets %q: id count mismatch (got %d, expected %d)", ruleID, len(orderedTargetIDs), len(existing))
+			slog.Warn("store: reorder targets skipped due to count mismatch",
+				"rule_id", ruleID,
+				"got", len(orderedTargetIDs),
+				"expected", len(existing))
+			return nil
 		}
 		// Check each incoming ID exists in the rule
 		seen := make(map[string]bool, len(orderedTargetIDs))
