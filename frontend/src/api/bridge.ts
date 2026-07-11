@@ -11,6 +11,20 @@ function ensureWails(): void {
 }
 
 export const api = {
+  // App info / lifecycle
+  getAppInfo: (): Promise<model.AppInfo> => {
+    ensureWails()
+    return wails.GetAppInfo() as Promise<model.AppInfo>
+  },
+  hideApp: (): Promise<void> => {
+    ensureWails()
+    return wails.HideApp() as Promise<void>
+  },
+  showApp: (): Promise<void> => {
+    ensureWails()
+    return wails.ShowApp() as Promise<void>
+  },
+
   // Dashboard
   dashboard: (): Promise<model.DashboardData> => {
     ensureWails()

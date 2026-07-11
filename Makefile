@@ -1,5 +1,10 @@
 .PHONY: all install dev build build-all build-macos build-windows build-linux test test-go test-frontend vet fmt generate clean help
 
+# App version injected via ldflags. Override with: make build VERSION=1.0.0
+VERSION ?= $(shell grep productVersion wails.json | sed 's/.*: *"//;s/".*//')
+BUILD ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+LDFLAGS := -X main.appVersion=$(VERSION) -X main.appBuild=$(BUILD)
+
 # Default target: run everything a CI-like check would run.
 all: fmt vet test build
 
@@ -17,18 +22,18 @@ generate:
 
 ## Production builds
 build:
-	wails build
+	wails build -ldflags "$(LDFLAGS)"
 
 build-all: build-macos build-windows build-linux
 
 build-macos:
-	wails build -platform darwin/universal -clean
+	wails build -platform darwin/universal -clean -ldflags "$(LDFLAGS)"
 
 build-windows:
-	wails build -platform windows/amd64 -clean
+	wails build -platform windows/amd64 -clean -ldflags "$(LDFLAGS)"
 
 build-linux:
-	wails build -platform linux/amd64 -clean
+	wails build -platform linux/amd64 -clean -ldflags "$(LDFLAGS)"
 
 ## Testing
 test: test-go test-frontend

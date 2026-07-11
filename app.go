@@ -85,9 +85,11 @@ func NewApp() *api.App {
 	})
 	sv.SetProxy(prx)
 
-	return api.NewApp(api.Deps{
+	app := api.NewApp(api.Deps{
 		Store:   st,
 		Service: sv,
 		Proxy:   prx,
 	})
+	app.SetAppInfo(getAppInfo())
+	return app
 }

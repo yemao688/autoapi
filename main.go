@@ -40,10 +40,10 @@ func main() {
 	trayMenu := menu.NewMenu()
 	fileMenu := trayMenu.AddSubmenu("Autoapi")
 	fileMenu.AddText("显示主窗口", keys.CmdOrCtrl("O"), func(_ *menu.CallbackData) {
-		_ = app.ShowWindow()
+		_ = app.ShowApp()
 	})
 	fileMenu.AddText("设置", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
-		_ = app.ShowWindow()
+		_ = app.ShowApp()
 		app.NavigateTo("/settings")
 	})
 	fileMenu.AddText("重启服务", nil, func(_ *menu.CallbackData) {
@@ -76,10 +76,10 @@ func main() {
 	if cfg.enableTray {
 		start, stop := tray.Run(tray.Handlers{
 			ShowWindow: func() {
-				_ = app.ShowWindow()
+				_ = app.ShowApp()
 			},
 			OpenSettings: func() {
-				_ = app.ShowWindow()
+				_ = app.ShowApp()
 				app.NavigateTo("/settings")
 			},
 			RestartProxy: func() {
@@ -104,7 +104,7 @@ func main() {
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "dev.local.autoapi",
 			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
-				if err := app.ShowWindow(); err != nil {
+				if err := app.ShowApp(); err != nil {
 					slog.Warn("launch: failed to show window for second instance", "error", err)
 				}
 			},

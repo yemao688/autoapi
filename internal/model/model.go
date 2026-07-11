@@ -469,3 +469,13 @@ const (
 	ExportTokensCSV    ExportFormat = "tokens_csv"
 	ExportLogsCSV      ExportFormat = "logs_csv"
 )
+
+// AppInfo carries build-time and runtime metadata for the Settings > About
+// section. Version and Build are injected via -ldflags at build time.
+type AppInfo struct {
+	Version   string `json:"version"`
+	Build     string `json:"build"`     // short commit hash or date stamp
+	Platform  string `json:"platform"`  // darwin / windows / linux
+	Arch      string `json:"arch"`      // arm64 / amd64
+	GoVersion string `json:"goVersion"` // Go toolchain version
+}

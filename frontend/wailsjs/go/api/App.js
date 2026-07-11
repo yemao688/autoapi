@@ -50,6 +50,10 @@ export function FetchUpstreamModels(arg1) {
   return window['go']['api']['App']['FetchUpstreamModels'](arg1);
 }
 
+export function GetAppInfo() {
+  return window['go']['api']['App']['GetAppInfo']();
+}
+
 export function GetDashboard() {
   return window['go']['api']['App']['GetDashboard']();
 }
@@ -88,6 +92,10 @@ export function GetUsageStats(arg1) {
 
 export function GetUsageTrends(arg1) {
   return window['go']['api']['App']['GetUsageTrends'](arg1);
+}
+
+export function HideApp() {
+  return window['go']['api']['App']['HideApp']();
 }
 
 export function HideWindow() {
@@ -158,12 +166,20 @@ export function SaveSettings(arg1) {
   return window['go']['api']['App']['SaveSettings'](arg1);
 }
 
+export function SetAppInfo(arg1) {
+  return window['go']['api']['App']['SetAppInfo'](arg1);
+}
+
 export function SetModelsActive(arg1, arg2, arg3) {
   return window['go']['api']['App']['SetModelsActive'](arg1, arg2, arg3);
 }
 
 export function SetProviderEnabled(arg1, arg2) {
   return window['go']['api']['App']['SetProviderEnabled'](arg1, arg2);
+}
+
+export function ShowApp() {
+  return window['go']['api']['App']['ShowApp']();
 }
 
 export function ShowWindow() {

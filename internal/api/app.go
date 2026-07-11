@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"autoapi/internal/dock"
 	"autoapi/internal/logger"
 	"autoapi/internal/model"
 
@@ -143,14 +144,21 @@ type ProxyService interface {
 // App is the single struct bound to the Wails runtime. All methods here are
 // auto-generated as TypeScript bindings under frontend/wailsjs/go/main/App.
 type App struct {
-	ctx  context.Context
-	deps Deps
+	ctx     context.Context
+	deps    Deps
+	appInfo model.AppInfo
 }
 
 // NewApp constructs an App with the given dependencies. Pass Deps{} (zero) to
 // get a contract-only instance that returns ErrNotImplemented from every call.
 func NewApp(deps Deps) *App {
 	return &App{deps: deps}
+}
+
+// SetAppInfo injects build-time version metadata. Called from main after
+// NewApp but before wails.Run.
+func (a *App) SetAppInfo(info model.AppInfo) {
+	a.appInfo = info
 }
 
 // Startup is invoked by Wails OnStartup. We save the ctx for runtime calls
@@ -834,4 +842,37 @@ func maskKey(plaintext string) string {
 	prefix := string(r[:prefixLen])
 	suffix := string(r[n-4:])
 	return prefix + "****" + suffix
+}
+
+// ----- App info / lifecycle -----
+
+// GetAppInfo returns build-time and runtime metadata for the About section.
+func (a *App) GetAppInfo() (model.AppInfo, error) {
+	return a.appInfo, nil
+}
+
+// HideApp hides the window and removes the Dock icon, switching the app to
+// a background accessory process. The HTTP proxy on :8344 keeps running.
+// On non-macOS platforms, only the window is hidden.
+func (a *App) HideApp() error {
+	if a.ctx == nil {
+		return fmt.Errorf("app: HideApp called before Startup")
+	}
+	runtime.WindowHide(a.ctx)
+	runtime.Hide(a.ctx)
+	dock.HideDockIcon()
+	return nil
+}
+
+// ShowApp restores the Dock icon and brings the window back to the
+// foreground. This is the inverse of HideApp.
+func (a *App) ShowApp() error {
+	if a.ctx == nil {
+		return fmt.Errorf("app: ShowApp called before Startup")
+	}
+	dock.ShowDockIcon()
+	runtime.Show(a.ctx)
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+	return nil
 }

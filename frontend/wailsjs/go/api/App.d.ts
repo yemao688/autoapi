@@ -28,6 +28,8 @@ export function ExportData(arg1:model.ExportFormat):Promise<api.ExportResult>;
 
 export function FetchUpstreamModels(arg1:string):Promise<Array<model.Model>>;
 
+export function GetAppInfo():Promise<model.AppInfo>;
+
 export function GetDashboard():Promise<model.DashboardData>;
 
 export function GetModelRule(arg1:string):Promise<model.ModelRule>;
@@ -47,6 +49,8 @@ export function GetSystemHealth():Promise<model.ServiceHealth>;
 export function GetUsageStats(arg1:model.LogQuery):Promise<model.UsageStats>;
 
 export function GetUsageTrends(arg1:model.UsageTrendsQuery):Promise<model.UsageTrends>;
+
+export function HideApp():Promise<void>;
 
 export function HideWindow():Promise<void>;
 
@@ -82,9 +86,13 @@ export function RestartProxy():Promise<void>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 
+export function SetAppInfo(arg1:model.AppInfo):Promise<void>;
+
 export function SetModelsActive(arg1:string,arg2:Array<string>,arg3:boolean):Promise<void>;
 
 export function SetProviderEnabled(arg1:string,arg2:boolean):Promise<void>;
+
+export function ShowApp():Promise<void>;
 
 export function ShowWindow():Promise<void>;
 

@@ -97,6 +97,26 @@ export namespace model {
 	        this.expires_at = source["expires_at"];
 	    }
 	}
+	export class AppInfo {
+	    version: string;
+	    build: string;
+	    platform: string;
+	    arch: string;
+	    goVersion: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.build = source["build"];
+	        this.platform = source["platform"];
+	        this.arch = source["arch"];
+	        this.goVersion = source["goVersion"];
+	    }
+	}
 	export class AppearanceSettings {
 	    theme: string;
 	    density: string;

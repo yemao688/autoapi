@@ -163,15 +163,15 @@
       "subtitle": "Autoapi v{version}",
       "tagline": "Self-hosted model router · for personal use",
       "versionLine": "v{version} · build {build}",
-      "platform": "macOS 14.0+",
-      "arch": "Apple Silicon optimized",
+      "platformArch": "{platform} / {arch}",
+      "goVersion": "Go {version}",
       "checkUpdate": "Check for updates",
+      "checkingUpdates": "Checking for updates...",
       "recentUpdates": "Recent updates",
       "viewChangelog": "View full changelog →",
       "updates": {
-        "v0.4.2": "New settings panel · smart routing savings stats · 30-day token stacked chart",
-        "v0.4.1": "Support for Moonshot kimi-latest · fix Anthropic 401 flakiness",
-        "v0.4.0": "Route rules refactored · priority + hit counters · SSE streaming"
+        "v0.5.0": "Background mode, startup behavior, and menu bar settings · single-instance lock · expanded proxy, data, and security capabilities",
+        "v0.4.2": "New settings panel · smart routing savings stats · 30-day token stacked chart"
       }
     }
   },

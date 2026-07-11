@@ -9,6 +9,7 @@ import { useToast } from '@/composables/useToast'
 import { useTheme } from '@/composables/useTheme'
 import { LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, type AppLocale } from '@/locales'
 import i18n from '@/locales'
+import appicon from '@/assets/appicon.png'
 
 const { t, locale } = useI18n()
 const { download } = useExportDownload()
@@ -26,6 +27,7 @@ const settingsLoaded = ref(false)
 const runtimePaths = ref<apiModels.RuntimePaths | null>(null)
 const runtimePathsLoading = ref(false)
 const runtimePathsError = ref<string | null>(null)
+const appInfo = ref<model.AppInfo | null>(null)
 
 // Proxy service status
 const proxyRunning = ref<boolean | null>(null)
@@ -310,10 +312,20 @@ function notImplemented() {
   toast.push(t('settings.actions.notImplemented'), 'warning')
 }
 
-onMounted(() => {
+function openReleases() {
+  toast.push(t('settings.about.checkingUpdates'), 'info')
+  window.open('https://github.com/yemao688/autoapi/releases', '_blank')
+}
+
+onMounted(async () => {
   void loadSettings()
   void loadRuntimePaths()
   void refreshProxyStatus()
+  try {
+    appInfo.value = await api.getAppInfo()
+  } catch {
+    // Ignore unavailable backend info; the About section displays fallbacks.
+  }
 })
 
 watch(activeTheme, (t) => {
@@ -940,23 +952,23 @@ watch(activeTheme, (t) => {
             <div class="section-head">
               <div>
                 <div class="section-title">{{ t('settings.about.title') }}</div>
-                <div class="section-sub">{{ t('settings.about.subtitle', { version: '0.4.2' }) }}</div>
+                <div class="section-sub">{{ t('settings.about.subtitle', { version: appInfo?.version || '0.5.0' }) }}</div>
               </div>
             </div>
 
             <div class="row" style="gap: 16px; align-items: flex-start;">
-              <div style="width: 56px; height: 56px; border-radius: 14px; background: var(--black); color: white; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: 24px; font-weight: 700; flex-shrink: 0;">A</div>
+              <img :src="appicon" alt="Autoapi" style="width: 56px; height: 56px; border-radius: 14px; object-fit: cover; flex-shrink: 0;">
               <div style="flex: 1;">
                 <div style="font-size: 15px; font-weight: 600;">{{ t('app.tagline') }}</div>
                 <div class="text-muted" style="font-size: 12.5px; margin-top: 2px;">{{ t('settings.about.tagline') }}</div>
                 <div class="row" style="gap: 16px; margin-top: 12px; font-size: 12px; color: var(--muted);">
-                  <span>{{ t('settings.about.versionLine', { version: '0.4.2', build: '20260518' }) }}</span>
-                  <span>{{ t('settings.about.platform') }}</span>
-                  <span>{{ t('settings.about.arch') }}</span>
+                  <span>{{ t('settings.about.versionLine', { version: appInfo?.version || '0.5.0', build: appInfo?.build || '—' }) }}</span>
+                  <span>{{ t('settings.about.platformArch', { platform: appInfo?.platform || '—', arch: appInfo?.arch || '—' }) }}</span>
+                  <span>Go {{ appInfo?.goVersion || '—' }}</span>
                 </div>
               </div>
               <div class="row" style="gap: 8px; flex-shrink: 0;">
-                <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 12px;" @click="notImplemented">{{ t('settings.about.checkUpdate') }}</button>
+                <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 12px;" @click="openReleases">{{ t('settings.about.checkUpdate') }}</button>
               </div>
             </div>
 
@@ -964,21 +976,17 @@ watch(activeTheme, (t) => {
 
             <div class="field" style="margin-bottom: 0;">
               <div class="field-label">{{ t('settings.about.recentUpdates') }}</div>
-              <div class="stack-tight" style="margin-top: 6px;">
+              <div class="stack-tight" style="margin-top: 6px; max-height: 145px; overflow-y: auto; padding-right: 4px;">
+                <div class="row" style="gap: 12px; padding: 6px 0;">
+                  <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.5.0</span>
+                  <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.5.0') }}</div>
+                </div>
                 <div class="row" style="gap: 12px; padding: 6px 0;">
                   <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.4.2</span>
                   <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.4.2') }}</div>
                 </div>
-                <div class="row" style="gap: 12px; padding: 6px 0;">
-                  <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.4.1</span>
-                  <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.4.1') }}</div>
-                </div>
-                <div class="row" style="gap: 12px; padding: 6px 0;">
-                  <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.4.0</span>
-                  <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.4.0') }}</div>
-                </div>
               </div>
-              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px; margin-top: 8px;" @click="notImplemented">{{ t('settings.about.viewChangelog') }}</button>
+              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px; margin-top: 8px;" @click="openReleases">{{ t('settings.about.viewChangelog') }}</button>
             </div>
           </section>
         </div>

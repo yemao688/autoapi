@@ -163,15 +163,15 @@
       "subtitle": "Autoapi v{version}",
       "tagline": "自研模型路由软件 · 个人使用",
       "versionLine": "v{version} · 构建 {build}",
-      "platform": "macOS 14.0+",
-      "arch": "Apple Silicon 优化",
+      "platformArch": "{platform} / {arch}",
+      "goVersion": "Go {version}",
       "checkUpdate": "检查更新",
+      "checkingUpdates": "正在检查更新...",
       "recentUpdates": "最近更新",
       "viewChangelog": "查看完整 Changelog →",
       "updates": {
-        "v0.4.2": "新增设置面板 · 智能路由节省统计 · 30 日 Token 堆叠图",
-        "v0.4.1": "支持 Moonshot kimi-latest · 修复 Anthropic 401 抖动",
-        "v0.4.0": "路由规则重构 · 引入优先级 + 命中数 · SSE 流式响应"
+        "v0.5.0": "新增后台运行、启动行为与菜单栏图标设置 · 单实例锁 · 完善代理、数据与安全能力",
+        "v0.4.2": "新增设置面板 · 智能路由节省统计 · 30 日 Token 堆叠图"
       }
     }
   },
