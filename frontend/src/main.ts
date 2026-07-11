@@ -4,14 +4,16 @@ import router from './router'
 import i18n from './locales'
 import './styles.css'
 
-// Chart.js: register only what UsageTrendChart consumes (line/area, dual-axis,
-// tooltips, legend). Tree-shaking is handled by importing from 'chart.js/auto'
-// here; component-level imports are used inside UsageTrendChart.vue.
+// Chart.js: register the controllers/elements/scales/plugins the views use.
+// Trend chart (line/area) needs LineController + LineElement; donut chart
+// needs DoughnutController + ArcElement. Tooltip + Legend are shared.
 import {
   Chart as ChartJS,
   LineController,
   LineElement,
   PointElement,
+  DoughnutController,
+  ArcElement,
   LinearScale,
   CategoryScale,
   Filler,
@@ -23,6 +25,8 @@ ChartJS.register(
   LineController,
   LineElement,
   PointElement,
+  DoughnutController,
+  ArcElement,
   LinearScale,
   CategoryScale,
   Filler,

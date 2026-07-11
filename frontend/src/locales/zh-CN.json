@@ -481,14 +481,14 @@
     },
     "filters": {
       "presetAria": "选择时间范围",
-      "providerAria": "按 Provider 筛选",
+      "providerAria": "按上游筛选",
       "routeAria": "按路由筛选",
       "modelAria": "按模型筛选",
       "searchAria": "搜索",
       "statusAria": "按状态筛选",
       "modelPlaceholder": "模型",
       "searchPlaceholder": "搜索 模型 / 路由 / 错误",
-      "providerOption": "Provider · {name}",
+      "providerOption": "上游 · {name}",
       "routeOption": "路由 · {name}",
       "clear": "清除筛选"
     },
@@ -509,6 +509,7 @@
       "title": "使用趋势",
       "subtitle": "输入 / 输出 / 缓存 / 成本 · 按时间聚合",
       "empty": "暂无数据",
+      "donutOther": "其他",
       "series": {
         "input": "输入 Token",
         "output": "输出 Token",
@@ -522,14 +523,15 @@
       }
     },
     "providerShares": {
-      "title": "Provider 占比",
+      "title": "上游占比",
       "month": "本月",
       "tokensWithCost": "{tokens} tokens · ${cost}"
     },
     "modelRanking": {
       "title": "模型用量排行",
       "detail": "详情",
-      "requests": "{count} 请求"
+      "requests": "{count} 请求",
+      "chartTitle": "模型调用次数占比"
     },
     "logTable": {
       "time": "时间",

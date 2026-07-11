@@ -6,7 +6,6 @@ import { api } from "@/api/client";
 import { useApi } from "@/composables/useApi";
 import { useExportDownload } from "@/composables/useExportDownload";
 import { useLiveSync, type SyncMode } from "@/composables/useLiveSync";
-import { useRelativeTime } from "@/composables/useRelativeTime";
 import { useToast } from "@/composables/useToast";
 import { useConfirm } from "@/composables/useConfirm";
 import { useTabKeyboard } from "@/composables/useTabKeyboard";
@@ -21,7 +20,6 @@ import LogFilters, {
 
 const { t } = useI18n();
 
-const relativeTime = useRelativeTime();
 const { download } = useExportDownload();
 const toast = useToast();
 const confirm = useConfirm();
@@ -62,7 +60,49 @@ const POLL_MS: Record<Exclude<SyncMode, "realtime" | "off">, number> = {
 // handler threw. We intentionally do not use 'idle' based on time, because a
 // quiet period without traffic is normal and was confusing users.
 const sseState = ref<"connected" | "error">("connected");
-const lastEventAt = ref<number | null>(null);
+
+// Polling countdown state. We anchor on an absolute deadline instead of a
+// decrementing counter so a pause (e.g. tab backgrounded) snaps back to the
+// real remaining time on the next tick — no drift. nextPollAt is null
+// whenever the active mode is realtime or off.
+const nextPollAt = ref<number | null>(null);
+const pollCountdown = ref<string>("");
+let countdownTimer: ReturnType<typeof setInterval> | null = null;
+
+function clearCountdownTimer() {
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+}
+
+function startCountdownTimer() {
+  clearCountdownTimer();
+  if (nextPollAt.value == null) {
+    pollCountdown.value = "";
+    return;
+  }
+  // Tick once immediately so the label updates without a 1s wait.
+  updateCountdownLabel();
+  countdownTimer = setInterval(updateCountdownLabel, 1000);
+}
+
+function updateCountdownLabel() {
+  if (nextPollAt.value == null) {
+    pollCountdown.value = "";
+    return;
+  }
+  const remainingMs = nextPollAt.value - Date.now();
+  if (remainingMs <= 0) {
+    // Refresh hasn't fired yet (e.g. fetchAll still in flight) — show 0
+    // rather than a negative number; the next tick or mode change will
+    // refresh the value.
+    pollCountdown.value = "0s";
+    return;
+  }
+  const seconds = Math.ceil(remainingMs / 1000);
+  pollCountdown.value = `${seconds}s`;
+}
 
 const selectedProviderId = ref("");
 // Use stable internal keys for the v-model so changing the active locale does
@@ -126,9 +166,13 @@ const tokenStats = computed(() =>
 );
 const logStats = computed(() => (usageData.value?.log_stats || []).slice(0, 4));
 const providerShares = computed(() => usageData.value?.providers || []);
+// modelRanking is the top-5 list for the ranking card. modelRankingFull
+// is the untruncated list passed to the donut chart so it can group
+// models beyond the top 7 into an "Other" slice.
 const modelRanking = computed(() =>
   (usageData.value?.model_ranking || []).slice(0, 5),
 );
+const modelRankingFull = computed(() => usageData.value?.model_ranking || []);
 // Badge on the "Token 用量" tab: show the total token count rather than the
 // cost stat (token_stats[2] is "Estimated Cost" since the backend reordered
 // the KPI cards to Total Requests / Total Tokens / Estimated Cost).
@@ -337,6 +381,8 @@ function stopPolling() {
     clearTimeout(pollTimer);
     pollTimer = null;
   }
+  nextPollAt.value = null;
+  pollCountdown.value = "";
 }
 
 function stopRealtime() {
@@ -345,7 +391,6 @@ function stopRealtime() {
     eventsOff = null;
   }
   sseState.value = "connected";
-  lastEventAt.value = null;
 }
 
 function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
@@ -357,23 +402,33 @@ function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
     if (liveSync.value !== mode) {
       return;
     }
+    nextPollAt.value = null;
+    pollCountdown.value = "";
     void refreshAll().finally(() => {
+      if (liveSync.value !== mode) {
+        return;
+      }
+      nextPollAt.value = Date.now() + ms;
+      startCountdownTimer();
       pollTimer = setTimeout(tick, ms);
     });
   }
 
   // Kick off an immediate refresh, then schedule the next tick.
   void refreshAll().finally(() => {
+    if (liveSync.value !== mode) {
+      return;
+    }
+    nextPollAt.value = Date.now() + ms;
+    startCountdownTimer();
     pollTimer = setTimeout(tick, ms);
   });
 }
 
 function startRealtime() {
   stopRealtime();
-  lastEventAt.value = null;
   const off = EventsOn("log:new", () => {
     try {
-      lastEventAt.value = Date.now();
       sseState.value = "connected";
       if (liveSync.value === "realtime") {
         void refreshAll();
@@ -381,7 +436,6 @@ function startRealtime() {
     } catch (e: any) {
       console.warn("[sync] log:new handler error", e);
       sseState.value = "error";
-      lastEventAt.value = Date.now();
     }
   });
   eventsOff = typeof off === "function" ? off : () => EventsOff("log:new");
@@ -397,6 +451,11 @@ function startRealtime() {
 function applyMode(mode: SyncMode) {
   stopPolling();
   stopRealtime();
+  // Applymode always wipes the countdown state so transitioning from a
+  // polling mode to realtime/off doesn't leave stale "5s" text behind.
+  nextPollAt.value = null;
+  pollCountdown.value = "";
+  clearCountdownTimer();
   if (mode === "realtime") {
     startRealtime();
   } else if (mode === "5s" || mode === "30s") {
@@ -528,6 +587,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopPolling();
   stopRealtime();
+  clearCountdownTimer();
   if (searchDebounce) clearTimeout(searchDebounce);
 });
 
@@ -564,7 +624,6 @@ watch([modelFilter, searchText], () => {
   <header class="main-header">
     <div class="main-title-group">
       <h1 class="main-title">{{ t("usage.title") }}</h1>
-      <span class="main-subtitle">{{ t("usage.subtitle") }}</span>
     </div>
     <div class="main-actions">
       <button class="btn btn-secondary" @click="exportLogs">
@@ -608,9 +667,28 @@ watch([modelFilter, searchText], () => {
         {{ t("usage.clearAllConfirm") }}
       </button>
       <div class="sync-control">
-        <label for="usage-sync-mode" class="text-muted">{{
-          t("usage.sync.label")
-        }}</label>
+        <!--
+          Status indicator lives LEFT of the dropdown. Three modes:
+          - realtime: green dot + "Connected" label, with the pulse animation
+          - polling (5s/30s): countdown like "5s" / "4s" using an absolute deadline
+          - off: nothing rendered
+        -->
+        <div
+          v-if="liveSync === 'realtime'"
+          class="sse-status"
+          :class="sseState"
+          aria-live="polite"
+        >
+          <span class="sse-dot" :class="sseState"></span>
+          <span class="sse-label">{{ t(`usage.sseStatus.${sseState}`) }}</span>
+        </div>
+        <div
+          v-else-if="liveSync === '5s' || liveSync === '30s'"
+          class="sse-status polling"
+          aria-live="polite"
+        >
+          <span class="poll-countdown text-mono">{{ pollCountdown }}</span>
+        </div>
         <select
           id="usage-sync-mode"
           v-model="liveSync"
@@ -622,18 +700,6 @@ watch([modelFilter, searchText], () => {
           <option value="30s">{{ t("usage.sync.seconds30") }}</option>
           <option value="off">{{ t("usage.sync.off") }}</option>
         </select>
-        <div
-          v-if="liveSync === 'realtime'"
-          class="sse-status"
-          :class="sseState"
-        >
-          <span class="sse-dot" :class="sseState"></span>
-          <span class="sse-label">{{ t(`usage.sseStatus.${sseState}`) }}</span>
-          <span v-if="lastEventAt" class="sse-last"
-            >{{ t("usage.sseStatus.lastEvent") }}
-            {{ relativeTime.format(lastEventAt) }}</span
-          >
-        </div>
       </div>
     </div>
   </header>
@@ -725,8 +791,8 @@ watch([modelFilter, searchText], () => {
         v-show="activePane === 'tokens'"
         :tokenStats="tokenStats"
         :modelRanking="modelRanking"
+        :modelRankingFull="modelRankingFull"
         :providerShares="providerShares"
-        :chartData="chartData"
       />
 
       <!-- ================== LOGS VIEW ================== -->
@@ -767,12 +833,6 @@ watch([modelFilter, searchText], () => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.sync-control label {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
 }
 
 .sync-select {
@@ -823,11 +883,23 @@ watch([modelFilter, searchText], () => {
   color: var(--negative);
 }
 
-.sse-last {
-  font-size: 11px;
-  color: var(--muted);
+/* Polling countdown: small mono badge, no animation. The text is already
+   tabular so it doesn't shift as the digits decrement. */
+.sse-status.polling .poll-countdown {
   font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+html[data-theme="dark"] .sse-status.polling .poll-countdown {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
 }
 
 @media (max-width: 640px) {
@@ -836,7 +908,7 @@ watch([modelFilter, searchText], () => {
     gap: 6px;
   }
   .sse-status {
-    width: 100%;
+    width: auto;
   }
 }
 

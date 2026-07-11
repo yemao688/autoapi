@@ -481,14 +481,14 @@
     },
     "filters": {
       "presetAria": "Select time range",
-      "providerAria": "Filter by provider",
+      "providerAria": "Filter by upstream",
       "routeAria": "Filter by route",
       "modelAria": "Filter by model",
       "searchAria": "Search",
       "statusAria": "Filter by status",
       "modelPlaceholder": "Model",
       "searchPlaceholder": "Search model / route / error",
-      "providerOption": "Provider · {name}",
+      "providerOption": "Upstream · {name}",
       "routeOption": "Route · {name}",
       "clear": "Clear filters"
     },
@@ -509,6 +509,7 @@
       "title": "Usage trend",
       "subtitle": "Input / output / cache / cost · aggregated over time",
       "empty": "No data",
+      "donutOther": "Other",
       "series": {
         "input": "Input tokens",
         "output": "Output tokens",
@@ -522,14 +523,15 @@
       }
     },
     "providerShares": {
-      "title": "Provider share",
+      "title": "Upstream share",
       "month": "This month",
       "tokensWithCost": "{tokens} tokens · ${cost}"
     },
     "modelRanking": {
       "title": "Model usage ranking",
       "detail": "Details",
-      "requests": "{count} requests"
+      "requests": "{count} requests",
+      "chartTitle": "Model call distribution"
     },
     "logTable": {
       "time": "Time",
