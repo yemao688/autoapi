@@ -31,7 +31,7 @@ func (s *rollbackStore) SaveSettings(settings model.Settings) error {
 }
 
 func (s *rollbackStore) StorageDir() string { return "/tmp/autoapi-test" }
-func (s *rollbackStore) Close() error      { return nil }
+func (s *rollbackStore) Close() error       { return nil }
 
 func (s *rollbackStore) ResetSettings() (*model.Settings, error) {
 	if err := s.SaveSettings(s.defaults); err != nil {

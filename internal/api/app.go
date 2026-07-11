@@ -728,6 +728,8 @@ func (a *App) GetRuntimePaths() (RuntimePaths, error) {
 	}, nil
 }
 
+// RuntimePaths exposes platform-specific storage locations to the UI so the
+// Settings page can display where the SQLite database and log file live.
 type RuntimePaths struct {
 	StorageDir string `json:"storage_dir"`
 	LogPath    string `json:"log_path"`

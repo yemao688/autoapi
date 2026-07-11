@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"autoapi/internal/model"
-
 	_ "modernc.org/sqlite"
 )
 
@@ -138,7 +136,7 @@ func (s *Store) execTx(fn func(tx *sql.Tx) error) error {
 func nowMs() int64 { return time.Now().UnixMilli() }
 
 // makeID returns a new UUID string.
-func makeID() string { return newUUID() }
+func makeID() string { return NewUUID() }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -192,9 +190,3 @@ func estimateCost(modelName string, inputTokens, outputTokens int64) float64 {
 	}
 	return float64(inputTokens)*c.InputPerToken + float64(outputTokens)*c.OutputPerToken
 }
-
-// ---------------------------------------------------------------------------
-//  Ensure model.ProviderStatus constants are used
-// ---------------------------------------------------------------------------
-
-var _ model.ProviderStatus

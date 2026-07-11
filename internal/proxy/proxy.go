@@ -8,7 +8,6 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -615,7 +614,7 @@ func (p *Proxy) logRequestEntry(log *model.RequestLog) {
 // complete. The entry's ID must be set by the caller; the same ID is used
 // by logRequestEntry (deferred) to update the row with completion fields.
 func (p *Proxy) insertPendingLog(log *model.RequestLog) {
-	log.ID = newUUID()
+	log.ID = store.NewUUID()
 	if log.Timestamp == 0 {
 		log.Timestamp = time.Now().UnixMilli()
 	}
@@ -2316,14 +2315,3 @@ type streamAttemptResult struct {
 // firstByteTrackingReadCloser removed: TTFT is now captured inline in
 // streamAttempt. The old wrapper buffered nothing, but with the
 // pass-through body Read it is no longer needed at all.
-
-func newUUID() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		panic(fmt.Sprintf("proxy: uuid generation failed: %v", err))
-	}
-	buf[6] = (buf[6] & 0x0f) | 0x40
-	buf[8] = (buf[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
-}

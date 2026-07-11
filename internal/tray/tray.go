@@ -11,13 +11,14 @@ import (
 	"fyne.io/systray"
 )
 
-//go:embed build/trayicon.png
 // icon is a 44×44 monochrome template image: pure black (#000000) with
 // anti-aliased alpha and a fully transparent background. macOS renders
 // SetTemplateIcon images as a single-colour silhouette and applies the
 // appropriate foreground (dark on light menu bar, light on dark), so a
 // colour PNG would appear as an opaque blob. Three connected nodes
 // (equilateral triangle) represent routing requests across providers.
+//
+//go:embed build/trayicon.png
 var icon []byte
 
 // Handlers groups the menu actions. main.go wires these to App methods
@@ -110,4 +111,3 @@ func Run(handlers Handlers) (start func(), stop func()) {
 		},
 	)
 }
-

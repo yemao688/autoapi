@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// newUUID generates a v4 UUID string.
-func newUUID() string {
+// NewUUID generates a v4 UUID string.
+func NewUUID() string {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		panic(fmt.Sprintf("store: uuid generation failed: %v", err))
