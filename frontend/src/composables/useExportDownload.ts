@@ -1,4 +1,4 @@
-import { api } from '@/api/client'
+import { api } from '@/api/bridge'
 import { useToast } from '@/composables/useToast'
 import type { api as apiModels } from '../../wailsjs/go/models'
 

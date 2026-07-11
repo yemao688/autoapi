@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { api as apiModels, model } from '../../wailsjs/go/models'
-import { api } from '@/api/client'
+import { api } from '@/api/bridge'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useToast } from '@/composables/useToast'

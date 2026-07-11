@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api } from '@/api/client'
+import { api } from '@/api/bridge'
 import { useApi } from '@/composables/useApi'
 import { usePolling } from '@/composables/usePolling'
 

@@ -20,7 +20,7 @@ OpenAI 兼容的本地代理网关 + 可视化管理面板，wails v2 + Go + Vue
 │   │   ├── App.vue                  # 根组件（MasterGate + AppWindow + AppToast）
 │   │   ├── main.ts                  # 应用入口
 │   │   ├── router.ts                # vue-router 路由
-│   │   ├── api/client.ts            # 类型化的 Wails binding 封装
+│   │   ├── api/bridge.ts            # 类型化的 Wails binding 封装
 │   │   ├── components/              # 布局组件（AppWindow/SidebarNav/AppToast/MasterGate）
 │   │   ├── composables/             # 逻辑复用（useApi/useTheme/useToast/useMasterGate/...）
 │   │   ├── views/                   # 6 个页面
@@ -120,7 +120,7 @@ curl -X POST http://localhost:8344/v1/chat/completions \
 
 - **Provider 管理**：添加/测试 OpenAI、Anthropic、DeepSeek、Moonshot、智谱 GLM 及自定义 OpenAI 兼容网关。
 - **API 密钥**：本地 AES-256-GCM 加密存储，主密码解锁；支持按 Provider/环境筛选。
-- **路由规则**：基于模型、任务、estimated_tokens、header、时间等条件的优先级匹配，支持 `matches`/`equals`/`lt`/`gt`/`between`/`in` 操作符。
+- **模型规则**：基于模型、任务、estimated_tokens、header、时间等条件按优先级匹配，命中目标 Provider + 目标模型；支持 `matches`/`equals`/`lt`/`gt`/`between`/`in` 操作符。
 - **使用统计**：实时 Token 用量、请求日志、Provider 占比、模型排行、P95 延迟。
 - **本地代理**：`0.0.0.0:8344` OpenAI 兼容接口（chat completions、embeddings、models），SSE 流式透传，请求日志自动落库。
 - **设置**：常规/外观/路由/API 服务/数据/高级/关于，支持数据导出（JSON/CSV）和日志清理。
@@ -129,26 +129,25 @@ curl -X POST http://localhost:8344/v1/chat/completions \
 
 ## 数据存储
 
-- SQLite 数据库：macOS 下位于 `~/Library/Application Support/autoapi/autoapi.db`
-- 设置同样存储在该目录下的 `settings` 表（JSON 键值）
+- SQLite 数据库：`~/.autoapi/autoapi.db`（所有平台）
+- 应用日志：`~/.autoapi/logs/autoapi.log`
+- 设置同样存储在数据库的 `settings` 表（JSON 键值）
 
 ## 不在 v1 范围
 
 - WebSocket `/v1/stream`
-- 菜单栏图标 / 登录启动
 - 全局键盘快捷键
-- 自动重试到备选 Provider
 - HTTP 上游代理
 - 定时清理 cron
 - JSON 备份导入
 
 ## 技术栈
 
-- 后端：Go 1.25 + Wails v2 + chi/v5 + modernc.org/sqlite + adrg/xdg
+- 后端：Go 1.25 + Wails v2 + chi/v5 + modernc.org/sqlite
 - 前端：Vue 3.5 + Vite 8 + TypeScript 6 + vue-router 4
 - 安全：argon2id 主密码 + AES-256-GCM 密钥加密
 - 构建：wails build（跨平台）
 
 ## 许可证
 
-内部原型项目。
+本项目以 [MIT](LICENSE) 许可证开源。详见 LICENSE 文件。

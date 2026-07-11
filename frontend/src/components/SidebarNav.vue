@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { api } from '@/api/client'
+import { api } from '@/api/bridge'
 import { useApi } from '@/composables/useApi'
 import { usePolling } from '@/composables/usePolling'
 

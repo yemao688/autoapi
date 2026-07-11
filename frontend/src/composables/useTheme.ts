@@ -1,5 +1,5 @@
 import { ref, watch, onMounted } from 'vue'
-import { api } from '@/api/client'
+import { api } from '@/api/bridge'
 
 export type ThemeValue = 'light' | 'dark' | 'system'
 

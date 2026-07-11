@@ -2,7 +2,7 @@
 import { ref, watch, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
-import { api } from '../api/client'
+import { api } from '../api/bridge'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderStyle } from '../composables/useProviderStyle'

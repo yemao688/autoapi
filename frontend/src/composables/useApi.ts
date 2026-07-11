@@ -1,5 +1,5 @@
 import { ref, type Ref } from 'vue'
-import { api } from '../api/client'
+import { api } from '../api/bridge'
 
 export function useApi<T>(fetcher: () => Promise<T>) {
   const data: Ref<T | null> = ref(null)

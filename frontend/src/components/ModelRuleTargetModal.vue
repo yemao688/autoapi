@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { model } from '../../wailsjs/go/models'
-import { api } from '@/api/client'
+import { api } from '@/api/bridge'
 import { useToast } from '@/composables/useToast'
 import AutoComplete from '@/components/AutoComplete.vue'
 import TestModelChatModal from '@/components/TestModelChatModal.vue'

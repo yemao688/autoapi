@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api } from '../api/client'
+import { api } from '../api/bridge'
 import { useApi } from '../composables/useApi'
 import { useProviderStyle } from '../composables/useProviderStyle'
 import { useFormatters } from '../composables/useFormatters'

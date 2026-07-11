@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { model } from '../../wailsjs/go/models'
-import { api } from '@/api/client'
+import { api } from '@/api/bridge'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { usePolling } from '@/composables/usePolling'
