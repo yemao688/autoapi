@@ -291,11 +291,14 @@ type Settings struct {
 const (
 	CloseActionBackground = "background"
 	CloseActionQuit       = "quit"
+
+	StartupActionShowWindow  = "show_window"
+	StartupActionStartHidden = "start_hidden"
 )
 
 type GeneralSettings struct {
 	LaunchAtLogin bool   `json:"launch_at_login"`
-	StartupAction string `json:"startup_action"` // "show_window" | "minimize_menubar" | "no_window"
+	StartupAction string `json:"startup_action"` // "show_window" | "start_hidden" (legacy "minimize_menubar"/"no_window" normalized to "start_hidden")
 	MenuBarItem   bool   `json:"menu_bar_item"`
 	CloseAction   string `json:"close_action"` // "background" | "quit"
 }

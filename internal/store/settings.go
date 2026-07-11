@@ -122,7 +122,7 @@ func (s *Store) defaultSettings() model.Settings {
 	return model.Settings{
 		General: model.GeneralSettings{
 			LaunchAtLogin: false,
-			StartupAction: "show_window",
+			StartupAction: model.StartupActionShowWindow,
 			MenuBarItem:   true,
 			CloseAction:   model.CloseActionBackground,
 		},

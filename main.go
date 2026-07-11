@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"embed"
+	"log/slog"
 
-	"autoapi/internal/model"
 	"autoapi/internal/tray"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -20,21 +20,14 @@ var assets embed.FS
 func main() {
 	app := NewApp()
 
-	// Read close_action setting before wails.Run to set the static
-	// HideWindowOnClose option. HideWindowOnClose is evaluated once by
-	// Wails at startup and cannot be changed at runtime, so changes to
-	// close_action only take effect after an app restart.
-	hideOnClose := true // default: background mode
-	if s, sErr := app.GetSettings(); sErr == nil && s != nil {
-		switch s.General.CloseAction {
-		case model.CloseActionQuit:
-			hideOnClose = false
-		case model.CloseActionBackground:
-			hideOnClose = true
-		default:
-			// Unknown/empty/legacy "ask" value: normalize to background.
-			hideOnClose = true
-		}
+	// Resolve static lifecycle options from persisted settings before
+	// wails.Run. These options are evaluated once by Wails at startup and
+	// cannot be changed at runtime, so setting changes only take effect
+	// after an app restart.
+	settings, sErr := app.GetSettings()
+	cfg := resolveLaunchConfig(settings)
+	if sErr != nil {
+		slog.Warn("launch: failed to read settings, using safe defaults", "error", sErr)
 	}
 
 	// Build the application menu (top-of-screen on macOS, window menu on
@@ -76,27 +69,29 @@ func main() {
 	// role-based EditMenu() is the only correct way. Do not change.
 	trayMenu.Append(menu.EditMenu())
 
-	// System tray (macOS menu bar). RunWithExternalLoop does not replace
-	// the NSApp delegate, so it coexists safely with Wails. start() must
-	// run BEFORE wails.Run (both need the locked main thread; start is
-	// non-blocking). stop() runs in OnShutdown BEFORE app.Shutdown so
-	// the tray teardown completes before the Wails event loop exits.
-	startTray, stopTray := tray.Run(tray.Handlers{
-		ShowWindow: func() {
-			_ = app.ShowWindow()
-		},
-		OpenSettings: func() {
-			_ = app.ShowWindow()
-			app.NavigateTo("/settings")
-		},
-		RestartProxy: func() {
-			_ = app.RestartProxy()
-		},
-		Quit: func() {
-			app.Quit()
-		},
-	})
-	startTray()
+	// System tray — conditionally initialized based on menu_bar_item setting.
+	// When disabled, the user has no tray icon to restore a hidden window,
+	// so resolveLaunchConfig also forces visible window + quit-on-close.
+	var stopTray func()
+	if cfg.enableTray {
+		start, stop := tray.Run(tray.Handlers{
+			ShowWindow: func() {
+				_ = app.ShowWindow()
+			},
+			OpenSettings: func() {
+				_ = app.ShowWindow()
+				app.NavigateTo("/settings")
+			},
+			RestartProxy: func() {
+				_ = app.RestartProxy()
+			},
+			Quit: func() {
+				app.Quit()
+			},
+		})
+		stopTray = stop
+		start()
+	}
 
 	err := wails.Run(&options.App{
 		Title:             "Autoapi",
@@ -104,14 +99,25 @@ func main() {
 		Height:            800,
 		MinWidth:          480,
 		MinHeight:         400,
-		HideWindowOnClose: hideOnClose,
+		StartHidden:       cfg.startHidden,
+		HideWindowOnClose: cfg.hideOnClose,
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "dev.local.autoapi",
+			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
+				if err := app.ShowWindow(); err != nil {
+					slog.Warn("launch: failed to show window for second instance", "error", err)
+				}
+			},
+		},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 245, G: 245, B: 247, A: 1},
 		OnStartup:        app.Startup,
 		OnShutdown: func(ctx context.Context) {
-			stopTray()
+			if stopTray != nil {
+				stopTray()
+			}
 			app.Shutdown(ctx)
 		},
 		Bind: []interface{}{

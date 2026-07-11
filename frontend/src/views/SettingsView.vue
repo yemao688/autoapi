@@ -150,6 +150,7 @@ const currentLanguage = computed({
 
 function applySettings(value: model.Settings) {
   settings.value = JSON.parse(JSON.stringify(value)) as model.Settings
+  normalizeLifecycleSettings(settings.value)
   activeTheme.value = settings.value.appearance.theme as any
   settingsLoaded.value = true
   isDirty.value = false
@@ -183,6 +184,28 @@ async function loadRuntimePaths() {
 function markSettingsDirty() {
   if (!settingsLoaded.value) return
   isDirty.value = true
+}
+
+// Enforce cross-setting invariants: without a tray icon, the user has no
+// way to restore a hidden window, so background close and hidden start are
+// forced off. Also normalizes legacy startup_action values. The backend
+// re-validates the same invariant in resolveLaunchConfig.
+function normalizeLifecycleSettings(value: model.Settings) {
+  const general = value.general
+  if (general.startup_action === 'minimize_menubar' || general.startup_action === 'no_window') {
+    general.startup_action = 'start_hidden'
+  } else if (general.startup_action !== 'show_window' && general.startup_action !== 'start_hidden') {
+    general.startup_action = 'show_window'
+  }
+  if (!general.menu_bar_item) {
+    general.startup_action = 'show_window'
+    general.close_action = 'quit'
+  }
+}
+
+function onMenuBarItemChange() {
+  normalizeLifecycleSettings(settings.value)
+  markSettingsDirty()
 }
 
 async function saveChanges() {
@@ -453,11 +476,11 @@ watch(activeTheme, (t) => {
 
             <div class="field">
               <div class="field-label">{{ t('settings.general.startupAction') }}</div>
-              <select class="select" style="max-width: 320px;" v-model="settings.general.startup_action" @change="markSettingsDirty">
+              <select class="select" style="max-width: 320px;" v-model="settings.general.startup_action" @change="markSettingsDirty" :disabled="!settings.general.menu_bar_item">
                 <option value="show_window">{{ t('settings.general.startupShowWindow') }}</option>
-                <option value="minimize_menubar">{{ t('settings.general.startupMinimizeMenubar') }}</option>
-                <option value="no_window">{{ t('settings.general.startupNoWindow') }}</option>
+                <option value="start_hidden">{{ t('settings.general.startupHidden') }}</option>
               </select>
+              <div v-if="!settings.general.menu_bar_item" class="field-help">{{ t('settings.general.startupDisabledNoTray') }}</div>
             </div>
             <div class="h-divider"></div>
 
@@ -467,19 +490,21 @@ watch(activeTheme, (t) => {
                   <div class="field-label">{{ t('settings.general.menuBarItem') }}</div>
                   <div class="field-help">{{ t('settings.general.menuBarItemHelp') }}</div>
                 </div>
-                <label class="toggle"><input type="checkbox" v-model="settings.general.menu_bar_item" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
+                <label class="toggle"><input type="checkbox" v-model="settings.general.menu_bar_item" @change="onMenuBarItemChange"><span class="toggle-slider"></span></label>
               </div>
             </div>
             <div class="h-divider"></div>
 
             <div class="field" style="margin-bottom: 0;">
               <div class="field-label">{{ t('settings.general.closeAction') }}</div>
-              <select class="select" style="max-width: 320px;" v-model="settings.general.close_action" @change="markSettingsDirty">
+              <select class="select" style="max-width: 320px;" v-model="settings.general.close_action" @change="markSettingsDirty" :disabled="!settings.general.menu_bar_item">
                 <option value="background">{{ t('settings.general.closeBackground') }}</option>
                 <option value="quit">{{ t('settings.general.closeQuit') }}</option>
               </select>
-              <div class="field-help">{{ t('settings.general.closeActionHint') }}</div>
+              <div v-if="!settings.general.menu_bar_item" class="field-help">{{ t('settings.general.closeDisabledNoTray') }}</div>
             </div>
+
+            <div class="field-help" style="margin-top: 14px;">{{ t('settings.general.lifecycleRestartHint') }}</div>
 
             <div class="h-divider" style="margin: 18px 0 14px;"></div>
 
