@@ -35,7 +35,7 @@ func resolveLaunchConfig(s *model.Settings) launchConfig {
 	// StartupAction: show_window → visible. Legacy hidden-start values
 	// retain their old behavior. Unknown values fall back to visible.
 	switch s.General.StartupAction {
-	case model.StartupActionShowWindow:
+	case model.StartupActionShowWindow, "show":
 		cfg.startHidden = false
 	case model.StartupActionStartHidden, "minimize_menubar", "no_window":
 		cfg.startHidden = true

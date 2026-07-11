@@ -110,6 +110,17 @@ func TestResolveLaunchConfig(t *testing.T) {
 			wantEnableTray:  true,
 		},
 		{
+			name: "legacy show normalizes to visible",
+			settings: &model.Settings{General: model.GeneralSettings{
+				StartupAction: "show",
+				MenuBarItem:   true,
+				CloseAction:   model.CloseActionBackground,
+			}},
+			wantStartHidden: false,
+			wantHideOnClose: true,
+			wantEnableTray:  true,
+		},
+		{
 			name: "unknown startup action defaults to show_window",
 			settings: &model.Settings{General: model.GeneralSettings{
 				StartupAction: "garbage",
