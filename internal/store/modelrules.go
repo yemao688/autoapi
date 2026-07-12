@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"time"
 
 	"autoapi/internal/model"
 )
@@ -47,6 +48,53 @@ func (s *Store) ListModelRules() ([]model.ModelRule, error) {
 			return nil, err
 		}
 		rules[i].Targets = targets
+	}
+
+	return rules, nil
+}
+
+// ListModelRulesForDisplay returns all model rules with targets and today's
+// success stats, ordered for display (display_order ASC, then created_at DESC,
+// then id DESC). Proxy matching and /v1/models continue to use ListModelRules.
+func (s *Store) ListModelRulesForDisplay() ([]model.ModelRule, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, enabled, first_byte_timeout_ms, created_at, updated_at
+		FROM model_rules ORDER BY display_order ASC, created_at DESC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list model rules for display: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []model.ModelRule
+	for rows.Next() {
+		var r model.ModelRule
+		var firstByteTimeoutMs int64
+		if err := rows.Scan(&r.ID, &r.Name, &r.Enabled, &firstByteTimeoutMs, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("store: scan model rule for display: %w", err)
+		}
+		// Stored as milliseconds; exposed to clients as seconds.
+		r.FirstByteTimeoutSeconds = int(firstByteTimeoutMs / 1000)
+		rules = append(rules, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if rules == nil {
+		rules = []model.ModelRule{}
+	}
+
+	// Hydrate targets and display stats for each rule.
+	// Targets are hydrated per-rule (existing N+1 behaviour), while today stats
+	// are populated by a single batched GROUP BY after all rules are loaded.
+	for i, r := range rules {
+		targets, err := s.listTargets(r.ID)
+		if err != nil {
+			return nil, err
+		}
+		rules[i].Targets = targets
+	}
+	if err := s.hydrateTodayStats(rules); err != nil {
+		return nil, err
 	}
 
 	return rules, nil
@@ -103,10 +151,14 @@ func (s *Store) CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, erro
 		if count > 0 {
 			return fmt.Errorf("store: model rule name %q is already in use", r.Name)
 		}
+		// Shift existing rules down so the new rule appears at the top.
+		if _, err := tx.Exec(`UPDATE model_rules SET display_order = display_order + 1`); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO model_rules (id, name, enabled, first_byte_timeout_ms, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			r.ID, r.Name, boolInt(r.Enabled), int64(r.FirstByteTimeoutSeconds)*1000, r.CreatedAt, r.UpdatedAt); err != nil {
+			INSERT INTO model_rules (id, name, enabled, first_byte_timeout_ms, display_order, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			r.ID, r.Name, boolInt(r.Enabled), int64(r.FirstByteTimeoutSeconds)*1000, 0, r.CreatedAt, r.UpdatedAt); err != nil {
 			return err
 		}
 		targets, err := s.insertTargets(tx, r.ID, in.Targets)
@@ -183,11 +235,60 @@ func (s *Store) DeleteModelRule(id string) error {
 }
 
 // ReorderModelRules is a no-op kept for API compatibility. The previous
-// drag-reorder UX was removed when route rules became model rules: rules
-// are now keyed by a unique Name (the client-facing model name) and there
-// is no meaningful order to preserve.
+// ReorderModelRules updates display_order for all rules transactionally. The
+// incoming IDs must exactly match the current rule set; any deviation
+// (empty, duplicate, unknown, missing, or count mismatch) returns
+// ErrConflict so the caller can reload authoritative state. Concurrent
+// reorders with the same rule set are last-write-wins.
 func (s *Store) ReorderModelRules(orderedIDs []string) error {
-	return nil
+	if len(orderedIDs) == 0 {
+		return fmt.Errorf("store: reorder model rules: empty list: %w", ErrConflict)
+	}
+	return s.execTx(func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT id FROM model_rules`)
+		if err != nil {
+			return fmt.Errorf("store: reorder model rules: list existing: %w", err)
+		}
+		defer rows.Close()
+		existing := make(map[string]bool)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			existing[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(orderedIDs) != len(existing) {
+			return fmt.Errorf("store: reorder model rules: set size changed: %w", ErrConflict)
+		}
+		seen := make(map[string]bool, len(orderedIDs))
+		for _, id := range orderedIDs {
+			if !existing[id] {
+				return fmt.Errorf("store: reorder model rules: unknown id %q: %w", id, ErrConflict)
+			}
+			if seen[id] {
+				return fmt.Errorf("store: reorder model rules: duplicate id %q: %w", id, ErrConflict)
+			}
+			seen[id] = true
+		}
+		for i, id := range orderedIDs {
+			res, err := tx.Exec(`UPDATE model_rules SET display_order = ? WHERE id = ?`, i, id)
+			if err != nil {
+				return fmt.Errorf("store: reorder model rules: update %q: %w", id, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("store: reorder model rules: rows affected %q: %w", id, err)
+			}
+			if n != 1 {
+				return fmt.Errorf("store: reorder model rules: id %q affected %d rows: %w", id, n, ErrConflict)
+			}
+		}
+		return nil
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +548,78 @@ func (s *Store) IncrementTargetStats(targetID string, hitDelta, failDelta int64)
 		WHERE id = ?`, hitDelta, failDelta, targetID)
 	if err != nil {
 		return fmt.Errorf("store: increment target stats: %w", err)
+	}
+	return nil
+}
+
+// hydrateTodayStats computes per-rule request count and success rate for the
+// current local day. It mutates the passed rules in place. Only rules whose IDs
+// have matching request_logs rows are populated; rules with no completed
+// requests keep a nil TodaySuccessRate and a zero TodayRequestCount.
+func (s *Store) hydrateTodayStats(rules []model.ModelRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if r.ID != "" {
+			ids = append(ids, r.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	loc := now.Location()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	startMs := start.UnixMilli()
+
+	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
+	args := make([]interface{}, 0, 1+len(ids))
+	args = append(args, startMs)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT route_id,
+			COUNT(*) AS total,
+			COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 AND COALESCE(error, '') = '' THEN 1 ELSE 0 END), 0) AS success
+		FROM request_logs
+		WHERE timestamp_ms >= ? AND route_id IN (%s) AND status_code != 0
+		GROUP BY route_id`, placeholders), args...)
+	if err != nil {
+		return fmt.Errorf("store: hydrate today stats: %w", err)
+	}
+	defer rows.Close()
+
+	stats := make(map[string]struct {
+		total   int64
+		success int64
+	}, len(ids))
+	for rows.Next() {
+		var routeID string
+		var total, success int64
+		if err := rows.Scan(&routeID, &total, &success); err != nil {
+			return fmt.Errorf("store: scan today stats: %w", err)
+		}
+		stats[routeID] = struct{ total, success int64 }{total, success}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range rules {
+		st, ok := stats[rules[i].ID]
+		if !ok {
+			continue
+		}
+		rules[i].TodayRequestCount = st.total
+		if st.total > 0 {
+			rate := float64(st.success) / float64(st.total) * 100
+			rules[i].TodaySuccessRate = &rate
+		}
 	}
 	return nil
 }

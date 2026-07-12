@@ -11,20 +11,20 @@ import (
 func (s *Store) Dashboard() (*model.DashboardData, error) {
 	d := &model.DashboardData{}
 
-	// Stats: today, this week, this month tokens
-	now := time.Now()
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).UnixMilli()
-	startOfWeek := now.AddDate(0, 0, -int(now.Weekday())).UnixMilli()
-	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).UnixMilli()
-
 	var err error
-	d.Stats, err = s.computeStats(startOfDay, startOfWeek, startOfMonth)
+	d.Stats, err = s.computeDashboardStats()
 	if err != nil {
 		return nil, err
 	}
 
 	// Token trend (last 7 days)
-	d.TokenTrend, err = s.tokenTrend(7)
+	d.TokenTrend, err = s.tokenTrend()
+	if err != nil {
+		return nil, err
+	}
+
+	// Model rule summaries (max 6, display order, no targets)
+	d.ModelRules, err = s.listModelRuleSummaries()
 	if err != nil {
 		return nil, err
 	}
@@ -47,20 +47,27 @@ func (s *Store) Dashboard() (*model.DashboardData, error) {
 	return d, nil
 }
 
-func (s *Store) computeStats(startOfDay, startOfWeek, startOfMonth int64) ([]model.Stat, error) {
+func (s *Store) computeDashboardStats() ([]model.Stat, error) {
 	providerCount := s.countProviders()
 
+	now := time.Now()
+	loc := now.Location()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UnixMilli()
+	startOfWeek := now.AddDate(0, 0, -int(now.Weekday()))
+	startOfWeekMs := time.Date(startOfWeek.Year(), startOfWeek.Month(), startOfWeek.Day(), 0, 0, 0, 0, loc).UnixMilli()
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc).UnixMilli()
+
 	todayTokens := s.sumTokensSince(startOfDay)
-	weekTokens := s.sumTokensSince(startOfWeek)
+	weekTokens := s.sumTokensSince(startOfWeekMs)
 	monthTokens := s.sumTokensSince(startOfMonth)
 
 	todayCost := s.sumCostSince(startOfDay)
-	weekCost := s.sumCostSince(startOfWeek)
+	weekCost := s.sumCostSince(startOfWeekMs)
 	monthCost := s.sumCostSince(startOfMonth)
 
 	// Previous period for delta calculation
-	prevWeekStart := startOfWeek - (7 * 24 * 60 * 60 * 1000)
-	prevMonthStart := startOfMonth - (28 * 24 * 60 * 60 * 1000)
+	prevWeekStart := startOfWeekMs - (7 * 24 * 60 * 60 * 1000)
+	prevMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc).AddDate(0, -1, 0).UnixMilli()
 	prevWeekTokens := s.sumTokensSince(prevWeekStart)
 	prevMonthTokens := s.sumTokensSince(prevMonthStart)
 	prevWeekCost := s.sumCostSince(prevWeekStart)
@@ -73,7 +80,7 @@ func (s *Store) computeStats(startOfDay, startOfWeek, startOfMonth int64) ([]mod
 		makeStat("dashboard.stats.todayCost", fmt.Sprintf("$%.2f", todayCost), deltaCostStr(todayCost, prevWeekCost/7), ""),
 		makeStat("dashboard.stats.thisWeekCost", fmt.Sprintf("$%.2f", weekCost), deltaCostStr(weekCost, prevWeekCost), ""),
 		makeStat("dashboard.stats.thisMonthCost", fmt.Sprintf("$%.2f", monthCost), deltaCostStr(monthCost, prevMonthCost), ""),
-		makeStat("dashboard.stats.activeProviders", fmt.Sprintf("%d", providerCount), "", ""),
+		makeStat("dashboard.stats.providerCount", fmt.Sprintf("%d", providerCount), "", ""),
 	}
 	return stats, nil
 }
@@ -94,24 +101,37 @@ func (s *Store) countProviders() int {
 	return n
 }
 
-// tokenTrend returns daily token sums for the last N days.
-func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
-	cutoff := time.Now().AddDate(0, 0, -days).UnixMilli()
+// tokenTrend returns exactly 7 daily token sums for the last 7 local calendar
+// days (today-6 through today), using SQLite localtime grouping and an
+// exclusive upper bound at tomorrow midnight.
+func (s *Store) tokenTrend() ([]model.TokenTrendPoint, error) {
+	now := time.Now()
+	loc := now.Location()
+
+	// 7 local calendar-day buckets: today-6 (inclusive) through today,
+	// ending at tomorrow midnight (exclusive) so a request at 23:59:59
+	// today still falls in today's bucket.
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -6)
+	end := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
+
+	startMs := start.UnixMilli()
+	endMs := end.UnixMilli()
+
 	rows, err := s.db.Query(`
-		SELECT date(timestamp_ms / 1000, 'unixepoch') AS day,
+		SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS day,
 		       COALESCE(SUM(input_tokens), 0),
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(cost), 0)
 		FROM request_logs
-		WHERE timestamp_ms >= ? AND status_code != 0
+		WHERE timestamp_ms >= ? AND timestamp_ms < ? AND status_code != 0
 		GROUP BY day
-		ORDER BY day ASC`, cutoff)
+		ORDER BY day ASC`, startMs, endMs)
 	if err != nil {
 		return nil, fmt.Errorf("store: token trend: %w", err)
 	}
 	defer rows.Close()
 
-	// Build a map for day → point, then fill gaps.
+	// Build a map for day → point, then fill missing calendar days.
 	pointMap := map[string]*model.TokenTrendPoint{}
 	for rows.Next() {
 		var date string
@@ -131,19 +151,67 @@ func (s *Store) tokenTrend(days int) ([]model.TokenTrendPoint, error) {
 		return nil, err
 	}
 
-	// Fill zero-value points for missing days.
 	var trend []model.TokenTrendPoint
-	for i := days - 1; i >= 0; i-- {
-		date := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
+	for d := start; d.Before(end); d = d.AddDate(0, 0, 1) {
+		date := d.Format("2006-01-02")
 		if pt, ok := pointMap[date]; ok {
 			trend = append(trend, *pt)
 		} else {
-			trend = append(trend, model.TokenTrendPoint{
-				Date: date,
-			})
+			trend = append(trend, model.TokenTrendPoint{Date: date})
 		}
 	}
 	return trend, nil
+}
+
+// listModelRuleSummaries returns up to 6 model rules for the dashboard in
+// display order. Targets are not loaded; disabled rules are included. An
+// empty rule set returns an empty slice (not nil).
+func (s *Store) listModelRuleSummaries() ([]model.ModelRuleSummary, error) {
+	now := time.Now()
+	loc := now.Location()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	startMs := start.UnixMilli()
+	end := start.AddDate(0, 0, 1)
+	endMs := end.UnixMilli()
+
+	rows, err := s.db.Query(`
+		SELECT r.id, r.name, r.enabled,
+		       COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 AND COALESCE(l.error, '') = '' THEN 1 ELSE 0 END), 0) AS success,
+		       COUNT(l.id) AS total
+		FROM model_rules r
+		LEFT JOIN request_logs l ON l.route_id = r.id
+		    AND l.timestamp_ms >= ?
+		    AND l.timestamp_ms < ?
+		    AND l.status_code != 0
+		GROUP BY r.id, r.name, r.enabled
+		ORDER BY r.display_order ASC, r.created_at DESC, r.id DESC
+		LIMIT ?`, startMs, endMs, 6)
+	if err != nil {
+		return nil, fmt.Errorf("store: list model rule summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []model.ModelRuleSummary
+	for rows.Next() {
+		var sum model.ModelRuleSummary
+		var total, success int64
+		if err := rows.Scan(&sum.ID, &sum.Name, &sum.Enabled, &success, &total); err != nil {
+			return nil, fmt.Errorf("store: scan model rule summary: %w", err)
+		}
+		sum.TodayRequestCount = total
+		if total > 0 {
+			rate := float64(success) / float64(total) * 100
+			sum.TodaySuccessRate = &rate
+		}
+		summaries = append(summaries, sum)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if summaries == nil {
+		summaries = []model.ModelRuleSummary{}
+	}
+	return summaries, nil
 }
 
 func (s *Store) recentLogs(limit int) ([]model.RequestLog, error) {

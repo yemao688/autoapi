@@ -6,7 +6,6 @@ import { api } from '../api/bridge'
 import { useApi } from '../composables/useApi'
 import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderStyle } from '../composables/useProviderStyle'
-import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
@@ -16,7 +15,6 @@ import { model } from '../../wailsjs/go/models'
 const { t } = useI18n()
 const { format } = useRelativeTime()
 const { color: providerColor, initial: providerLetter, textColor: providerTextColor } = useProviderStyle()
-const { currency: fmtCurrency } = useFormatters()
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -58,14 +56,34 @@ const targetModalRule = ref<model.ModelRule | null>(null)
 const targetModalTarget = ref<model.ModelRuleTarget | null>(null)
 const targetSaving = ref(false)
 
-// The view is a static list — model rules are no longer drag-reorderable
-// because their Name is the unique, client-facing model identifier.
+// The view is driven by a single interaction state. Server responses are merged
+// into this list by ID so nested target Sortable instances stay bound to the
+// same arrays and rule objects survive refreshes.
 const ruleList = ref<model.ModelRule[]>([])
 
 watch(
   rules,
   (val) => {
-    ruleList.value = val ? [...val] : []
+    // A null result from useApi means the load failed; keep the current list so
+    // a failed refresh doesn't wipe the interaction state.
+    if (!val) return
+
+    const existingMap = new Map(ruleList.value.map((r) => [r.id, r]))
+    const next: model.ModelRule[] = []
+    for (const source of val) {
+      const existing = existingMap.get(source.id)
+      if (existing) {
+        syncRuleFromSource(existing, source)
+        next.push(existing)
+      } else {
+        next.push(new model.ModelRule(source))
+      }
+    }
+
+    // Mutate the list in place rather than replacing the array. VueDraggable
+    // and its underlying SortableJS instances rely on the outer ruleList and
+    // each rule's targets array remaining the same object across refreshes.
+    ruleList.value.splice(0, ruleList.value.length, ...next)
   },
   { immediate: true }
 )
@@ -115,6 +133,14 @@ function targetProviderName(target: model.ModelRuleTarget): string {
 
 function formatHits(n: number): string {
   return n.toLocaleString()
+}
+
+function formatSuccessRate(rule: model.ModelRule): string {
+  if (rule.today_request_count === 0) {
+    return '—'
+  }
+  const rate = rule.today_success_rate ?? 0
+  return `${rate.toFixed(1)}%`
 }
 
 function openCreate() {
@@ -287,39 +313,15 @@ async function deleteTarget(rule: model.ModelRule, target: model.ModelRuleTarget
   await updateRuleTargets(rule, newTargets)
 }
 
-// Per-rule coalescing drain state for target reorder.
-// - pendingOrder: latest snapshot of target IDs waiting to be persisted.
-// - finalDesiredOrder: the most recent desired order from the user (last drag).
-// - inFlight: whether a reorder request is currently on the wire.
-// - reconciling: whether the rule is in terminal error recovery (drag disabled).
-const reorderStates = ref<Record<string, {
-  inFlight: boolean
-  reconciling: boolean
-  pendingOrder: string[] | null
-  finalDesiredOrder: string[] | null
-}>>({})
-
-// Active drain promises so only one drain loop runs per rule.
-const activeDrains = new Map<string, Promise<void>>()
-
-interface ReorderResult {
-  conflict: boolean
-  error?: string
-}
-
-type FinalOrderResult =
-  | { status: 'confirmed' }
-  | { status: 'changed' }
-  | { status: 'pending-arrived' }
-  | { status: 'reload-failed' }
+// Per-rule target reorder state. We keep this separate from the rule-level
+// drag reorder to avoid coupling their lifecycles.
+const reorderStates = ref<Record<string, { inFlight: boolean; reconciling: boolean }>>({})
 
 function getReorderState(ruleId: string) {
   if (!reorderStates.value[ruleId]) {
     reorderStates.value[ruleId] = {
       inFlight: false,
       reconciling: false,
-      pendingOrder: null,
-      finalDesiredOrder: null,
     }
   }
   return reorderStates.value[ruleId]
@@ -333,27 +335,11 @@ function isReconcilingRule(ruleId: string): boolean {
   return getReorderState(ruleId).reconciling
 }
 
-function arraysEqual(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false
-  }
-  return true
+interface ReorderResult {
+  conflict: boolean
+  error?: string
 }
 
-function clearPendingWork(state: ReturnType<typeof getReorderState>) {
-  state.pendingOrder = null
-  state.finalDesiredOrder = null
-}
-
-function findRule(ruleId: string): model.ModelRule | undefined {
-  return rules.value?.find(r => r.id === ruleId)
-}
-
-// Adapter for the planned reorder API shape. The bridge now returns a typed
-// ReorderModelRuleTargetsResult ({ conflict: boolean }); unexpected failures
-// are still returned as Promise rejections, which we normalize to a local
-// ReorderResult so the drain code never has to parse error strings.
 async function persistReorder(ruleId: string, targetIds: string[]): Promise<ReorderResult> {
   try {
     const result = await api.reorderRuleTargets(ruleId, targetIds)
@@ -363,127 +349,93 @@ async function persistReorder(ruleId: string, targetIds: string[]): Promise<Reor
   }
 }
 
-// onTargetsReorder is bound to VueDraggable's @end. The drag has already mutated
-// rule.targets in place, so we snapshot the new stable IDs and feed them into a
-// per-rule coalescing drain. Concurrent drags while a write is in flight only
-// replace the pending snapshot; the drain persists the latest snapshot before
-// reloading, and only shows one success message when the authoritative state
-// matches the final desired order.
 async function onTargetsReorder(rule: model.ModelRule) {
-  if (isReconcilingRule(rule.id)) return
-  const snapshot = rule.targets.map(t => t.id).filter((id): id is string => !!id)
+  if (isSavingRule(rule.id) || isReconcilingRule(rule.id)) return
+
+  const targetIds = rule.targets.map((t) => t.id).filter((id): id is string => !!id)
+  if (targetIds.length < 2) return
+
   const state = getReorderState(rule.id)
-  state.pendingOrder = snapshot
-  state.finalDesiredOrder = snapshot
-
-  if (activeDrains.has(rule.id)) return
-  const drain = drainReorder(rule).finally(() => activeDrains.delete(rule.id))
-  activeDrains.set(rule.id, drain)
-  await drain
-}
-
-async function drainReorder(rule: model.ModelRule) {
-  const state = getReorderState(rule.id)
-
-  while (state.pendingOrder || state.finalDesiredOrder) {
-    if (!state.pendingOrder) {
-      const result = await reconcileFinalOrder(rule)
-      if (result.status === 'reload-failed') {
-        toast.push(t('toast.reorderReloadFailed'), 'error')
-        clearPendingWork(state)
-        return
-      }
-      if (result.status === 'pending-arrived') {
-        continue
-      }
-      if (result.status === 'confirmed') {
-        toast.push(t('toast.reorderSaved'), 'success')
-      } else if (result.status === 'changed') {
-        toast.push(t('toast.reorderChangedElsewhere'), 'warning')
-      }
-      state.finalDesiredOrder = null
-      return
-    }
-
-    const snapshot = state.pendingOrder
-    state.pendingOrder = null
-    state.inFlight = true
-
-    const result = await persistReorder(rule.id, snapshot)
-    state.inFlight = false
-
+  state.inFlight = true
+  try {
+    const result = await persistReorder(rule.id, targetIds)
     if (result.conflict) {
-      await handleConflict(rule)
-      return
+      toast.push(t('toast.reorderConflict'), 'error')
+      await recoverTargetRule(rule)
+    } else if (result.error) {
+      toast.push(t('toast.reorderSaveFailed') + ': ' + result.error, 'error')
+      await recoverTargetRule(rule)
+    } else {
+      // The drag has already mutated rule.targets in place; no full reload.
+      toast.push(t('toast.reorderSaved'), 'success')
     }
-
-    if (result.error) {
-      await handleGenericError(rule, result.error)
-      return
-    }
+  } catch (e: any) {
+    toast.push(t('toast.reorderSaveFailed') + ': ' + (e?.message || String(e)), 'error')
+    await recoverTargetRule(rule)
+  } finally {
+    state.inFlight = false
   }
 }
 
-async function reconcileFinalOrder(rule: model.ModelRule): Promise<FinalOrderResult> {
-  const data = await loadRules()
-  if (data === null) {
-    return { status: 'reload-failed' }
-  }
-  const state = getReorderState(rule.id)
-  if (state.pendingOrder) {
-    return { status: 'pending-arrived' }
-  }
-  const refreshed = findRule(rule.id)
-  if (!refreshed) {
-    return { status: 'changed' }
-  }
-  if (!state.finalDesiredOrder) {
-    return { status: 'confirmed' }
-  }
-  const authIds = refreshed.targets.map(t => t.id).filter((id): id is string => !!id)
-  if (arraysEqual(authIds, state.finalDesiredOrder)) {
-    return { status: 'confirmed' }
-  } else {
-    return { status: 'changed' }
-  }
-}
-
-async function handleConflict(rule: model.ModelRule) {
-  await recoverFromFailure(rule, t('toast.reorderConflict'))
-}
-
-async function handleGenericError(rule: model.ModelRule, errorMsg: string) {
-  await recoverFromFailure(rule, t('toast.reorderSaveFailed') + ': ' + errorMsg)
-}
-
-async function recoverFromFailure(rule: model.ModelRule, message: string) {
+async function recoverTargetRule(rule: model.ModelRule) {
   const state = getReorderState(rule.id)
   state.reconciling = true
-  clearPendingWork(state)
-  let reloaded = false
   try {
-    reloaded = await reloadAuthoritativeWithRetry()
-    if (!reloaded) {
-      toast.push(t('toast.reorderReloadFailed'), 'error')
+    const refreshed = await api.getModelRule(rule.id)
+    const existing = ruleList.value.find((r) => r.id === rule.id)
+    if (!existing) {
+      // Rule was deleted while we were retrying; leave it gone.
       return
     }
-    toast.push(message, 'error')
-  } finally {
-    if (reloaded) {
-      state.reconciling = false
+    // Refresh only editable fields and targets, preserving today's stats.
+    syncRuleFields(existing, refreshed)
+  } catch (e: any) {
+    // Don't trust the error text to decide deletion. Reload the display list
+    // and let the ID-based reconcile prove deletion by removing the rule.
+    const reloaded = await loadRules()
+    if (reloaded === null) {
+      // Keep the rule in place so the user can retry; report the reload failure.
+      toast.push(t('toast.reorderReloadFailed'), 'error')
     }
+    // If reloaded succeeded, the watch has already reconciled ruleList and
+    // removed the rule if it is missing from the authoritative list.
+  } finally {
+    state.reconciling = false
   }
 }
 
-async function reloadAuthoritativeWithRetry(maxAttempts: number = 3): Promise<boolean> {
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const result = await loadRules()
-    if (result !== null) return true
-    if (attempt < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 500))
+// ---- Rule-level drag reorder ----
+const rulesOrderSaving = ref(false)
+
+async function onRulesReorder() {
+  if (rulesOrderSaving.value) return
+
+  const ids = ruleList.value.map((r) => r.id)
+  rulesOrderSaving.value = true
+  try {
+    const result = await api.reorderModelRules(ids)
+    if (result.conflict) {
+      toast.push(t('toast.reorderConflict'), 'error')
+      await reconcileRulesOrder()
+    } else {
+      toast.push(t('toast.reorderSaved'), 'success')
     }
+  } catch (e: any) {
+    toast.push(t('toast.reorderSaveFailed') + ': ' + (e?.message || String(e)), 'error')
+    await reconcileRulesOrder()
+  } finally {
+    rulesOrderSaving.value = false
   }
-  return false
+}
+
+async function reconcileRulesOrder(): Promise<boolean> {
+  const reloaded = await loadRules()
+  if (reloaded === null) {
+    toast.push(t('toast.reorderReloadFailed'), 'error')
+    return false
+  }
+  // The watch has already synced ruleList to the authoritative order.
+  return true
 }
 
 async function onTargetModalSave(target: model.ModelRuleTarget) {
@@ -536,8 +488,10 @@ function importJSON() {
           targets: targets.map(cloneTarget),
         }))
       }
-      for (const input of inputs) {
-        await api.createModelRule(input)
+      // Create in reverse so the backend's "newest at top" ordering preserves
+      // the file's top-to-bottom order after refresh.
+      for (let i = inputs.length - 1; i >= 0; i--) {
+        await api.createModelRule(inputs[i])
       }
       await loadRules()
       toast.push(t('toast.imported', { count: inputs.length }), 'success')
@@ -549,7 +503,7 @@ function importJSON() {
 }
 
 function exportJSON() {
-  const data = rules.value || []
+  const data = ruleList.value || []
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -569,6 +523,58 @@ onMounted(() => {
   loadProviders()
   loadSettings().catch((e: any) => toast.push(t('toast.loadSettingsFailed') + ': ' + (e?.message || e?.toString() || ''), 'error'))
 })
+
+// ---- Rule-list coordination helpers ----
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+function syncRuleFromSource(existing: model.ModelRule, source: model.ModelRule) {
+  existing.name = source.name
+  existing.enabled = source.enabled
+  existing.first_byte_timeout_seconds = source.first_byte_timeout_seconds
+  existing.created_at = source.created_at
+  existing.updated_at = source.updated_at
+  syncTargets(existing, source)
+  existing.today_success_rate = source.today_success_rate
+  existing.today_request_count = source.today_request_count
+}
+
+function syncRuleFields(existing: model.ModelRule, source: model.ModelRule) {
+  // Editable rule fields and target order, leaving display stats untouched.
+  existing.name = source.name
+  existing.enabled = source.enabled
+  existing.first_byte_timeout_seconds = source.first_byte_timeout_seconds
+  syncTargets(existing, source)
+}
+
+function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
+  const existingIds = existing.targets.map((t) => t.id)
+  const sourceIds = source.targets.map((t) => t.id)
+  if (existingIds.length !== sourceIds.length || !arraysEqual(existingIds, sourceIds)) {
+    // Preserve the targets array identity: SortableJS instances inside
+    // VueDraggable hold references to the original array, so we replace
+    // contents with splice rather than assignment.
+    existing.targets.splice(0, existing.targets.length, ...source.targets.map(cloneTarget))
+    return
+  }
+  for (let i = 0; i < existing.targets.length; i++) {
+    const et = existing.targets[i]
+    const st = source.targets[i]
+    et.rule_id = st.rule_id
+    et.provider_id = st.provider_id
+    et.model_name = st.model_name
+    et.max_retries = st.max_retries
+    et.first_token_timeout_seconds = st.first_token_timeout_seconds
+    et.hit_count = st.hit_count
+    et.failure_count = st.failure_count
+    et.enabled = st.enabled
+  }
+}
 </script>
 
 <template>
@@ -593,8 +599,16 @@ onMounted(() => {
       <div v-if="rulesLoading && !rules" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('modelRules.loading') }}</div>
       <div v-else-if="rulesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('modelRules.loadFailed', { error: rulesError }) }}</div>
       <template v-else>
-        <!-- Rule list (no drag — model names are unique) -->
-        <div class="stack-loose">
+        <!-- Rule list with simple drag reorder -->
+        <VueDraggable
+          v-model="ruleList"
+          :animation="150"
+          :disabled="rulesOrderSaving"
+          handle=".rule-drag-handle"
+          class="rule-list stack-loose"
+          :class="{ 'rule-list-saving': rulesOrderSaving }"
+          @end="onRulesReorder"
+        >
           <article
             v-for="rule in ruleList"
             :key="rule.id"
@@ -603,6 +617,13 @@ onMounted(() => {
           >
             <header class="rule-header">
               <div class="rule-header-main">
+                <span
+                  class="rule-drag-handle"
+                  :aria-label="t('modelRules.ruleDragHandle')"
+                  :title="t('modelRules.ruleDragHandle')"
+                  role="button"
+                  tabindex="-1"
+                >⋮⋮⋮</span>
                 <div class="rule-title">
                   <div class="rule-name">{{ rule.name }}</div>
                   <div class="rule-subtitle">{{ t('modelRules.clientModelName') }}</div>
@@ -651,7 +672,7 @@ onMounted(() => {
                 <VueDraggable
                   v-model="rule.targets"
                   :animation="150"
-                  :disabled="isReconcilingRule(rule.id)"
+                  :disabled="isSavingRule(rule.id) || isReconcilingRule(rule.id)"
                   handle=".drag-handle"
                   class="rule-target-list"
                   :class="{ 'rule-target-list-saving': isSavingRule(rule.id) }"
@@ -727,25 +748,23 @@ onMounted(() => {
               <template v-if="rule.enabled">
                 <div class="rule-stats">
                   <span class="rule-stats-item">
-                    <span class="rule-stats-label">{{ t('modelRules.stats.monthlyHits') }}</span>
-                    <span class="rule-stats-value">{{ formatHits(rule.monthly_hits) }}</span>
-                  </span>
-                  <span v-if="rule.monthly_savings > 0" class="rule-stats-item">
-                    <span class="rule-stats-label">{{ t('modelRules.stats.savings') }}</span>
-                    <span class="rule-stats-value">{{ fmtCurrency(rule.monthly_savings) }}</span>
-                  </span>
-                  <span v-else class="rule-stats-item">
-                    <span class="rule-stats-label">{{ t('modelRules.stats.share') }}</span>
-                    <span class="rule-stats-value">{{ rule.monthly_hits ? '1.7%' : '0%' }}</span>
+                    <span class="rule-stats-label">{{ t('modelRules.stats.todaySuccessRate') }}</span>
+                    <span
+                      class="rule-stats-value"
+                      :class="{ 'rate-zero': rule.today_request_count > 0 && rule.today_success_rate === 0 }"
+                      :title="rule.today_request_count === 0 ? t('modelRules.stats.todaySuccessRateNoData') : t('modelRules.stats.todaySuccessRateTooltip', { count: rule.today_request_count })"
+                    >
+                      {{ formatSuccessRate(rule) }}
+                    </span>
                   </span>
                 </div>
               </template>
               <div v-else class="rule-created">
-                {{ t('modelRules.disabledStatus') }} · {{ t('modelRules.disabledCreated', { time: format(rule.created_at) }) }}
+                {{ t('modelRules.disabledCreated', { time: format(rule.created_at) }) }}
               </div>
             </div>
           </article>
-        </div>
+        </VueDraggable>
       </template>
     </div>
   </div>
@@ -795,6 +814,15 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.rule-list {
+  display: flex;
+  flex-direction: column;
+}
+.rule-list-saving {
+  opacity: 0.7;
+  transition: opacity 150ms ease;
+}
+
 .rule-card {
   --rule-border: rgba(0, 0, 0, 0.05);
   --rule-border-subtle: rgba(0, 0, 0, 0.04);
@@ -829,6 +857,31 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+}
+
+.rule-drag-handle {
+  font-size: 14px;
+  line-height: 1;
+  padding: 6px 4px;
+  color: var(--muted, #999);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+  border-radius: 4px;
+  transition: color 120ms ease, background-color 120ms ease;
+  touch-action: none;
+}
+.rule-drag-handle:hover {
+  color: var(--fg, #333);
+  background-color: rgba(0, 0, 0, 0.04);
+}
+.rule-drag-handle:active,
+.rule-drag-handle.sortable-chosen {
+  cursor: grabbing;
+}
+html[data-theme="dark"] .rule-drag-handle:hover {
+  background-color: rgba(255, 255, 255, 0.06);
 }
 
 .rule-title {
@@ -1040,6 +1093,9 @@ html[data-theme="dark"] .badge-provider-disabled {
   font-weight: 600;
   color: var(--fg);
   font-variant-numeric: tabular-nums;
+}
+.rule-stats-value.rate-zero {
+  color: var(--negative);
 }
 .rule-created {
   font-size: 12px;

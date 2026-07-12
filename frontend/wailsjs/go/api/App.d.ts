@@ -86,7 +86,7 @@ export function Quit():Promise<void>;
 
 export function ReorderModelRuleTargets(arg1:string,arg2:Array<string>):Promise<model.ReorderModelRuleTargetsResult>;
 
-export function ReorderModelRules(arg1:Array<string>):Promise<void>;
+export function ReorderModelRules(arg1:Array<string>):Promise<model.ReorderModelRulesResult>;
 
 export function ResetSettings():Promise<model.Settings>;
 

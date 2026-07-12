@@ -9,7 +9,11 @@ import { useToast } from '@/composables/useToast'
 import { useTheme } from '@/composables/useTheme'
 import { LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, type AppLocale } from '@/locales'
 import i18n from '@/locales'
+import { BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import appicon from '@/assets/appicon.png'
+
+const REPOSITORY_URL = 'https://github.com/yemao688/autoapi'
+const RELEASES_URL = 'https://github.com/yemao688/autoapi/releases'
 
 const { t, locale } = useI18n()
 const { download } = useExportDownload()
@@ -313,12 +317,11 @@ function notImplemented() {
 }
 
 function openReleases() {
-  toast.push(t('settings.about.checkingUpdates'), 'info')
-  window.open('https://github.com/yemao688/autoapi/releases', '_blank')
+  BrowserOpenURL(RELEASES_URL)
 }
 
 function openRepository() {
-  window.open('https://github.com/yemao688/autoapi', '_blank')
+  BrowserOpenURL(REPOSITORY_URL)
 }
 
 onMounted(async () => {
@@ -416,15 +419,6 @@ watch(activeTheme, (t) => {
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6a9 3 0 0 0 18 0V5M3 11v6a9 3 0 0 0 18 0v-6"/></svg>
               <span>{{ t('settings.sections.data') }}</span>
-            </a>
-            <a
-              class="sub-nav-item"
-              :class="{ active: activeSection === 'advanced' }"
-              href="#advanced"
-              @click.prevent="scrollToSection('advanced')"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
-              <span>{{ t('settings.sections.advanced') }}</span>
             </a>
             <a
               class="sub-nav-item"
@@ -832,72 +826,6 @@ watch(activeTheme, (t) => {
             </div>
           </section>
 
-          <section class="card" id="advanced">
-            <div class="section-head">
-              <div>
-                <div class="section-title">{{ t('settings.advanced.title') }}</div>
-                <div class="section-sub">{{ t('settings.advanced.subtitle') }}</div>
-              </div>
-            </div>
-
-            <div class="field">
-              <div class="row-between" style="margin-bottom: 0;">
-                <div>
-                  <div class="field-label">{{ t('settings.advanced.debugMode') }}</div>
-                  <div class="field-help">{{ t('settings.advanced.debugModeHelp') }}</div>
-                </div>
-                <label class="toggle"><input type="checkbox" v-model="settings.advanced.debug_mode" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
-              </div>
-            </div>
-            <div class="h-divider"></div>
-
-            <div class="field">
-              <div class="row-between" style="margin-bottom: 0;">
-                <div>
-                  <div class="field-label">{{ t('settings.advanced.experimental') }}</div>
-                  <div class="field-help">{{ t('settings.advanced.experimentalHelp') }}</div>
-                </div>
-                <label class="toggle"><input type="checkbox" v-model="settings.advanced.experimental" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
-              </div>
-            </div>
-            <div class="h-divider"></div>
-
-            <div class="field">
-              <div class="field-label">{{ t('settings.advanced.httpProxy') }}</div>
-              <select class="select" style="max-width: 320px;" v-model="settings.advanced.http_proxy" @change="markSettingsDirty">
-                <option value="system">{{ t('settings.advanced.httpProxySystem') }}</option>
-                <option value="none">{{ t('settings.advanced.httpProxyNone') }}</option>
-                <option value="manual">{{ t('settings.advanced.httpProxyManual') }}</option>
-              </select>
-            </div>
-            <div class="h-divider"></div>
-
-            <div class="field" style="margin-bottom: 0;">
-              <div class="field-label">{{ t('settings.advanced.shortcuts') }}</div>
-              <div class="stack-tight" style="margin-top: 4px;">
-                <div class="row-between" style="padding: 4px 0;">
-                  <span style="font-size: 12.5px;">{{ t('settings.advanced.shortcutSwitch') }}</span>
-                  <span class="text-mono" style="font-size: 12px; color: var(--muted);"><span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">⌘</span> <span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">1</span> – <span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">7</span></span>
-                </div>
-                <div class="row-between" style="padding: 4px 0;">
-                  <span style="font-size: 12.5px;">{{ t('settings.advanced.shortcutSearch') }}</span>
-                  <span class="text-mono" style="font-size: 12px; color: var(--muted);"><span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">⌘</span> <span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">K</span></span>
-                </div>
-                <div class="row-between" style="padding: 4px 0;">
-                  <span style="font-size: 12.5px;">{{ t('settings.advanced.shortcutSettings') }}</span>
-                  <span class="text-mono" style="font-size: 12px; color: var(--muted);"><span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">⌘</span> <span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">,</span></span>
-                </div>
-                <div class="row-between" style="padding: 4px 0;">
-                  <span style="font-size: 12.5px;">{{ t('settings.advanced.shortcutNewRoute') }}</span>
-                  <span class="text-mono" style="font-size: 12px; color: var(--muted);"><span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">⌘</span> <span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">N</span></span>
-                </div>
-                <div class="row-between" style="padding: 4px 0;">
-                  <span style="font-size: 12.5px;">{{ t('settings.advanced.shortcutRefresh') }}</span>
-                  <span class="text-mono" style="font-size: 12px; color: var(--muted);"><span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">⌘</span> <span style="background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);">R</span></span>
-                </div>
-              </div>
-            </div>
-          </section>
 
           <section class="card" id="logging">
             <div class="section-head">

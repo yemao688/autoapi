@@ -11,7 +11,8 @@ import (
 type migration struct {
 	ID              string                                            // unique identifier, e.g. "001_init"
 	SQL             string                                            // DDL / DML to apply
-	SkipIfRedundant func(tx *sql.Tx) (alreadyApplied bool, err error) // optional: if non-nil and returns (true, nil), treat the SQL as a no-op (e.g. the schema change was already made under a different migration ID in an older build). The migration is still recorded as applied.
+	SkipIfRedundant func(tx *sql.Tx) (alreadyApplied bool, err error) // optional: if non-nil and returns (true, nil), treat the SQL and Hook as no-ops (e.g. the schema change was already made under a different migration ID in an older build). The migration is still recorded as applied.
+	Hook            func(tx *sql.Tx) error                            // optional Go code run after SQL when the migration is applied (not run when skipped).
 }
 
 // migrations is the ordered list of all schema changes.
@@ -354,6 +355,18 @@ ALTER TABLE request_logs ADD COLUMN request_uri TEXT NOT NULL DEFAULT '';
 ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
 `,
 	},
+	{
+		// Display-only ordering for model rules. The Hook adds the column if
+		// it is missing and backfills/normalizes display_order values so the
+		// previous visible order (created_at DESC, id DESC) is preserved with
+		// the newest rule at 0. The no-op SQL exists because some pre-017
+		// DBs already have the column (with all-zero or non-contiguous values),
+		// and the Go Hook can handle both cases conditionally.
+		ID:              "017_model_rule_display_order",
+		SkipIfRedundant: displayOrderValid,
+		SQL:             `SELECT 1;`,
+		Hook:            ensureDisplayOrder,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have
@@ -523,8 +536,104 @@ func providersHasEnabled(tx *sql.Tx) (bool, error) {
 	return false, nil
 }
 
+// displayOrderValid reports whether model_rules.display_order exists and is
+// normalized: contiguous values 0..n-1, one per rule. This is used as the
+// 017 migration skip predicate, and it also detects pre-existing invalid
+// states (all-zero or non-contiguous) so the Hook can normalize them.
+func displayOrderValid(tx *sql.Tx) (bool, error) {
+	colExists, err := tableHasColumn(tx, "model_rules", "display_order")
+	if err != nil {
+		return false, err
+	}
+	if !colExists {
+		return false, nil
+	}
+
+	var n, distinct, max sql.NullInt64
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM model_rules`).Scan(&n); err != nil {
+		return false, fmt.Errorf("store: count model_rules: %w", err)
+	}
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT display_order) FROM model_rules`).Scan(&distinct); err != nil {
+		return false, fmt.Errorf("store: count distinct display_order: %w", err)
+	}
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(display_order), -1) FROM model_rules`).Scan(&max); err != nil {
+		return false, fmt.Errorf("store: max display_order: %w", err)
+	}
+	if !n.Valid || n.Int64 == 0 {
+		return true, nil
+	}
+	if !distinct.Valid || !max.Valid {
+		return false, nil
+	}
+	return distinct.Int64 == n.Int64 && max.Int64 == n.Int64-1, nil
+}
+
+// ensureDisplayOrder adds the display_order column to model_rules if it is
+// missing and then normalizes/backfills values from the existing visible order
+// (created_at DESC, then id DESC), with the newest rule at 0.
+func ensureDisplayOrder(tx *sql.Tx) error {
+	colExists, err := tableHasColumn(tx, "model_rules", "display_order")
+	if err != nil {
+		return err
+	}
+	if !colExists {
+		if _, err := tx.Exec(`ALTER TABLE model_rules ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("store: add display_order column: %w", err)
+		}
+	}
+	_, err = tx.Exec(`
+		UPDATE model_rules SET display_order = (
+			SELECT COUNT(*) FROM model_rules AS m2
+			WHERE m2.created_at > model_rules.created_at
+			   OR (m2.created_at = model_rules.created_at AND m2.id > model_rules.id)
+		)`)
+	if err != nil {
+		return fmt.Errorf("store: backfill display_order: %w", err)
+	}
+	return nil
+}
+
+// tableHasColumn reports whether the named table has the named column.
+func tableHasColumn(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return false, fmt.Errorf("store: scan pragma table_info: %w", err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // migrate applies all pending migrations in a single transaction.
 func migrate(db *sql.DB) error {
+	return applyMigrations(db, migrations)
+}
+
+// migrateUpTo applies all migrations up to and including upToID. It is
+// intended for test bootstrapping a schema at a specific historical point.
+func migrateUpTo(db *sql.DB, upToID string) error {
+	var upTo []migration
+	for _, m := range migrations {
+		upTo = append(upTo, m)
+		if m.ID == upToID {
+			break
+		}
+	}
+	return applyMigrations(db, upTo)
+}
+
+func applyMigrations(db *sql.DB, list []migration) error {
 	// Ensure the migrations tracking table exists first.
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("store: create _migrations table: %w", err)
@@ -538,7 +647,7 @@ func migrate(db *sql.DB) error {
 
 	now := time.Now().UnixMilli()
 
-	for _, m := range migrations {
+	for _, m := range list {
 		// Check if already applied.
 		var count int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM _migrations WHERE id = ?`, m.ID).Scan(&count); err != nil {
@@ -567,8 +676,15 @@ func migrate(db *sql.DB) error {
 		}
 
 		slog.Info("store: applying migration", "id", m.ID)
-		if _, err := tx.Exec(m.SQL); err != nil {
-			return fmt.Errorf("store: apply migration %q: %w", m.ID, err)
+		if m.SQL != "" {
+			if _, err := tx.Exec(m.SQL); err != nil {
+				return fmt.Errorf("store: apply migration %q: %w", m.ID, err)
+			}
+		}
+		if m.Hook != nil {
+			if err := m.Hook(tx); err != nil {
+				return fmt.Errorf("store: migration hook %q: %w", m.ID, err)
+			}
 		}
 		if _, err := tx.Exec(`INSERT INTO _migrations (id, applied_at) VALUES (?, ?)`, m.ID, now); err != nil {
 			return fmt.Errorf("store: record migration %q: %w", m.ID, err)

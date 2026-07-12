@@ -265,6 +265,26 @@ export namespace model {
 		    return a;
 		}
 	}
+	export class ModelRuleSummary {
+	    id: string;
+	    name: string;
+	    enabled: boolean;
+	    today_success_rate?: number;
+	    today_request_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelRuleSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.today_success_rate = source["today_success_rate"];
+	        this.today_request_count = source["today_request_count"];
+	    }
+	}
 	export class Provider {
 	    id: string;
 	    name: string;
@@ -345,6 +365,7 @@ export namespace model {
 	    stats: Stat[];
 	    token_trend: TokenTrendPoint[];
 	    providers: Provider[];
+	    model_rules: ModelRuleSummary[];
 	    recent_activity: RequestLog[];
 	    service_health: ServiceHealth;
 	
@@ -357,6 +378,7 @@ export namespace model {
 	        this.stats = this.convertValues(source["stats"], Stat);
 	        this.token_trend = this.convertValues(source["token_trend"], TokenTrendPoint);
 	        this.providers = this.convertValues(source["providers"], Provider);
+	        this.model_rules = this.convertValues(source["model_rules"], ModelRuleSummary);
 	        this.recent_activity = this.convertValues(source["recent_activity"], RequestLog);
 	        this.service_health = this.convertValues(source["service_health"], ServiceHealth);
 	    }
@@ -611,8 +633,8 @@ export namespace model {
 	    created_at: number;
 	    updated_at: number;
 	    targets: ModelRuleTarget[];
-	    monthly_hits: number;
-	    monthly_savings: number;
+	    today_success_rate?: number;
+	    today_request_count: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelRule(source);
@@ -627,8 +649,8 @@ export namespace model {
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
-	        this.monthly_hits = source["monthly_hits"];
-	        this.monthly_savings = source["monthly_savings"];
+	        this.today_success_rate = source["today_success_rate"];
+	        this.today_request_count = source["today_request_count"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -685,6 +707,7 @@ export namespace model {
 		    return a;
 		}
 	}
+	
 	
 	export class ModelTestResult {
 	    ok: boolean;
@@ -764,6 +787,18 @@ export namespace model {
 	
 	    static createFrom(source: any = {}) {
 	        return new ReorderModelRuleTargetsResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.conflict = source["conflict"];
+	    }
+	}
+	export class ReorderModelRulesResult {
+	    conflict: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReorderModelRulesResult(source);
 	    }
 	
 	    constructor(source: any = {}) {

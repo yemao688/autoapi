@@ -36,7 +36,6 @@
       "routing": "路由",
       "server": "API 服务",
       "data": "数据",
-      "advanced": "高级",
       "logging": "日志",
       "about": "关于"
     },
@@ -126,24 +125,6 @@
       "copyPath": "复制路径",
       "openInFinder": "在 Finder 中显示"
     },
-    "advanced": {
-      "title": "高级",
-      "subtitle": "调试、代理与开发者选项",
-      "debugMode": "调试模式",
-      "debugModeHelp": "输出详细日志到控制台 · 启用后服务需重启",
-      "experimental": "实验性功能",
-      "experimentalHelp": "提前使用未稳定的能力 · 可能影响稳定性",
-      "httpProxy": "HTTP 代理",
-      "httpProxySystem": "系统默认",
-      "httpProxyNone": "不使用代理",
-      "httpProxyManual": "手动配置",
-      "shortcuts": "键盘快捷键",
-      "shortcutSwitch": "切换模块 1–7",
-      "shortcutSearch": "打开搜索",
-      "shortcutSettings": "打开设置",
-      "shortcutNewRoute": "新建模型规则",
-      "shortcutRefresh": "实时刷新日志"
-    },
     "logging": {
       "title": "日志",
       "subtitle": "应用诊断日志存储与保留",
@@ -166,7 +147,6 @@
       "platformArch": "{platform} / {arch}",
       "goVersion": "Go {version}",
       "checkUpdate": "检查更新",
-      "checkingUpdates": "正在检查更新...",
       "repository": "GitHub 仓库"
     }
   },
@@ -183,6 +163,7 @@
     "targetsLabel": "模型映射",
     "addTarget": "添加模型映射",
     "dragHandle": "拖动以重新排序",
+    "ruleDragHandle": "拖动以重新排序模型",
     "reorderSaving": "保存排序中…",
     "targetActions": "映射操作",
     "targetDefault": "默认",
@@ -191,11 +172,10 @@
     "targetHits": "命中 {count}",
     "targetFailures": "失败 {count}",
     "stats": {
-      "monthlyHits": "本月命中",
-      "savings": "节省",
-      "share": "占总请求"
+      "todaySuccessRate": "今日成功率",
+      "todaySuccessRateNoData": "今日暂无完成请求",
+      "todaySuccessRateTooltip": "基于 {count} 次完成请求"
     },
-    "disabledStatus": "已禁用",
     "disabledCreated": "已禁用 · 创建于 {time}",
     "moreActions": "更多操作：{name}",
     "ruleToggleEnable": "启用模型",
@@ -370,7 +350,7 @@
       "todayCost": "今日成本",
       "thisWeekCost": "本周成本",
       "thisMonthCost": "本月成本",
-      "activeProviders": "可用 Provider"
+      "providerCount": "上游数量"
     },
     "chart": {
       "title": "Token 用量趋势 · 近 7 日",
@@ -378,21 +358,11 @@
       "ariaLabel": "7 日 Token 用量趋势",
       "inputSwatch": "输入",
       "outputSwatch": "输出",
-      "weekday": {
-        "mon": "周一",
-        "tue": "周二",
-        "wed": "周三",
-        "thu": "周四",
-        "fri": "周五",
-        "sat": "周六",
-        "today": "今天"
-      },
-      "highlight": "532K · 周五"
+      "empty": "近 7 日暂无 Token 用量数据"
     },
-    "providersCard": "Provider 状态",
+    "modelRulesCard": "模型规则",
     "manage": "管理",
-    "modelCount": "{count} 模型",
-    "notConnected": "未连接",
+    "modelRulesEmpty": "暂无模型规则",
     "recentActivity": "最近活动",
     "viewAll": "查看全部",
     "activityLine": "{provider} · 输入 {input} / 输出 {output}",
@@ -404,12 +374,6 @@
       "memSub": "本机 · {percent}",
       "connections": "活动连接",
       "connectionsSub": "WebSocket {ws} · HTTP {http}"
-    },
-    "uptime": {
-      "days": "Uptime {days}d {hours}h · {mins}m",
-      "hours": "Uptime {hours}h {mins}m",
-      "minutes": "Uptime {mins}m",
-      "zero": "0 秒"
     }
   },
   "apiKeys": {

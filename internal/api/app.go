@@ -78,12 +78,13 @@ type StoreService interface {
 
 	// Model rules (formerly "routes" — the rule's Name is the model name
 	// exposed to clients via /v1/models).
+	ListModelRulesForDisplay() ([]model.ModelRule, error)
 	ListModelRules() ([]model.ModelRule, error)
 	GetModelRule(id string) (*model.ModelRule, error)
 	CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, error)
 	UpdateModelRule(id string, in model.ModelRuleInput) (*model.ModelRule, error)
 	DeleteModelRule(id string) error
-	ReorderModelRules(orderedIDs []string) error // no-op kept for API compatibility
+	ReorderModelRules(orderedIDs []string) error // persists display order; ErrConflict on stale set
 	ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) error
 
 	// Logs & stats
@@ -606,7 +607,7 @@ func (a *App) ListModelRules() ([]model.ModelRule, error) {
 	if a.deps.Store == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Store.ListModelRules()
+	return a.deps.Store.ListModelRulesForDisplay()
 }
 
 func (a *App) GetModelRule(id string) (*model.ModelRule, error) {
@@ -637,15 +638,21 @@ func (a *App) DeleteModelRule(id string) error {
 	return a.deps.Store.DeleteModelRule(id)
 }
 
-// ReorderModelRules is kept as a no-op for API compatibility. Drag-reorder
-// was removed when route rules became model rules because model rules are
-// keyed by a unique Name (the client-facing model name) and there is no
-// meaningful order to preserve.
-func (a *App) ReorderModelRules(orderedIDs []string) error {
+// ReorderModelRules persists a new display order for model rules. A stale set
+// (empty, duplicate, unknown, missing, or count mismatch) is surfaced as
+// {Conflict:true} so the UI can reload instead of failing silently.
+func (a *App) ReorderModelRules(orderedIDs []string) (model.ReorderModelRulesResult, error) {
 	if a.deps.Store == nil {
-		return errNotImpl
+		return model.ReorderModelRulesResult{}, errNotImpl
 	}
-	return a.deps.Store.ReorderModelRules(orderedIDs)
+	err := a.deps.Store.ReorderModelRules(orderedIDs)
+	if errors.Is(err, store.ErrConflict) {
+		return model.ReorderModelRulesResult{Conflict: true}, nil
+	}
+	if err != nil {
+		return model.ReorderModelRulesResult{}, err
+	}
+	return model.ReorderModelRulesResult{}, nil
 }
 
 // ReorderModelRuleTargets reorders the targets within a model rule by updating

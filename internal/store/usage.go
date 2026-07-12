@@ -159,13 +159,12 @@ func (s *Store) logStatsFiltered(q model.LogQuery) ([]model.Stat, error) {
 	row := s.db.QueryRow(fmt.Sprintf(`
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 AND error = '' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN error != '' OR status_code >= 400 THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 AND COALESCE(error, '') = '' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN COALESCE(error, '') != '' OR status_code >= 400 THEN 1 ELSE 0 END), 0)
 		FROM request_logs %s`, where), args...)
 	if err := row.Scan(&total, &success, &errCount); err != nil {
 		return nil, fmt.Errorf("store: log stats filtered: %w", err)
 	}
-
 	successRate := 0.0
 	if total > 0 {
 		successRate = float64(success) / float64(total) * 100

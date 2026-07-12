@@ -114,9 +114,14 @@ type ModelRule struct {
 
 	Targets []ModelRuleTarget `json:"targets"`
 
-	// Aggregated stats for display
-	MonthlyHits    int64   `json:"monthly_hits"`
-	MonthlySavings float64 `json:"monthly_savings"`
+	// TodaySuccessRate is the percentage of successful requests for this
+	// rule today (local midnight to now). nil when there are no completed
+	// requests yet; 0 when all requests failed.
+	TodaySuccessRate *float64 `json:"today_success_rate"`
+
+	// TodayRequestCount is the number of completed requests for this rule
+	// today. status_code = 0 is excluded (not counted as completed).
+	TodayRequestCount int64 `json:"today_request_count"`
 }
 
 // ModelRuleTarget is what happens when a rule is selected. The
@@ -250,13 +255,25 @@ type ModelRanking struct {
 	Cost         float64 `json:"cost"`
 }
 
+// ModelRuleSummary is a lightweight dashboard entry for a model rule.
+// Targets are intentionally omitted; the dashboard only shows identity and
+// today's request quality.
+type ModelRuleSummary struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Enabled           bool     `json:"enabled"`
+	TodaySuccessRate  *float64 `json:"today_success_rate"`
+	TodayRequestCount int64    `json:"today_request_count"`
+}
+
 // DashboardData aggregates everything the dashboard page needs in one call.
 type DashboardData struct {
-	Stats          []Stat            `json:"stats"`
-	TokenTrend     []TokenTrendPoint `json:"token_trend"` // last 7 days
-	Providers      []Provider        `json:"providers"`
-	RecentActivity []RequestLog      `json:"recent_activity"` // last 10
-	ServiceHealth  ServiceHealth     `json:"service_health"`
+	Stats          []Stat             `json:"stats"`
+	TokenTrend     []TokenTrendPoint  `json:"token_trend"` // last 7 days
+	Providers      []Provider         `json:"providers"`
+	ModelRules     []ModelRuleSummary `json:"model_rules"`
+	RecentActivity []RequestLog       `json:"recent_activity"` // last 10
+	ServiceHealth  ServiceHealth      `json:"service_health"`
 }
 
 // ServiceHealth is the live system telemetry shown on the dashboard.
@@ -407,6 +424,13 @@ type ModelRuleInput struct {
 // without turning it into a transport/API failure. Operational store errors
 // are still returned as Go errors.
 type ReorderModelRuleTargetsResult struct {
+	Conflict bool `json:"conflict"`
+}
+
+// ReorderModelRulesResult reports whether a rule reorder failed because the
+// rule set changed underneath the caller (e.g. concurrent edit or stale UI).
+// Operational store errors are returned as Go errors.
+type ReorderModelRulesResult struct {
 	Conflict bool `json:"conflict"`
 }
 

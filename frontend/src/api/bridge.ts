@@ -143,9 +143,9 @@ export const api = {
     ensureWails()
     return wails.DeleteModelRule(id) as Promise<void>
   },
-  reorderModelRules: (ids: string[]): Promise<void> => {
+  reorderModelRules: (ids: string[]): Promise<model.ReorderModelRulesResult> => {
     ensureWails()
-    return wails.ReorderModelRules(ids) as Promise<void>
+    return wails.ReorderModelRules(ids) as Promise<model.ReorderModelRulesResult>
   },
 
   // API Keys
