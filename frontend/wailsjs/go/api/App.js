@@ -114,6 +114,10 @@ export function HideWindow() {
   return window['go']['api']['App']['HideWindow']();
 }
 
+export function IsQuitting() {
+  return window['go']['api']['App']['IsQuitting']();
+}
+
 export function ListAPIKeys() {
   return window['go']['api']['App']['ListAPIKeys']();
 }

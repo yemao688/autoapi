@@ -60,6 +60,8 @@ export function HideApp():Promise<void>;
 
 export function HideWindow():Promise<void>;
 
+export function IsQuitting():Promise<boolean>;
+
 export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
 export function ListEndpoints():Promise<Array<model.Endpoint>>;
