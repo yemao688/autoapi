@@ -8,10 +8,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"autoapi/internal/api"
 	"autoapi/internal/config"
 	"autoapi/internal/logger"
+	"autoapi/internal/metrics"
 	"autoapi/internal/model"
 	"autoapi/internal/proxy"
 	"autoapi/internal/service"
@@ -26,6 +28,7 @@ func NewApp() *api.App {
 		log.Fatalf("FATAL: cannot determine home directory: %v", err)
 	}
 	profile := config.Current()
+	metricRegistry := metrics.New(metrics.DefaultCapacity, metrics.DefaultTTL)
 	storageDir := filepath.Join(home, profile.StorageDirName)
 	if err := os.MkdirAll(storageDir, 0700); err != nil {
 		log.Fatalf("FATAL: cannot create storage directory: %v", err)
@@ -39,6 +42,17 @@ func NewApp() *api.App {
 	if err != nil {
 		log.Fatalf("FATAL: store initialization failed: %v", err)
 	}
+	cutoff := time.Now().UTC()
+	if cleanupErr := st.CleanupTargetRuntimeSummaries(cutoff, metrics.DefaultTTL); cleanupErr != nil {
+		log.Printf("warning: metrics cleanup failed: %v", cleanupErr)
+	}
+	if saved, loadErr := st.LoadActiveTargetRuntimeSummaries(cutoff, metrics.DefaultTTL); loadErr == nil {
+		metricRegistry.Restore(saved, cutoff)
+	} else {
+		log.Printf("warning: metrics restore failed: %v", loadErr)
+	}
+	checkpoint := metrics.NewCheckpoint(metricRegistry, st, time.Minute)
+	checkpoint.Start()
 
 	// Initialise the persistent application logger as early as possible
 	// so that any startup error from the proxy / service / API layer is
@@ -75,20 +89,22 @@ func NewApp() *api.App {
 
 	prx := proxy.New(st, nil, profile.DefaultPort, func() (*model.Settings, error) {
 		return st.GetSettings()
-	})
+	}, metricRegistry)
 
 	sv := service.New(st, prx, st.StorageDir())
 
 	// proxy.New needs the service for resolving provider keys; re-create with service now available.
 	prx = proxy.New(st, sv, profile.DefaultPort, func() (*model.Settings, error) {
 		return st.GetSettings()
-	})
+	}, metricRegistry)
 	sv.SetProxy(prx)
 
 	app := api.NewApp(api.Deps{
-		Store:   st,
-		Service: sv,
-		Proxy:   prx,
+		Store:      st,
+		Service:    sv,
+		Proxy:      prx,
+		Checkpoint: checkpoint,
+		Metrics:    metricRegistry,
 	})
 	app.SetAppInfo(getAppInfo())
 	return app

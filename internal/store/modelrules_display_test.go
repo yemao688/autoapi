@@ -216,11 +216,11 @@ func TestModelRuleDisplayOrder_NormalizesPreExistingInvalidColumn(t *testing.T) 
 func TestModelRuleCreate_InsertsAtTop(t *testing.T) {
 	s := newTestStore(t)
 
-	a, err := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	a, err := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 	if err != nil {
 		t.Fatalf("create a: %v", err)
 	}
-	b, err := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	b, err := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 	if err != nil {
 		t.Fatalf("create b: %v", err)
 	}
@@ -240,18 +240,18 @@ func TestModelRuleCreate_InsertsAtTop(t *testing.T) {
 func TestModelRuleDelete_DoesNotRearrange(t *testing.T) {
 	s := newTestStore(t)
 
-	a, err := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	a, err := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 	if err != nil {
 		t.Fatalf("create a: %v", err)
 	}
-	b, err := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	b, err := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 	if err != nil {
 		t.Fatalf("create b: %v", err)
 	}
 	if err := s.DeleteModelRule(a.ID); err != nil {
 		t.Fatalf("delete a: %v", err)
 	}
-	c, err := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	c, err := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 	if err != nil {
 		t.Fatalf("create c: %v", err)
 	}
@@ -271,9 +271,9 @@ func TestModelRuleDelete_DoesNotRearrange(t *testing.T) {
 func TestModelRule_ReorderSuccess(t *testing.T) {
 	s := newTestStore(t)
 
-	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	c, _ := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	c, _ := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	if err := s.ReorderModelRules([]string{b.ID, a.ID, c.ID}); err != nil {
 		t.Fatalf("ReorderModelRules: %v", err)
@@ -294,8 +294,8 @@ func TestModelRule_ReorderSuccess(t *testing.T) {
 func TestModelRule_ReorderConflicts(t *testing.T) {
 	s := newTestStore(t)
 
-	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	// Empty list.
 	if err := s.ReorderModelRules([]string{}); !errors.Is(err, ErrConflict) {
@@ -322,8 +322,8 @@ func TestModelRule_ReorderConflicts(t *testing.T) {
 func TestModelRule_ReorderSameSetTwiceIsLastWriteWins(t *testing.T) {
 	s := newTestStore(t)
 
-	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	// First valid reorder.
 	if err := s.ReorderModelRules([]string{b.ID, a.ID}); err != nil {
@@ -355,9 +355,9 @@ func TestModelRule_ReorderPersistsAfterCloseAndReopen(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	c, _ := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	c, _ := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	if err := s.ReorderModelRules([]string{b.ID, a.ID, c.ID}); err != nil {
 		t.Fatalf("ReorderModelRules: %v", err)
@@ -388,7 +388,7 @@ func TestModelRuleTarget_ReorderIsolation(t *testing.T) {
 	r1, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "r1",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p", ModelName: "m1"},
 			{ProviderID: "p", ModelName: "m2"},
 		},
@@ -399,7 +399,7 @@ func TestModelRuleTarget_ReorderIsolation(t *testing.T) {
 	r2, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "r2",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p", ModelName: "n1"},
 			{ProviderID: "p", ModelName: "n2"},
 		},
@@ -443,9 +443,9 @@ func TestModelRuleTarget_ReorderIsolation(t *testing.T) {
 func TestModelRule_RoutingOrderUnchangedAfterDisplayReorder(t *testing.T) {
 	s := newTestStore(t)
 
-	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	c, _ := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	a, _ := s.CreateModelRule(model.ModelRuleInput{Name: "a", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	b, _ := s.CreateModelRule(model.ModelRuleInput{Name: "b", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	c, _ := s.CreateModelRule(model.ModelRuleInput{Name: "c", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	base := time.Now().Add(-24 * time.Hour).UnixMilli()
 	if _, err := s.db.Exec(`UPDATE model_rules SET created_at = ? WHERE id = ?`, base, a.ID); err != nil {
@@ -495,7 +495,7 @@ func insertRequestLog(t *testing.T, s *Store, l model.RequestLog) {
 
 func TestModelRuleTodayStats_NoData(t *testing.T) {
 	s := newTestStore(t)
-	_, _ = s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	_, _ = s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	rules, err := s.ListModelRulesForDisplay()
 	if err != nil {
@@ -514,7 +514,7 @@ func TestModelRuleTodayStats_NoData(t *testing.T) {
 
 func TestModelRuleTodayStats_RealZero(t *testing.T) {
 	s := newTestStore(t)
-	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	insertRequestLog(t, s, model.RequestLog{ID: "l1", Timestamp: time.Now().UnixMilli(), StatusCode: 500, RouteID: r.ID})
 	insertRequestLog(t, s, model.RequestLog{ID: "l2", Timestamp: time.Now().UnixMilli(), StatusCode: 400, RouteID: r.ID})
@@ -533,7 +533,7 @@ func TestModelRuleTodayStats_RealZero(t *testing.T) {
 
 func TestModelRuleTodayStats_2xxWithErrorNotSuccess(t *testing.T) {
 	s := newTestStore(t)
-	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	insertRequestLog(t, s, model.RequestLog{ID: "l1", Timestamp: time.Now().UnixMilli(), StatusCode: 200, RouteID: r.ID})
 	insertRequestLog(t, s, model.RequestLog{ID: "l2", Timestamp: time.Now().UnixMilli(), StatusCode: 200, RouteID: r.ID, Error: "truncated"})
@@ -552,7 +552,7 @@ func TestModelRuleTodayStats_2xxWithErrorNotSuccess(t *testing.T) {
 
 func TestModelRuleTodayStats_Non2xxNotSuccess(t *testing.T) {
 	s := newTestStore(t)
-	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	insertRequestLog(t, s, model.RequestLog{ID: "l1", Timestamp: time.Now().UnixMilli(), StatusCode: 200, RouteID: r.ID})
 	insertRequestLog(t, s, model.RequestLog{ID: "l2", Timestamp: time.Now().UnixMilli(), StatusCode: 422, RouteID: r.ID})
@@ -565,7 +565,7 @@ func TestModelRuleTodayStats_Non2xxNotSuccess(t *testing.T) {
 
 func TestModelRuleTodayStats_StatusCodeZeroNotCounted(t *testing.T) {
 	s := newTestStore(t)
-	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	insertRequestLog(t, s, model.RequestLog{ID: "l1", Timestamp: time.Now().UnixMilli(), StatusCode: 200, RouteID: r.ID})
 	insertRequestLog(t, s, model.RequestLog{ID: "l2", Timestamp: time.Now().UnixMilli(), StatusCode: 0, RouteID: r.ID, Error: "client abort"})
@@ -581,8 +581,8 @@ func TestModelRuleTodayStats_StatusCodeZeroNotCounted(t *testing.T) {
 
 func TestModelRuleTodayStats_CrossRuleAggregation(t *testing.T) {
 	s := newTestStore(t)
-	r1, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r1", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
-	r2, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r2", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	r1, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r1", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	r2, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r2", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	insertRequestLog(t, s, model.RequestLog{ID: "l1", Timestamp: time.Now().UnixMilli(), StatusCode: 200, RouteID: r1.ID})
 	insertRequestLog(t, s, model.RequestLog{ID: "l2", Timestamp: time.Now().UnixMilli(), StatusCode: 500, RouteID: r1.ID})
@@ -606,7 +606,7 @@ func TestModelRuleTodayStats_CrossRuleAggregation(t *testing.T) {
 
 func TestModelRuleTodayStats_LocalMidnightBoundary(t *testing.T) {
 	s := newTestStore(t)
-	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 
 	now := time.Now()
 	loc := now.Location()
@@ -631,7 +631,7 @@ func TestModelRuleTodayStats_LocalMidnightBoundary(t *testing.T) {
 
 func TestModelRuleTodayStats_RulesWithoutTargetsStillHydrated(t *testing.T) {
 	s := newTestStore(t)
-	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{}})
+	r, _ := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{}})
 	insertRequestLog(t, s, model.RequestLog{ID: "l1", Timestamp: time.Now().UnixMilli(), StatusCode: 200, RouteID: r.ID})
 
 	rules, _ := s.ListModelRulesForDisplay()
@@ -645,7 +645,7 @@ func TestModelRuleTodayStats_RulesWithoutTargetsStillHydrated(t *testing.T) {
 
 func TestModelRuleExport_DoesNotIncludeDeprecatedFields(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}}})
+	_, err := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
 	if err != nil {
 		t.Fatalf("CreateModelRule: %v", err)
 	}

@@ -38,6 +38,10 @@ export function DeleteModelRule(arg1) {
   return window['go']['api']['App']['DeleteModelRule'](arg1);
 }
 
+export function DeletePrice(arg1) {
+  return window['go']['api']['App']['DeletePrice'](arg1);
+}
+
 export function DeleteProvider(arg1) {
   return window['go']['api']['App']['DeleteProvider'](arg1);
 }
@@ -74,6 +78,10 @@ export function GetModelRule(arg1) {
   return window['go']['api']['App']['GetModelRule'](arg1);
 }
 
+export function GetModelRuleShadowComparisons() {
+  return window['go']['api']['App']['GetModelRuleShadowComparisons']();
+}
+
 export function GetProvider(arg1) {
   return window['go']['api']['App']['GetProvider'](arg1);
 }
@@ -96,6 +104,10 @@ export function GetSettings() {
 
 export function GetSystemHealth() {
   return window['go']['api']['App']['GetSystemHealth']();
+}
+
+export function GetTargetDiagnostics() {
+  return window['go']['api']['App']['GetTargetDiagnostics']();
 }
 
 export function GetUsageStats(arg1) {
@@ -134,6 +146,10 @@ export function ListModels(arg1) {
   return window['go']['api']['App']['ListModels'](arg1);
 }
 
+export function ListPrices() {
+  return window['go']['api']['App']['ListPrices']();
+}
+
 export function ListProviders() {
   return window['go']['api']['App']['ListProviders']();
 }
@@ -168,6 +184,10 @@ export function ReorderModelRuleTargets(arg1, arg2) {
 
 export function ReorderModelRules(arg1) {
   return window['go']['api']['App']['ReorderModelRules'](arg1);
+}
+
+export function ReplayLog(arg1) {
+  return window['go']['api']['App']['ReplayLog'](arg1);
 }
 
 export function ResetSettings() {
@@ -248,4 +268,8 @@ export function UpdateModelRule(arg1, arg2) {
 
 export function UpdateProvider(arg1, arg2) {
   return window['go']['api']['App']['UpdateProvider'](arg1, arg2);
+}
+
+export function UpsertPrice(arg1) {
+  return window['go']['api']['App']['UpsertPrice'](arg1);
 }

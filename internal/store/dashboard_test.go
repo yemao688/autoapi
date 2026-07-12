@@ -65,7 +65,7 @@ func TestDashboard_ModelRuleSummaries(t *testing.T) {
 		r, err := s.CreateModelRule(model.ModelRuleInput{
 			Name:    fmt.Sprintf("rule-%d", i),
 			Enabled: i != 0 && i != 5, // rule-0 and rule-5 disabled
-			Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m"}},
+			Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}},
 		})
 		if err != nil {
 			t.Fatalf("create rule %d: %v", i, err)

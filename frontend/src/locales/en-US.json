@@ -10,7 +10,8 @@
     "modelRules": "Model rules",
     "apiKeys": "API Keys",
     "usage": "Usage",
-    "settings": "Settings"
+    "settings": "Settings",
+    "pricing": "Pricing"
   },
   "settings": {
     "title": "Settings",
@@ -171,6 +172,21 @@
     "targetRetries": "Retries {count}",
     "targetHits": "Hits {count}",
     "targetFailures": "Failures {count}",
+    "diagnostics": {
+      "score": "Score",
+      "reliability": "reliability score",
+      "latencyScore": "latency score",
+      "ttftScore": "TTFT score",
+      "capacity": "capacity score",
+      "costEfficiency": "cost efficiency",
+      "estimatedCost": "estimated cost",
+      "samples": "samples",
+      "confidence": "confidence",
+      "loading": "Loading diagnostics…",
+      "unavailable": "Diagnostics unavailable",
+      "noSamples": "No runtime samples",
+      "priceUnknown": "Price unknown"
+    },
     "stats": {
       "todaySuccessRate": "Today's success rate",
       "todaySuccessRateNoData": "No completed requests today",
@@ -195,6 +211,11 @@
       "timeout": "First-byte timeout (seconds)",
       "timeoutPlaceholder": "0 = default 60s",
       "timeoutHelp": "Cumulative maximum wait for the first response byte; 0 uses the default 60s",
+      "strategy": "Shadow routing strategy",
+      "strategyPriority": "Priority first (current behavior)",
+      "strategyScore": "Score within tier",
+      "strategyCost": "Cost first within tier",
+      "strategyHelp": "Shadow comparison only; production routing is unchanged.",
       "enabled": "Enabled",
       "cancel": "Cancel",
       "save": "Save",
@@ -524,6 +545,29 @@
       "requestUri": "Request URI",
       "userAgent": "User Agent",
       "clientIp": "Client IP",
+      "replay": "Replay score",
+      "replayRefresh": "Refresh replay",
+      "replayLoading": "Scoring…",
+      "replayUnavailable": "Replay unavailable",
+      "replayOutcome": "Request outcome",
+      "replaySelectedTarget": "Selected target",
+      "replayRule": "Rule",
+      "replayEndpointAssumed": "Endpoint was inferred",
+      "replayWarnings": "Warnings",
+      "replayAttempts": "Attempts",
+      "replayTarget": "Target",
+      "replayScores": "Scores (0–100)",
+      "replayEstimatedCost": "Estimated cost",
+      "replayPrice": "Price",
+      "replayAvailability": "Availability",
+      "replayMissingTarget": "Target is missing",
+      "replayMissingProvider": "Provider is missing",
+      "replayLimitation": "Replay limitation",
+      "replayNoChain": "This log has no recorded attempt chain.",
+      "replayNoRule": "No rule was recorded for this request.",
+      "replayNoSamples": "No runtime score is available for this attempt.",
+      "replayUnknown": "Unknown",
+      "replayPriceUnknown": "Price unavailable",
       "chain": "Chain",
       "attempt": "Attempt {n}",
       "triedTargets": "Tried {n} targets",
@@ -637,7 +681,9 @@
     "apiKeyDeleted": "Token deleted",
     "copiedToClipboard": "Copied to clipboard",
     "copyFailed": "Copy failed",
-    "logsPurged": "Purged {count} logs"
+    "logsPurged": "Purged {count} logs",
+    "priceSaved": "Price saved",
+    "priceDeleted": "Price deleted"
   },
   "confirm": {
     "defaultTitle": "Confirm",
@@ -655,7 +701,9 @@
     "deleteApiKeyMessage": "Delete token \"{name}\"? This cannot be undone.",
     "purgeLogsTitle": "Purge old logs",
     "purgeLogsMessage": "Delete request logs older than 90 days? This cannot be undone.",
-    "purgeConfirm": "Purge"
+    "purgeConfirm": "Purge",
+    "deletePriceTitle": "Delete price",
+    "deletePriceMessage": "Delete price record for \"{model}\"? This cannot be undone."
   },
   "theme": {
     "light": "Light",
@@ -671,5 +719,57 @@
     "hoursAgo": "{n} hours ago",
     "daysAgo": "{n} days ago",
     "monthsAgo": "{n} months ago"
+  },
+  "pricing": {
+    "title": "Pricing",
+    "subtitle": "{count} price records",
+    "add": "Add price",
+    "loading": "Loading…",
+    "loadFailed": "Load failed: {error}",
+    "searchPlaceholder": "Search by model, provider or endpoint",
+    "empty": "No price records yet",
+    "globalPrice": "Global (all providers)",
+    "columns": {
+      "provider": "Provider",
+      "upstreamModel": "Upstream model",
+      "endpoint": "Endpoint",
+      "billingMode": "Billing",
+      "inputPrice": "Input price",
+      "outputPrice": "Output price",
+      "effective": "Effective",
+      "expires": "Expires",
+      "actions": "Actions",
+      "status": "Status"
+    },
+    "modal": {
+      "add": "Add price",
+      "edit": "Edit price",
+      "provider": "Provider",
+      "upstreamModel": "Upstream model",
+      "upstreamModelPlaceholder": "e.g. gpt-4o",
+      "endpoint": "Endpoint kind",
+      "endpointPlaceholder": "e.g. chat, embedding",
+      "billingMode": "Billing mode",
+      "inputPrice": "Input ($/M tokens)",
+      "outputPrice": "Output ($/M tokens)",
+      "effective": "Effective at",
+      "expires": "Expires at",
+      "source": "Source",
+      "sourcePlaceholder": "e.g. official, manual",
+      "version": "Version",
+      "versionPlaceholder": "e.g. 2025-07"
+    },
+    "billingModes": {
+      "token": "Token",
+      "request": "Request"
+    },
+    "emptyValue": "—",
+    "pricePerMillion": "${value}/M",
+    "invalidDate": "Enter a valid local date and time",
+    "status": {
+      "active": "Active",
+      "future": "Not effective",
+      "expired": "Expired"
+    }
   }
 }

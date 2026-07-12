@@ -30,7 +30,12 @@ import (
 
 	"autoapi/internal/dock"
 	"autoapi/internal/logger"
+	"autoapi/internal/metrics"
 	"autoapi/internal/model"
+	"autoapi/internal/proxy"
+	"autoapi/internal/routing"
+	"autoapi/internal/scoring"
+	"autoapi/internal/service"
 	"autoapi/internal/store"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -40,9 +45,15 @@ import (
 // corresponding method return an "not yet implemented" error, so the contract
 // is exercisable end-to-end from day one.
 type Deps struct {
-	Store   StoreService
-	Service BusinessService
-	Proxy   ProxyService
+	Store      StoreService
+	Service    BusinessService
+	Proxy      ProxyService
+	Checkpoint interface{ Stop() }
+	Metrics    MetricsRegistry
+}
+
+type MetricsRegistry interface {
+	CurrentSnapshot(model.TargetMetricKey) metrics.Snapshot
 }
 
 // StoreService is the persistence interface implemented by internal/store.
@@ -89,6 +100,7 @@ type StoreService interface {
 
 	// Logs & stats
 	QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error)
+	GetRequestLog(id string) (*model.RequestLog, error)
 	Dashboard() (*model.DashboardData, error)
 	UsageStats(q model.LogQuery) (*model.UsageStats, error)
 	GetUsageTrends(q model.UsageTrendsQuery) (*model.UsageTrends, error)
@@ -107,6 +119,16 @@ type StoreService interface {
 
 	// Lifecycle
 	Close() error
+
+	// Prices
+	ListPrices() ([]model.Price, error)
+	UpsertPrice(in model.PriceInput) (*model.Price, error)
+	DeletePrice(id string) error
+	ResolvePrice(providerID, modelName, endpointKind string) (*model.Price, error)
+}
+
+type replayPriceStore interface {
+	ResolvePriceAt(providerID, modelName, endpointKind string, timestampMs int64) (*model.Price, error)
 }
 
 // BusinessService is the higher-level logic implemented by internal/service
@@ -146,6 +168,10 @@ type ProxyService interface {
 	OnLogFlush(fn func())
 }
 
+type breakerStatusProvider interface {
+	BreakerStatuses() map[string]proxy.BreakerStatus
+}
+
 // App is the single struct bound to the Wails runtime. All methods here are
 // auto-generated as TypeScript bindings under frontend/wailsjs/go/main/App.
 type App struct {
@@ -156,6 +182,170 @@ type App struct {
 	visibility          string
 	initiallyBackground bool
 	quitting            atomic.Bool
+}
+
+// GetTargetDiagnostics computes shadow-only diagnostics from detached snapshots.
+func (a *App) GetTargetDiagnostics() ([]model.TargetShadowScore, error) {
+	if a.deps.Store == nil || a.deps.Metrics == nil {
+		return nil, errNotImpl
+	}
+	rules, err := a.deps.Store.ListModelRules()
+	if err != nil {
+		return nil, err
+	}
+	breakers := map[string]proxy.BreakerStatus{}
+	if p, ok := a.deps.Proxy.(breakerStatusProvider); ok {
+		breakers = p.BreakerStatuses()
+	}
+	inputs := make([]scoring.TargetInput, 0)
+	meta := make([]model.TargetShadowScore, 0)
+	providerUnavailable := make([]bool, 0)
+	priceUnavailable := make([]bool, 0)
+	for _, rule := range rules {
+		for _, target := range rule.Targets {
+			p, pErr := a.deps.Store.GetProvider(target.ProviderID)
+			providerBad := pErr != nil || p == nil
+			endpoint := "/v1/chat/completions"
+			key := model.TargetMetricKey{TargetID: target.ID, ProviderID: target.ProviderID, ModelName: target.ModelName, Endpoint: endpoint}
+			ms := a.deps.Metrics.CurrentSnapshot(key)
+			price, priceErr := a.deps.Store.ResolvePrice(target.ProviderID, target.ModelName, "chat")
+			priceBad := priceErr != nil
+			if priceBad {
+				price = nil
+			}
+			cost := service.EstimateEffectiveCost(price, model.DiagnosticsInputTokens, model.DiagnosticsOutputTokens, 0, 0, 1, 0)
+			hard := scoring.HardState{Disabled: !rule.Enabled || !target.Enabled}
+			if b, ok := breakers[target.ProviderID]; ok {
+				hard.CircuitOpen = b.State == proxy.StateOpen
+				hard.HalfOpen = b.State == proxy.StateHalfOpen
+			}
+			if providerBad {
+				hard.Disabled = true
+			}
+			inputs = append(inputs, scoring.TargetInput{Target: target, Metrics: ms, Cost: cost, HardState: hard})
+			name := ""
+			if p != nil {
+				name = p.Name
+			}
+			meta = append(meta, model.TargetShadowScore{TargetID: target.ID, RuleID: rule.ID, RuleName: rule.Name, ProviderID: target.ProviderID, ProviderName: name, ModelName: target.ModelName, CircuitState: breakerState(breakers, target.ProviderID)})
+			providerUnavailable = append(providerUnavailable, providerBad)
+			priceUnavailable = append(priceUnavailable, priceBad)
+		}
+	}
+	scores := scoring.ScoreTargets(inputs, scoring.ScoreContext{})
+	out := make([]model.TargetShadowScore, len(scores))
+	for i, s := range scores {
+		v := meta[i]
+		converted := replayShadowScore(s, inputs[i].Metrics, "/v1/chat/completions", inputs[i].Cost)
+		v.Tier = converted.Tier
+		v.Metrics = converted.Metrics
+		v.MetricsFresh = converted.MetricsFresh
+		v.Endpoint = converted.Endpoint
+		v.EndpointAssumed = converted.EndpointAssumed
+		v.Reliability = converted.Reliability
+		v.Latency = converted.Latency
+		v.TTFT = converted.TTFT
+		v.Capacity = converted.Capacity
+		v.CostEfficiency = converted.CostEfficiency
+		v.Confidence = converted.Confidence
+		v.Overall = converted.Overall
+		v.ExplorationBonus = converted.ExplorationBonus
+		v.EstimatedCost = converted.EstimatedCost
+		v.SampleCount = converted.SampleCount
+		v.Availability = converted.Availability
+		v.Reason = converted.Reason
+		v.PriceVersion = converted.PriceVersion
+		v.Cost = converted.Cost
+		// These are diagnostic-only overrides. The scorer remains unchanged and
+		// unavailable provider/price failures must not be hidden by its generic
+		// disabled or price reason.
+		if providerUnavailable[i] {
+			v.Availability, v.Reason = scoring.Unavailable, "provider_unavailable"
+		} else if priceUnavailable[i] {
+			v.Availability, v.Reason = scoring.Unavailable, "price_unavailable"
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// GetModelRuleShadowComparisons builds detached routing plans for display only.
+// It is intentionally not called by matcher/proxy failover and emits no events.
+func (a *App) GetModelRuleShadowComparisons() ([]model.ModelRuleShadowComparison, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	rules, err := a.deps.Store.ListModelRules()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]model.ModelRuleShadowComparison, 0, len(rules))
+	breakers, breakerSnapshots := map[string]proxy.BreakerStatus{}, false
+	if p, ok := a.deps.Proxy.(breakerStatusProvider); ok {
+		breakers, breakerSnapshots = p.BreakerStatuses(), true
+	}
+	for _, rule := range rules {
+		inputs := make([]routing.CandidatePlanInput, 0, len(rule.Targets))
+		assumptions := []string{"capabilities_assumed_satisfied", "budget_assumed_satisfied", "cooldown_state_assumed_inactive", "retry_and_stream_unchanged"}
+		circuitStates := make([]string, 0, len(rule.Targets))
+		for i, target := range rule.Targets {
+			endpoint := "/v1/chat/completions"
+			key := model.TargetMetricKey{TargetID: target.ID, ProviderID: target.ProviderID, ModelName: target.ModelName, Endpoint: endpoint}
+			var snapshot metrics.Snapshot
+			if a.deps.Metrics != nil {
+				snapshot = a.deps.Metrics.CurrentSnapshot(key)
+			}
+			p, pErr := a.deps.Store.GetProvider(target.ProviderID)
+			providerOK := pErr == nil && p != nil && p.Enabled
+			price, priceErr := a.deps.Store.ResolvePrice(target.ProviderID, target.ModelName, "chat")
+			cost := service.EstimateEffectiveCost(price, model.DiagnosticsInputTokens, model.DiagnosticsOutputTokens, 0, 0, 1, 0)
+			if pErr != nil {
+				assumptions = append(assumptions, "provider_error:"+target.ProviderID)
+			}
+			if priceErr != nil {
+				assumptions = append(assumptions, "price_error:"+target.ID)
+			}
+			circuitState, circuitOpen := "closed", false
+			if !breakerSnapshots {
+				assumptions = append(assumptions, "circuit_state_assumed_closed/unavailable")
+			} else if b, ok := breakers[target.ProviderID]; ok {
+				circuitState, circuitOpen = b.State.String(), b.State == proxy.StateOpen
+				assumptions = append(assumptions, "circuit_state_observed:"+circuitState)
+			} else {
+				assumptions = append(assumptions, "circuit_state_assumed_closed/unavailable")
+			}
+			circuitStates = append(circuitStates, circuitState)
+			score := scoring.ScoreTargets([]scoring.TargetInput{{Target: target, Metrics: snapshot, Cost: cost, HardState: scoring.HardState{Disabled: !rule.Enabled || !target.Enabled || !providerOK, CircuitOpen: circuitOpen}}}, scoring.ScoreContext{})[0]
+			inputs = append(inputs, routing.CandidatePlanInput{OriginalIndex: i, TargetID: target.ID, Tier: target.Tier, Enabled: target.Enabled && rule.Enabled, HardAvailable: providerOK, CircuitOpen: circuitOpen, Cooldown: false, CapabilitySatisfied: true, BudgetSatisfied: true, TargetScore: score, EffectiveCost: cost})
+		}
+		plan := routing.BuildCandidatePlan(inputs, routing.Strategy(rule.Strategy), routing.Policy{})
+		candidates := make([]model.ShadowPlanCandidate, 0, len(plan.Candidates))
+		for _, c := range plan.Candidates {
+			candidates = append(candidates, model.ShadowPlanCandidate{TargetID: c.TargetID, Tier: c.Tier, Available: c.Available, Reason: c.Reason, Changed: c.Changed, CircuitState: circuitStates[c.OriginalIndex]})
+		}
+		rejected := make([]model.ShadowPlanCandidate, 0)
+		for _, in := range inputs {
+			if in.Enabled && in.HardAvailable && !in.CircuitOpen {
+				continue
+			}
+			reason := "unavailable"
+			if !in.Enabled {
+				reason = "disabled"
+			} else if in.CircuitOpen {
+				reason = "circuit_open"
+			}
+			rejected = append(rejected, model.ShadowPlanCandidate{TargetID: in.TargetID, Tier: in.Tier, Available: false, Reason: reason, Changed: true, CircuitState: circuitStates[in.OriginalIndex]})
+		}
+		result = append(result, model.ModelRuleShadowComparison{RuleID: rule.ID, RuleName: rule.Name, Strategy: string(plan.Strategy), OriginalOrder: plan.OriginalOrder, PlannedOrder: plan.PlannedOrder, Changed: plan.Changed, Candidates: candidates, Rejected: rejected, Assumptions: assumptions})
+	}
+	return result, nil
+}
+
+func breakerState(m map[string]proxy.BreakerStatus, id string) string {
+	if b, ok := m[id]; ok {
+		return b.State.String()
+	}
+	return "closed"
 }
 
 // SetInitialVisibility records Wails' StartHidden option before startup.
@@ -280,6 +470,9 @@ func (a *App) PingLogEvent() {
 // Shutdown is invoked by Wails OnShutdown. Stop the proxy cleanly.
 func (a *App) Shutdown(ctx context.Context) {
 	slog.Info("app: shutting down")
+	if a.deps.Checkpoint != nil {
+		a.deps.Checkpoint.Stop()
+	}
 	if a.deps.Proxy != nil {
 		_ = a.deps.Proxy.Shutdown()
 	}
@@ -672,6 +865,38 @@ func (a *App) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) 
 	return model.ReorderModelRuleTargetsResult{}, nil
 }
 
+// ----- Prices -----
+
+func (a *App) ListPrices() ([]model.Price, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Store.ListPrices()
+}
+
+func (a *App) UpsertPrice(in model.PriceInput) (*model.Price, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	p, err := a.deps.Store.UpsertPrice(in)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("app: price upserted", "id", p.ID, "upstream_model", p.UpstreamModel, "provider_id", p.ProviderID)
+	return p, nil
+}
+
+func (a *App) DeletePrice(id string) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	if err := a.deps.Store.DeletePrice(id); err != nil {
+		return err
+	}
+	slog.Info("app: price deleted", "id", id)
+	return nil
+}
+
 // ----- Dashboard / usage -----
 
 func (a *App) GetDashboard() (*model.DashboardData, error) {
@@ -706,6 +931,241 @@ func (a *App) QueryLogs(q model.LogQuery) (*model.LogQueryResult, error) {
 		return nil, err
 	}
 	return &model.LogQueryResult{Logs: logs, Total: total}, nil
+}
+
+// ReplayLog reconstructs a historical request using detached runtime metrics.
+// It is strictly shadow-only: it does not inspect or update proxy breaker state.
+func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	logPtr, err := a.deps.Store.GetRequestLog(id)
+	if err != nil {
+		return nil, err
+	}
+	if logPtr == nil || logPtr.ID == "" {
+		return nil, fmt.Errorf("request log %q not found", id)
+	}
+	log := *logPtr
+	rule, err := a.deps.Store.GetModelRule(log.RouteID)
+	if (err != nil || rule == nil) && log.RouteLabel != "" {
+		if rules, listErr := a.deps.Store.ListModelRules(); listErr == nil {
+			for i := range rules {
+				if rules[i].Name == log.RouteLabel {
+					rule = &rules[i]
+					err = nil
+					break
+				}
+			}
+		}
+	}
+	if err != nil || rule == nil {
+		if err == nil {
+			err = errors.New("rule not found")
+		}
+		return nil, fmt.Errorf("replay rule %q: %w", log.RouteID, err)
+	}
+	endpoint := "/v1/chat/completions"
+	historicalPriceUnavailable := false
+	priceResolutionErrors := 0
+	priceUnavailable := 0
+	snapshots := map[model.TargetMetricKey]metrics.Snapshot{}
+	if a.deps.Metrics != nil {
+		for _, attempt := range log.Chain {
+			k := model.TargetMetricKey{TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, Endpoint: endpoint}
+			snapshots[k] = a.deps.Metrics.CurrentSnapshot(k)
+		}
+	}
+	costs := make([]model.EffectiveCost, len(log.Chain))
+	for i, attempt := range log.Chain {
+		var target model.ModelRuleTarget
+		for _, candidate := range rule.Targets {
+			if candidate.ID == attempt.TargetID && candidate.ProviderID == attempt.ProviderID && candidate.ModelName == attempt.ModelName {
+				target = candidate
+				break
+			}
+		}
+		if target.ID == "" {
+			costs[i] = model.DefaultEffectiveCost()
+			continue
+		}
+		var price *model.Price
+		if ps, ok := a.deps.Store.(replayPriceStore); ok {
+			var priceErr error
+			price, priceErr = ps.ResolvePriceAt(target.ProviderID, target.ModelName, "chat", log.Timestamp)
+			if priceErr != nil {
+				priceResolutionErrors++
+			}
+			if price == nil && priceErr == nil {
+				priceUnavailable++
+			}
+		} else {
+			historicalPriceUnavailable = true
+		}
+		costs[i] = service.EstimateEffectiveCostAt(price, log.Timestamp, log.InputTokens, log.OutputTokens, int(log.CacheHit), int(log.CacheCreation), 1, additionalRetriesFor(log.Chain, attempt))
+	}
+	scores := scoring.ReplayOneRequest(log, *rule, endpoint, snapshots, costs)
+	result := &model.ReplayResult{LogID: log.ID, Timestamp: log.Timestamp, RuleID: rule.ID, RuleName: rule.Name, RequestOutcome: outcomeFor(log), Endpoint: endpoint, EndpointAssumed: true}
+	if len(log.Chain) == 0 {
+		result.Warnings = append(result.Warnings, "no attempt chain; legacy log has low replay confidence")
+	}
+	if historicalPriceUnavailable {
+		result.Warnings = append(result.Warnings, "historical price resolution is unavailable; costs have low confidence")
+	}
+	if priceResolutionErrors > 0 {
+		result.Warnings = append(result.Warnings, "historical price lookup failed for one or more attempts")
+	}
+	if priceUnavailable > 0 {
+		result.Warnings = append(result.Warnings, "no price was available at the historical timestamp for one or more attempts")
+	}
+	for i, attempt := range log.Chain {
+		var target model.ModelRuleTarget
+		for _, t := range rule.Targets {
+			if t.ID == attempt.TargetID && t.ProviderID == attempt.ProviderID && t.ModelName == attempt.ModelName {
+				target = t
+				break
+			}
+		}
+		providerMissing := false
+		provider, e := a.deps.Store.GetProvider(attempt.ProviderID)
+		if e != nil || provider == nil {
+			providerMissing = true
+		}
+		entry := model.ReplayAttemptScore{Attempt: attempt, TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, TargetMissing: target.ID == "", ProviderMissing: providerMissing, ReplayLimitation: "historical breaker state unavailable"}
+		if i < len(scores) {
+			entry.Score = replayShadowScore(scores[i], snapshots[model.TargetMetricKey{TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, Endpoint: endpoint}], endpoint, costs[i])
+			entry.PriceVersion = scores[i].PriceVersion
+			cost := costs[i]
+			entry.PriceConfidence = cost.Confidence
+		}
+		if entry.TargetMissing || entry.ProviderMissing {
+			entry.Score.Availability = scoring.Unavailable
+			entry.Score.Reason = "target_missing"
+			if entry.ProviderMissing {
+				entry.Score.Reason = "provider_missing"
+			}
+			entry.Score.Overall = 0
+			entry.ReplayLimitation = entry.Score.Reason + "; historical breaker state unavailable"
+		}
+		result.Attempts = append(result.Attempts, entry)
+	}
+	result.SelectedTarget = selectedTarget(log.Chain)
+	return result, nil
+}
+
+// replayShadowScore is the single conversion boundary between the pure scorer
+// and the API model. Runtime data and the detached cost are deliberately copied
+// from the same replay inputs so the explanation cannot drift from the score.
+func replayShadowScore(s scoring.TargetScore, snapshot metrics.Snapshot, endpoint string, cost model.EffectiveCost) model.TargetShadowScore {
+	return model.TargetShadowScore{
+		TargetID:         s.TargetID,
+		Tier:             s.Tier,
+		Reliability:      s.Reliability,
+		Latency:          s.Latency,
+		TTFT:             s.TTFT,
+		Capacity:         s.Capacity,
+		CostEfficiency:   s.CostEfficiency,
+		Confidence:       s.Confidence,
+		Overall:          s.Overall,
+		EstimatedCost:    s.EstimatedCost,
+		SampleCount:      s.SampleCount,
+		Availability:     s.Availability,
+		Reason:           s.Reason,
+		PriceVersion:     s.PriceVersion,
+		ExplorationBonus: s.ExplorationBonus,
+		Metrics: model.TargetRuntimeSummary{
+			Key:          snapshot.Key,
+			Requests:     snapshot.Requests,
+			Attempts:     snapshot.Attempts,
+			Successes:    snapshot.Successes,
+			Failures:     snapshot.Failures,
+			Status429:    snapshot.Status429,
+			Status5xx:    snapshot.Status5xx,
+			Transport:    snapshot.Transport,
+			ClientAborts: snapshot.ClientAborts,
+			Truncated:    snapshot.Truncated,
+			Downstream:   snapshot.Downstream,
+			LastUsed:     snapshot.LastUsed,
+			LastSuccess:  snapshot.LastSuccess,
+			LastFailure:  snapshot.LastFailure,
+		},
+		MetricsFresh:    !snapshot.LastUsed.IsZero(),
+		Endpoint:        endpoint,
+		EndpointAssumed: true,
+		Cost:            cost,
+	}
+}
+
+func outcomeFor(log model.RequestLog) string {
+	if log.StatusCode == 499 {
+		return "aborted"
+	}
+	if len(log.Chain) == 0 {
+		return "unknown"
+	}
+	committed := log.StatusCode >= 200 && log.StatusCode < 300
+	for _, attempt := range log.Chain {
+		status := model.AttemptOutcome(attempt.Status)
+		if status == model.AttemptOutcomeSuccess || attempt.StatusCode >= 200 && attempt.StatusCode < 300 || attempt.FirstTokenMs > 0 {
+			committed = true
+		}
+		if status == model.AttemptOutcomeClientAbort || attempt.StatusCode == 499 {
+			return "aborted"
+		}
+		if status == model.AttemptOutcomeTruncated || status == model.AttemptOutcomeDownstreamError {
+			if committed || attempt.StatusCode >= 200 && attempt.StatusCode < 300 {
+				return "partial"
+			}
+		}
+	}
+	for _, attempt := range log.Chain {
+		if model.AttemptOutcome(attempt.Status) == model.AttemptOutcomeSuccess {
+			return "success"
+		}
+	}
+	known := false
+	for _, attempt := range log.Chain {
+		status := model.AttemptOutcome(attempt.Status)
+		if status.Valid() && status != model.AttemptOutcomeUnknown {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return "unknown"
+	}
+	return "failure"
+}
+
+func isRealUpstreamAttempt(status model.AttemptOutcome) bool {
+	return status != model.AttemptOutcomePreflightError && status != model.AttemptOutcomeCircuitOpen
+}
+
+// additionalRetriesFor counts only attempts that could have called upstream.
+// AttemptOrder is not a billing ordinal because it also covers preflight and
+// circuit entries.
+func additionalRetriesFor(chain []model.RequestLogChainEntry, current model.RequestLogChainEntry) int {
+	count := 0
+	for _, attempt := range chain {
+		if attempt == current {
+			break
+		}
+		if isRealUpstreamAttempt(model.AttemptOutcome(attempt.Status)) {
+			count++
+		}
+	}
+	return count
+}
+
+func selectedTarget(chain []model.RequestLogChainEntry) string {
+	for i := len(chain) - 1; i >= 0; i-- {
+		a := chain[i]
+		status := model.AttemptOutcome(a.Status)
+		if status == model.AttemptOutcomeSuccess || status == model.AttemptOutcomeTruncated || status == model.AttemptOutcomeDownstreamError || status == model.AttemptOutcomeClientAbort || a.StatusCode == 499 {
+			return a.TargetID
+		}
+	}
+	return ""
 }
 
 // GetUsageTrends returns pre-aggregated usage-trend data (input / output /

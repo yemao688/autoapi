@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"autoapi/internal/model"
+	"autoapi/internal/routing"
 )
 
 // errNoMatch is returned by selectCandidates when the inbound request
@@ -38,6 +39,8 @@ type InboundRequest struct {
 	EstimatedTokens int
 	Task            string
 	TimeHour        int
+	Endpoint        string
+	Stream          bool
 }
 
 // candidate is one possible provider/model the proxy can forward a request to.
@@ -57,6 +60,8 @@ type candidate struct {
 	maxRetries                 int
 	firstByteBudget            time.Duration
 	targetFirstBodyByteTimeout time.Duration
+	tier                       int
+	strategy                   routing.Strategy
 }
 
 // selectCandidates picks the enabled model rule whose Name equals req.Model
@@ -116,6 +121,8 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 			maxRetries:                 t.MaxRetries,
 			firstByteBudget:            firstByteBudget,
 			targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds),
+			tier:                       t.Tier,
+			strategy:                   routing.Strategy(rule.Strategy),
 		})
 	}
 

@@ -716,6 +716,21 @@ func TestRequestLogURIRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGetRequestLogExactIDAndChain(t *testing.T) {
+	s := newLogsTestStore(t)
+	in := model.RequestLog{ID: "exact-log", Timestamp: 1700000003000, Chain: []model.RequestLogChainEntry{{AttemptOrder: 1, TargetID: "t", Status: "success"}}}
+	if err := s.InsertRequestLog(in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRequestLog("exact-log")
+	if err != nil || got == nil || len(got.Chain) != 1 || got.Chain[0].TargetID != "t" {
+		t.Fatalf("GetRequestLog: got=%+v err=%v", got, err)
+	}
+	if got, err := s.GetRequestLog("missing-log"); err == nil || got != nil {
+		t.Fatalf("missing log: got=%v err=%v", got, err)
+	}
+}
+
 // ----- helpers -----
 
 func equalStringSlices(a, b []string) bool {

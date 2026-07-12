@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"autoapi/internal/metrics"
 	"autoapi/internal/model"
 	"autoapi/internal/store"
 )
@@ -507,6 +508,150 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 	}
 	if p1Hits != 1 {
 		t.Fatalf("expected P1 hit once, got %d", p1Hits)
+	}
+}
+
+func TestHandlerMetricsCountsRealAttemptsAndRequest(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ok", "usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 1}})
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true}, "p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p0", ModelName: "m0", Enabled: true}, {ProviderID: "p1", ModelName: "m1", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	reg := metrics.New(16, time.Hour)
+	p := New(st, &mockService{}, 0, nil, reg)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 1 {
+		t.Fatalf("response=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	var attempts, requests int64
+	for _, snapshot := range reg.Snapshots(time.Now()) {
+		attempts += snapshot.Attempts
+		requests += snapshot.Requests
+	}
+	if attempts != 2 || requests != 1 {
+		t.Fatalf("metrics attempts=%d requests=%d", attempts, requests)
+	}
+}
+
+func TestHandlerPreflightMetricsAreRequestOnly(t *testing.T) {
+	cases := []struct {
+		name  string
+		body  string
+		model string
+		want  int
+	}{
+		{name: "invalid json", body: `{`, model: "", want: http.StatusBadRequest},
+		{name: "no matching rule", body: `{"model":"missing","messages":[]}`, model: "missing", want: http.StatusServiceUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}, providers: map[string]*model.Provider{}, rules: nil}
+			reg := metrics.New(16, time.Hour)
+			p := New(st, &mockService{}, 0, nil, reg)
+			defer p.Shutdown()
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer key1")
+			rec := httptest.NewRecorder()
+			p.router.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var attempts, requests int64
+			var preflight bool
+			for _, s := range reg.Snapshots(time.Now()) {
+				attempts += s.Attempts
+				requests += s.Requests
+				preflight = preflight || s.Key.ProviderID == model.MetricProviderPreflight
+			}
+			if attempts != 0 || requests != 1 || !preflight {
+				t.Fatalf("attempts=%d requests=%d preflight=%v", attempts, requests, preflight)
+			}
+		})
+	}
+}
+
+func TestHandlerStreamMetricsSuccessAndTruncate(t *testing.T) {
+	cases := []struct {
+		name, body string
+		want       model.RequestOutcome
+	}{
+		{"success", "data: {\"id\":\"x\"}\n\ndata: [DONE]\n\n", model.RequestOutcomeSuccess},
+		{"truncate", "data: {\"id\":\"x\"}\n\n", model.RequestOutcomePartial},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hits := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+			spy := &metricSpy{}
+			p := New(st, &mockService{}, 0, nil)
+			p.metricSink = spy
+			defer p.Shutdown()
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","stream":true,"messages":[]}`))
+			req.Header.Set("Authorization", "Bearer key1")
+			rec := httptest.NewRecorder()
+			p.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK || hits != 1 {
+				t.Fatalf("status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
+			}
+			events := spy.Events()
+			var attempts, requests int
+			var got model.RequestOutcome
+			for _, e := range events {
+				if e.Kind == model.MetricEventAttempt {
+					attempts++
+				}
+				if e.Kind == model.MetricEventRequest {
+					requests++
+					got = e.RequestOutcome
+				}
+			}
+			if attempts != 1 || requests != 1 || got != tc.want {
+				t.Fatalf("events=%#v", events)
+			}
+		})
+	}
+}
+
+func TestHandlerMetricSinkPanicDoesNotChangeResponse(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(st, &mockService{}, 0, nil)
+	p.metricSink = panicMetricSink{}
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != `{"ok":true}` || hits != 1 {
+		t.Fatalf("status=%d hits=%d body=%q", rec.Code, hits, rec.Body.String())
 	}
 }
 

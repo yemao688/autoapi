@@ -22,6 +22,8 @@ export function DeleteModel(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteModelRule(arg1:string):Promise<void>;
 
+export function DeletePrice(arg1:string):Promise<void>;
+
 export function DeleteProvider(arg1:string):Promise<void>;
 
 export function EnterBackground():Promise<void>;
@@ -40,6 +42,8 @@ export function GetDashboard():Promise<model.DashboardData>;
 
 export function GetModelRule(arg1:string):Promise<model.ModelRule>;
 
+export function GetModelRuleShadowComparisons():Promise<Array<model.ModelRuleShadowComparison>>;
+
 export function GetProvider(arg1:string):Promise<model.Provider>;
 
 export function GetProviderKey(arg1:string):Promise<string>;
@@ -51,6 +55,8 @@ export function GetRuntimePaths():Promise<api.RuntimePaths>;
 export function GetSettings():Promise<model.Settings>;
 
 export function GetSystemHealth():Promise<model.ServiceHealth>;
+
+export function GetTargetDiagnostics():Promise<Array<model.TargetShadowScore>>;
 
 export function GetUsageStats(arg1:model.LogQuery):Promise<model.UsageStats>;
 
@@ -70,6 +76,8 @@ export function ListModelRules():Promise<Array<model.ModelRule>>;
 
 export function ListModels(arg1:string):Promise<Array<model.Model>>;
 
+export function ListPrices():Promise<Array<model.Price>>;
+
 export function ListProviders():Promise<Array<model.Provider>>;
 
 export function NavigateTo(arg1:string):Promise<void>;
@@ -87,6 +95,8 @@ export function Quit():Promise<void>;
 export function ReorderModelRuleTargets(arg1:string,arg2:Array<string>):Promise<model.ReorderModelRuleTargetsResult>;
 
 export function ReorderModelRules(arg1:Array<string>):Promise<model.ReorderModelRulesResult>;
+
+export function ReplayLog(arg1:string):Promise<model.ReplayResult>;
 
 export function ResetSettings():Promise<model.Settings>;
 
@@ -127,3 +137,5 @@ export function UpdateModelName(arg1:string,arg2:string,arg3:string):Promise<voi
 export function UpdateModelRule(arg1:string,arg2:model.ModelRuleInput):Promise<model.ModelRule>;
 
 export function UpdateProvider(arg1:string,arg2:model.ProviderInput):Promise<model.Provider>;
+
+export function UpsertPrice(arg1:model.PriceInput):Promise<model.Price>;

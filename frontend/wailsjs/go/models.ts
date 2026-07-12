@@ -415,6 +415,34 @@ export namespace model {
 	        this.storage_path = source["storage_path"];
 	    }
 	}
+	export class EffectiveCost {
+	    input_tokens: number;
+	    output_tokens: number;
+	    base_request_count: number;
+	    additional_retry_count: number;
+	    cost: number;
+	    currency: string;
+	    confidence: string;
+	    price_version: string;
+	    available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EffectiveCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.input_tokens = source["input_tokens"];
+	        this.output_tokens = source["output_tokens"];
+	        this.base_request_count = source["base_request_count"];
+	        this.additional_retry_count = source["additional_retry_count"];
+	        this.cost = source["cost"];
+	        this.currency = source["currency"];
+	        this.confidence = source["confidence"];
+	        this.price_version = source["price_version"];
+	        this.available = source["available"];
+	    }
+	}
 	export class Endpoint {
 	    method: string;
 	    path: string;
@@ -603,6 +631,7 @@ export namespace model {
 	    provider_id: string;
 	    model_name: string;
 	    max_retries: number;
+	    tier: number;
 	    first_token_timeout_seconds: number;
 	    hit_count: number;
 	    failure_count: number;
@@ -619,6 +648,7 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.model_name = source["model_name"];
 	        this.max_retries = source["max_retries"];
+	        this.tier = source["tier"];
 	        this.first_token_timeout_seconds = source["first_token_timeout_seconds"];
 	        this.hit_count = source["hit_count"];
 	        this.failure_count = source["failure_count"];
@@ -630,6 +660,7 @@ export namespace model {
 	    name: string;
 	    enabled: boolean;
 	    first_byte_timeout_seconds: number;
+	    strategy: string;
 	    created_at: number;
 	    updated_at: number;
 	    targets: ModelRuleTarget[];
@@ -646,6 +677,7 @@ export namespace model {
 	        this.name = source["name"];
 	        this.enabled = source["enabled"];
 	        this.first_byte_timeout_seconds = source["first_byte_timeout_seconds"];
+	        this.strategy = source["strategy"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
@@ -671,11 +703,36 @@ export namespace model {
 		    return a;
 		}
 	}
+	export class ModelRuleTargetInput {
+	    id: string;
+	    provider_id: string;
+	    model_name: string;
+	    max_retries: number;
+	    tier?: number;
+	    first_token_timeout_seconds: number;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelRuleTargetInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider_id = source["provider_id"];
+	        this.model_name = source["model_name"];
+	        this.max_retries = source["max_retries"];
+	        this.tier = source["tier"];
+	        this.first_token_timeout_seconds = source["first_token_timeout_seconds"];
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class ModelRuleInput {
 	    name: string;
 	    enabled: boolean;
 	    first_byte_timeout_seconds: number;
-	    targets: ModelRuleTarget[];
+	    strategy: string;
+	    targets: ModelRuleTargetInput[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelRuleInput(source);
@@ -686,7 +743,76 @@ export namespace model {
 	        this.name = source["name"];
 	        this.enabled = source["enabled"];
 	        this.first_byte_timeout_seconds = source["first_byte_timeout_seconds"];
-	        this.targets = this.convertValues(source["targets"], ModelRuleTarget);
+	        this.strategy = source["strategy"];
+	        this.targets = this.convertValues(source["targets"], ModelRuleTargetInput);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ShadowPlanCandidate {
+	    target_id: string;
+	    tier: number;
+	    available: boolean;
+	    reason: string;
+	    changed: boolean;
+	    circuit_state?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ShadowPlanCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target_id = source["target_id"];
+	        this.tier = source["tier"];
+	        this.available = source["available"];
+	        this.reason = source["reason"];
+	        this.changed = source["changed"];
+	        this.circuit_state = source["circuit_state"];
+	    }
+	}
+	export class ModelRuleShadowComparison {
+	    rule_id: string;
+	    rule_name: string;
+	    strategy: string;
+	    original_order: string[];
+	    planned_order: string[];
+	    changed: boolean;
+	    candidates: ShadowPlanCandidate[];
+	    rejected: ShadowPlanCandidate[];
+	    assumptions: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelRuleShadowComparison(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rule_id = source["rule_id"];
+	        this.rule_name = source["rule_name"];
+	        this.strategy = source["strategy"];
+	        this.original_order = source["original_order"];
+	        this.planned_order = source["planned_order"];
+	        this.changed = source["changed"];
+	        this.candidates = this.convertValues(source["candidates"], ShadowPlanCandidate);
+	        this.rejected = this.convertValues(source["rejected"], ShadowPlanCandidate);
+	        this.assumptions = source["assumptions"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -709,6 +835,7 @@ export namespace model {
 	}
 	
 	
+	
 	export class ModelTestResult {
 	    ok: boolean;
 	    latency_ms: number;
@@ -723,6 +850,92 @@ export namespace model {
 	        this.ok = source["ok"];
 	        this.latency_ms = source["latency_ms"];
 	        this.error = source["error"];
+	    }
+	}
+	export class Price {
+	    id?: string;
+	    provider_id?: string;
+	    upstream_model: string;
+	    endpoint_kind: string;
+	    billing_mode: string;
+	    input_price_per_million: number;
+	    output_price_per_million: number;
+	    cache_read_price_per_million: number;
+	    cache_write_price_per_million: number;
+	    request_price_per_request: number;
+	    currency: string;
+	    source: string;
+	    version: string;
+	    effective_at: number;
+	    expires_at: number;
+	    confidence: string;
+	    updated_at: number;
+	    created_at?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Price(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider_id = source["provider_id"];
+	        this.upstream_model = source["upstream_model"];
+	        this.endpoint_kind = source["endpoint_kind"];
+	        this.billing_mode = source["billing_mode"];
+	        this.input_price_per_million = source["input_price_per_million"];
+	        this.output_price_per_million = source["output_price_per_million"];
+	        this.cache_read_price_per_million = source["cache_read_price_per_million"];
+	        this.cache_write_price_per_million = source["cache_write_price_per_million"];
+	        this.request_price_per_request = source["request_price_per_request"];
+	        this.currency = source["currency"];
+	        this.source = source["source"];
+	        this.version = source["version"];
+	        this.effective_at = source["effective_at"];
+	        this.expires_at = source["expires_at"];
+	        this.confidence = source["confidence"];
+	        this.updated_at = source["updated_at"];
+	        this.created_at = source["created_at"];
+	    }
+	}
+	export class PriceInput {
+	    provider_id?: string;
+	    upstream_model: string;
+	    endpoint_kind: string;
+	    billing_mode: string;
+	    input_price_per_million: number;
+	    output_price_per_million: number;
+	    cache_read_price_per_million: number;
+	    cache_write_price_per_million: number;
+	    request_price_per_request: number;
+	    currency: string;
+	    source: string;
+	    version: string;
+	    effective_at: number;
+	    expires_at: number;
+	    confidence: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PriceInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.upstream_model = source["upstream_model"];
+	        this.endpoint_kind = source["endpoint_kind"];
+	        this.billing_mode = source["billing_mode"];
+	        this.input_price_per_million = source["input_price_per_million"];
+	        this.output_price_per_million = source["output_price_per_million"];
+	        this.cache_read_price_per_million = source["cache_read_price_per_million"];
+	        this.cache_write_price_per_million = source["cache_write_price_per_million"];
+	        this.request_price_per_request = source["request_price_per_request"];
+	        this.currency = source["currency"];
+	        this.source = source["source"];
+	        this.version = source["version"];
+	        this.effective_at = source["effective_at"];
+	        this.expires_at = source["expires_at"];
+	        this.confidence = source["confidence"];
 	    }
 	}
 	
@@ -806,6 +1019,262 @@ export namespace model {
 	        this.conflict = source["conflict"];
 	    }
 	}
+	export class TargetMetricKey {
+	    target_id?: string;
+	    provider_id: string;
+	    model_name: string;
+	    endpoint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TargetMetricKey(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target_id = source["target_id"];
+	        this.provider_id = source["provider_id"];
+	        this.model_name = source["model_name"];
+	        this.endpoint = source["endpoint"];
+	    }
+	}
+	export class TargetRuntimeSummary {
+	    key: TargetMetricKey;
+	    requests: number;
+	    attempts: number;
+	    successes: number;
+	    failures: number;
+	    status_429: number;
+	    status_5xx: number;
+	    transport: number;
+	    client_aborts: number;
+	    truncated: number;
+	    downstream: number;
+	    // Go type: time
+	    last_used: any;
+	    // Go type: time
+	    last_success: any;
+	    // Go type: time
+	    last_failure: any;
+	    // Go type: time
+	    updated_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new TargetRuntimeSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = this.convertValues(source["key"], TargetMetricKey);
+	        this.requests = source["requests"];
+	        this.attempts = source["attempts"];
+	        this.successes = source["successes"];
+	        this.failures = source["failures"];
+	        this.status_429 = source["status_429"];
+	        this.status_5xx = source["status_5xx"];
+	        this.transport = source["transport"];
+	        this.client_aborts = source["client_aborts"];
+	        this.truncated = source["truncated"];
+	        this.downstream = source["downstream"];
+	        this.last_used = this.convertValues(source["last_used"], null);
+	        this.last_success = this.convertValues(source["last_success"], null);
+	        this.last_failure = this.convertValues(source["last_failure"], null);
+	        this.updated_at = this.convertValues(source["updated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TargetShadowScore {
+	    target_id: string;
+	    rule_id: string;
+	    rule_name: string;
+	    provider_id: string;
+	    provider_name: string;
+	    model_name: string;
+	    tier: number;
+	    metrics: TargetRuntimeSummary;
+	    metrics_fresh: boolean;
+	    endpoint: string;
+	    endpoint_assumed: boolean;
+	    reliability: number;
+	    latency: number;
+	    ttft: number;
+	    capacity: number;
+	    cost_efficiency: number;
+	    confidence: number;
+	    sample_count: number;
+	    overall: number;
+	    exploration_bonus: number;
+	    estimated_cost: number;
+	    cost: EffectiveCost;
+	    availability: string;
+	    reason: string;
+	    price_version: string;
+	    circuit_state?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TargetShadowScore(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target_id = source["target_id"];
+	        this.rule_id = source["rule_id"];
+	        this.rule_name = source["rule_name"];
+	        this.provider_id = source["provider_id"];
+	        this.provider_name = source["provider_name"];
+	        this.model_name = source["model_name"];
+	        this.tier = source["tier"];
+	        this.metrics = this.convertValues(source["metrics"], TargetRuntimeSummary);
+	        this.metrics_fresh = source["metrics_fresh"];
+	        this.endpoint = source["endpoint"];
+	        this.endpoint_assumed = source["endpoint_assumed"];
+	        this.reliability = source["reliability"];
+	        this.latency = source["latency"];
+	        this.ttft = source["ttft"];
+	        this.capacity = source["capacity"];
+	        this.cost_efficiency = source["cost_efficiency"];
+	        this.confidence = source["confidence"];
+	        this.sample_count = source["sample_count"];
+	        this.overall = source["overall"];
+	        this.exploration_bonus = source["exploration_bonus"];
+	        this.estimated_cost = source["estimated_cost"];
+	        this.cost = this.convertValues(source["cost"], EffectiveCost);
+	        this.availability = source["availability"];
+	        this.reason = source["reason"];
+	        this.price_version = source["price_version"];
+	        this.circuit_state = source["circuit_state"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ReplayAttemptScore {
+	    attempt: RequestLogChainEntry;
+	    target_id: string;
+	    provider_id: string;
+	    model_name: string;
+	    target_missing: boolean;
+	    provider_missing: boolean;
+	    score: TargetShadowScore;
+	    price_confidence: string;
+	    price_version: string;
+	    replay_limitation?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReplayAttemptScore(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.attempt = this.convertValues(source["attempt"], RequestLogChainEntry);
+	        this.target_id = source["target_id"];
+	        this.provider_id = source["provider_id"];
+	        this.model_name = source["model_name"];
+	        this.target_missing = source["target_missing"];
+	        this.provider_missing = source["provider_missing"];
+	        this.score = this.convertValues(source["score"], TargetShadowScore);
+	        this.price_confidence = source["price_confidence"];
+	        this.price_version = source["price_version"];
+	        this.replay_limitation = source["replay_limitation"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ReplayResult {
+	    log_id: string;
+	    timestamp: number;
+	    rule_id: string;
+	    rule_name: string;
+	    request_outcome: string;
+	    selected_target: string;
+	    endpoint: string;
+	    endpoint_assumed: boolean;
+	    attempts: ReplayAttemptScore[];
+	    warnings?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ReplayResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.log_id = source["log_id"];
+	        this.timestamp = source["timestamp"];
+	        this.rule_id = source["rule_id"];
+	        this.rule_name = source["rule_name"];
+	        this.request_outcome = source["request_outcome"];
+	        this.selected_target = source["selected_target"];
+	        this.endpoint = source["endpoint"];
+	        this.endpoint_assumed = source["endpoint_assumed"];
+	        this.attempts = this.convertValues(source["attempts"], ReplayAttemptScore);
+	        this.warnings = source["warnings"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	
 	export class RoutingSettings {
@@ -877,6 +1346,10 @@ export namespace model {
 		    return a;
 		}
 	}
+	
+	
+	
+	
 	
 	
 	export class UsageStats {

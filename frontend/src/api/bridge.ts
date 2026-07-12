@@ -147,6 +147,18 @@ export const api = {
     ensureWails()
     return wails.ReorderModelRules(ids) as Promise<model.ReorderModelRulesResult>
   },
+  getTargetDiagnostics: (): Promise<model.TargetShadowScore[]> => {
+    ensureWails()
+    return wails.GetTargetDiagnostics()
+  },
+  getModelRuleShadowComparisons: (): Promise<model.ModelRuleShadowComparison[]> => {
+    ensureWails()
+    return wails.GetModelRuleShadowComparisons() as Promise<model.ModelRuleShadowComparison[]>
+  },
+  replayLog: (id: string): Promise<model.ReplayResult> => {
+    ensureWails()
+    return wails.ReplayLog(id)
+  },
 
   // API Keys
   apiKeys: (): Promise<model.ApiKey[]> => {
@@ -164,6 +176,20 @@ export const api = {
   deleteApiKey: (id: string): Promise<void> => {
     ensureWails()
     return wails.DeleteAPIKey(id) as Promise<void>
+  },
+
+  // Prices
+  listPrices: (): Promise<model.Price[]> => {
+    ensureWails()
+    return wails.ListPrices() as Promise<model.Price[]>
+  },
+  upsertPrice: (input: model.PriceInput): Promise<model.Price> => {
+    ensureWails()
+    return wails.UpsertPrice(input) as Promise<model.Price>
+  },
+  deletePrice: (id: string): Promise<void> => {
+    ensureWails()
+    return wails.DeletePrice(id) as Promise<void>
   },
 
   // Usage & Logs

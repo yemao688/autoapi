@@ -41,6 +41,11 @@ type CircuitBreaker struct {
 	mutex               sync.Mutex
 }
 
+// StringStatus is a detached, read-only breaker view for diagnostics.
+type BreakerStatus struct {
+	State State `json:"state"`
+}
+
 // NewCircuitBreaker creates a closed circuit breaker with default settings.
 func NewCircuitBreaker() *CircuitBreaker {
 	return &CircuitBreaker{

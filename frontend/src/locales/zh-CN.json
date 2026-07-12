@@ -10,7 +10,8 @@
     "modelRules": "模型规则",
     "apiKeys": "API 密钥",
     "usage": "使用统计",
-    "settings": "设置"
+    "settings": "设置",
+    "pricing": "价格管理"
   },
   "settings": {
     "title": "设置",
@@ -171,6 +172,21 @@
     "targetRetries": "重试 {count}",
     "targetHits": "命中 {count}",
     "targetFailures": "失败 {count}",
+    "diagnostics": {
+      "score": "评分",
+      "reliability": "可靠性分",
+      "latencyScore": "延迟分",
+      "ttftScore": "TTFT 分",
+      "capacity": "容量分",
+      "costEfficiency": "成本效率分",
+      "estimatedCost": "预估成本",
+      "samples": "样本",
+      "confidence": "置信度",
+      "loading": "诊断加载中…",
+      "unavailable": "诊断暂不可用",
+      "noSamples": "暂无运行样本",
+      "priceUnknown": "价格未知"
+    },
     "stats": {
       "todaySuccessRate": "今日成功率",
       "todaySuccessRateNoData": "今日暂无完成请求",
@@ -195,6 +211,11 @@
       "timeout": "首字超时 (秒)",
       "timeoutPlaceholder": "0 = 默认 60s",
       "timeoutHelp": "获取首个响应字节的累计最大等待时间；0 表示使用默认 60 秒",
+      "strategy": "Shadow 路由策略",
+      "strategyPriority": "优先级优先（当前行为）",
+      "strategyScore": "同层级按评分",
+      "strategyCost": "同层级按成本",
+      "strategyHelp": "仅用于 Shadow 对比；生产路由顺序不变。",
       "enabled": "启用",
       "cancel": "取消",
       "save": "保存",
@@ -524,6 +545,29 @@
       "requestUri": "请求路径",
       "userAgent": "User Agent",
       "clientIp": "客户端 IP",
+      "replay": "回放评分",
+      "replayRefresh": "刷新回放",
+      "replayLoading": "评分中…",
+      "replayUnavailable": "回放暂不可用",
+      "replayOutcome": "请求结果",
+      "replaySelectedTarget": "选中目标",
+      "replayRule": "规则",
+      "replayEndpointAssumed": "端点为推断值",
+      "replayWarnings": "警告",
+      "replayAttempts": "尝试",
+      "replayTarget": "目标",
+      "replayScores": "评分（0–100）",
+      "replayEstimatedCost": "预估成本",
+      "replayPrice": "价格",
+      "replayAvailability": "可用性",
+      "replayMissingTarget": "目标已不存在",
+      "replayMissingProvider": "Provider 已不存在",
+      "replayLimitation": "回放限制",
+      "replayNoChain": "此日志没有记录的尝试链路。",
+      "replayNoRule": "此请求没有记录规则。",
+      "replayNoSamples": "此尝试没有可用的运行评分。",
+      "replayUnknown": "未知",
+      "replayPriceUnknown": "价格不可用",
       "chain": "链路",
       "attempt": "尝试 {n}",
       "triedTargets": "尝试了 {n} 个目标",
@@ -637,7 +681,9 @@
     "apiKeyDeleted": "令牌已删除",
     "copiedToClipboard": "已复制到剪贴板",
     "copyFailed": "复制失败",
-    "logsPurged": "已清理 {count} 条日志"
+    "logsPurged": "已清理 {count} 条日志",
+    "priceSaved": "价格已保存",
+    "priceDeleted": "价格已删除"
   },
   "confirm": {
     "defaultTitle": "确认",
@@ -655,7 +701,9 @@
     "deleteApiKeyMessage": "确定删除令牌「{name}」？此操作不可撤销。",
     "purgeLogsTitle": "清理历史日志",
     "purgeLogsMessage": "确定清理 90 天前的请求日志？此操作不可撤销。",
-    "purgeConfirm": "清理"
+    "purgeConfirm": "清理",
+    "deletePriceTitle": "删除价格",
+    "deletePriceMessage": "确定删除模型「{model}」的价格记录？此操作不可撤销。"
   },
   "theme": {
     "light": "浅色",
@@ -671,5 +719,57 @@
     "hoursAgo": "{n} 小时前",
     "daysAgo": "{n} 天前",
     "monthsAgo": "{n} 个月前"
+  },
+  "pricing": {
+    "title": "价格管理",
+    "subtitle": "{count} 条价格记录",
+    "add": "添加价格",
+    "loading": "加载中…",
+    "loadFailed": "加载失败：{error}",
+    "searchPlaceholder": "搜索模型、上游或端点",
+    "empty": "暂无价格记录",
+    "globalPrice": "全局（所有上游）",
+    "columns": {
+      "provider": "上游",
+      "upstreamModel": "上游模型",
+      "endpoint": "端点",
+      "billingMode": "计费方式",
+      "inputPrice": "输入价格",
+      "outputPrice": "输出价格",
+      "effective": "生效时间",
+      "expires": "过期时间",
+      "actions": "操作",
+      "status": "状态"
+    },
+    "modal": {
+      "add": "添加价格",
+      "edit": "编辑价格",
+      "provider": "上游",
+      "upstreamModel": "上游模型",
+      "upstreamModelPlaceholder": "如 gpt-4o",
+      "endpoint": "端点类型",
+      "endpointPlaceholder": "如 chat, embedding",
+      "billingMode": "计费方式",
+      "inputPrice": "输入价格 ($/M tokens)",
+      "outputPrice": "输出价格 ($/M tokens)",
+      "effective": "生效时间",
+      "expires": "过期时间",
+      "source": "来源",
+      "sourcePlaceholder": "如 official, manual",
+      "version": "版本",
+      "versionPlaceholder": "如 2025-07"
+    },
+    "billingModes": {
+      "token": "按 Token",
+      "request": "按请求"
+    },
+    "emptyValue": "—",
+    "pricePerMillion": "${value}/M",
+    "invalidDate": "请输入有效的本地日期和时间",
+    "status": {
+      "active": "当前生效",
+      "future": "尚未生效",
+      "expired": "已过期"
+    }
   }
 }

@@ -22,7 +22,7 @@ const {
   data: rules,
   loading: rulesLoading,
   error: rulesError,
-  execute: loadRules,
+  execute: fetchRules,
 } = useApi(() => api.modelRules())
 
 const {
@@ -43,10 +43,12 @@ const form = ref<{
   name: string
   enabled: boolean
   first_byte_timeout_seconds: number
+  strategy: string
 }>({
   name: '',
   enabled: true,
   first_byte_timeout_seconds: 0,
+  strategy: 'priority_first',
 })
 const formTargets = ref<model.ModelRuleTarget[]>([])
 
@@ -55,6 +57,14 @@ const targetModalOpen = ref(false)
 const targetModalRule = ref<model.ModelRule | null>(null)
 const targetModalTarget = ref<model.ModelRuleTarget | null>(null)
 const targetSaving = ref(false)
+const diagnostics = ref<model.TargetShadowScore[]>([])
+const diagnosticsLoading = ref(false)
+const diagnosticsError = ref(false)
+
+// sample_count is added by the backend lane. Keep this narrow compatibility
+// type local until the generated models are regenerated; no fallback aliases or
+// untyped diagnostic objects are used.
+type TargetShadowScoreWithSampleCount = model.TargetShadowScore & { sample_count?: number }
 
 // The view is driven by a single interaction state. Server responses are merged
 // into this list by ID so nested target Sortable instances stay bound to the
@@ -111,12 +121,33 @@ function cloneTarget(target: model.ModelRuleTarget): model.ModelRuleTarget {
     provider_id: target.provider_id,
     model_name: target.model_name,
     max_retries: target.max_retries,
+    tier: target.tier,
     hit_count: target.hit_count,
     failure_count: target.failure_count,
     enabled: target.enabled,
   })
   clone.first_token_timeout_seconds = target.first_token_timeout_seconds ?? 0
   return clone
+}
+
+// Convert an output ModelRuleTarget to the input payload used by Create/Update.
+// Read-only fields (rule_id, hit_count, failure_count) are dropped. Existing
+// targets carry their tier explicitly (including 0); new targets without a tier
+// leave it undefined so the store falls back to positional ordering.
+function targetToInput(target: model.ModelRuleTarget): model.ModelRuleTargetInput {
+  return new model.ModelRuleTargetInput({
+    id: target.id || '',
+    provider_id: target.provider_id,
+    model_name: target.model_name,
+    max_retries: target.max_retries,
+    tier: typeof target.tier === 'number' ? target.tier : undefined,
+    first_token_timeout_seconds: target.first_token_timeout_seconds ?? 0,
+    enabled: target.enabled,
+  })
+}
+
+function targetsToInput(targets: model.ModelRuleTarget[]): model.ModelRuleTargetInput[] {
+  return targets.map(targetToInput)
 }
 
 function targetIconStyle(providerId: string) {
@@ -143,12 +174,70 @@ function formatSuccessRate(rule: model.ModelRule): string {
   return `${rate.toFixed(1)}%`
 }
 
+function diagnosticKey(ruleId: string, targetId: string): string {
+  return `${ruleId}\u0000${targetId}`
+}
+
+const diagnosticsMap = computed(() => {
+  const map = new Map<string, model.TargetShadowScore>()
+  for (const item of diagnostics.value) {
+    map.set(diagnosticKey(item.rule_id, item.target_id), item)
+  }
+  return map
+})
+
+function diagnosticFor(rule: model.ModelRule, target: model.ModelRuleTarget): model.TargetShadowScore | undefined {
+  return diagnosticsMap.value.get(diagnosticKey(rule.id, target.id))
+}
+
+function diagnosticNumber(value: number | undefined, suffix = ''): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return `${value % 1 === 0 ? value : value.toFixed(1)}${suffix}`
+}
+
+function diagnosticScore(value: number | undefined): string {
+  return diagnosticNumber(value)
+}
+
+function diagnosticSampleCount(diagnostic?: model.TargetShadowScore): number | undefined {
+  return (diagnostic as TargetShadowScoreWithSampleCount | undefined)?.sample_count
+}
+
+function diagnosticStatus(rule: model.ModelRule, target: model.ModelRuleTarget): string {
+  if (diagnosticsLoading.value) return t('modelRules.diagnostics.loading')
+  if (diagnosticsError.value) return t('modelRules.diagnostics.unavailable')
+  const diagnostic = diagnosticFor(rule, target)
+  if (!diagnostic || !diagnostic.metrics_fresh) return t('modelRules.diagnostics.noSamples')
+  return ''
+}
+
+async function loadDiagnostics() {
+  diagnosticsLoading.value = true
+  diagnosticsError.value = false
+  try {
+    diagnostics.value = await api.getTargetDiagnostics()
+  } catch {
+    // Diagnostics are optional and must never block or replace rules.
+    diagnostics.value = []
+    diagnosticsError.value = true
+  } finally {
+    diagnosticsLoading.value = false
+  }
+}
+
+async function loadRules() {
+  const result = await fetchRules()
+  void loadDiagnostics()
+  return result
+}
+
 function openCreate() {
   editingId.value = ''
   form.value = {
     name: '',
     enabled: true,
     first_byte_timeout_seconds: 0,
+    strategy: 'priority_first',
   }
   // New rules still need at least one default target; it is managed inline afterward.
   formTargets.value = [cloneTarget(new model.ModelRuleTarget({ provider_id: '', model_name: '', max_retries: 0, enabled: true }))]
@@ -161,6 +250,7 @@ function openEdit(rule: model.ModelRule) {
     name: rule.name,
     enabled: rule.enabled,
     first_byte_timeout_seconds: rule.first_byte_timeout_seconds || 0,
+    strategy: rule.strategy || 'priority_first',
   }
   // Preserve existing targets even though they are edited outside the modal.
   formTargets.value = rule.targets.map(cloneTarget)
@@ -174,7 +264,8 @@ async function saveRule() {
       name: form.value.name,
       enabled: form.value.enabled,
       first_byte_timeout_seconds: form.value.first_byte_timeout_seconds,
-      targets: formTargets.value,
+      strategy: form.value.strategy || 'priority_first',
+      targets: targetsToInput(formTargets.value),
     })
     if (editingId.value) {
       await api.updateModelRule(editingId.value, input)
@@ -197,7 +288,9 @@ async function toggleRule(rule: model.ModelRule) {
     const input = new model.ModelRuleInput({
       name: full.name,
       enabled: !full.enabled,
-      targets: full.targets,
+      first_byte_timeout_seconds: full.first_byte_timeout_seconds,
+      strategy: full.strategy || 'priority_first',
+      targets: targetsToInput(full.targets),
     })
     await api.updateModelRule(rule.id, input)
     await loadRules()
@@ -252,7 +345,8 @@ async function updateRuleTargets(rule: model.ModelRule, targets: model.ModelRule
       name: rule.name,
       enabled: rule.enabled,
       first_byte_timeout_seconds: rule.first_byte_timeout_seconds,
-      targets,
+      strategy: rule.strategy || 'priority_first',
+      targets: targetsToInput(targets),
     })
     await api.updateModelRule(rule.id, input)
     await loadRules()
@@ -477,6 +571,7 @@ function importJSON() {
           provider_id: raw.provider_id || '',
           model_name: raw.model_name || '',
           max_retries: typeof raw.max_retries === 'number' ? raw.max_retries : 0,
+          tier: typeof raw.tier === 'number' ? raw.tier : undefined,
           enabled: raw.enabled !== false,
           hit_count: typeof raw.hit_count === 'number' ? raw.hit_count : 0,
           failure_count: typeof raw.failure_count === 'number' ? raw.failure_count : 0,
@@ -485,7 +580,8 @@ function importJSON() {
         inputs.push(new model.ModelRuleInput({
           name: item.name || '',
           enabled: item.enabled !== false,
-          targets: targets.map(cloneTarget),
+          strategy: typeof item.strategy === 'string' ? item.strategy : 'priority_first',
+          targets: targetsToInput(targets),
         }))
       }
       // Create in reverse so the backend's "newest at top" ordering preserves
@@ -519,7 +615,7 @@ function closeModal() {
 }
 
 onMounted(() => {
-  loadRules()
+  void loadRules()
   loadProviders()
   loadSettings().catch((e: any) => toast.push(t('toast.loadSettingsFailed') + ': ' + (e?.message || e?.toString() || ''), 'error'))
 })
@@ -537,6 +633,7 @@ function syncRuleFromSource(existing: model.ModelRule, source: model.ModelRule) 
   existing.name = source.name
   existing.enabled = source.enabled
   existing.first_byte_timeout_seconds = source.first_byte_timeout_seconds
+  existing.strategy = source.strategy || 'priority_first'
   existing.created_at = source.created_at
   existing.updated_at = source.updated_at
   syncTargets(existing, source)
@@ -549,6 +646,7 @@ function syncRuleFields(existing: model.ModelRule, source: model.ModelRule) {
   existing.name = source.name
   existing.enabled = source.enabled
   existing.first_byte_timeout_seconds = source.first_byte_timeout_seconds
+  existing.strategy = source.strategy || 'priority_first'
   syncTargets(existing, source)
 }
 
@@ -570,6 +668,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
     et.model_name = st.model_name
     et.max_retries = st.max_retries
     et.first_token_timeout_seconds = st.first_token_timeout_seconds
+    et.tier = st.tier
     et.hit_count = st.hit_count
     et.failure_count = st.failure_count
     et.enabled = st.enabled
@@ -694,6 +793,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                       {{ providerLetter(targetProviderName(target)) }}
                     </div>
                     <div class="target-info">
+                      <div class="target-primary-line">
                       <span class="target-provider">{{ targetProviderName(target) }}</span>
                       <span class="target-model">{{ target.model_name || t('modelRules.targetDefault') }}</span>
                       <span v-if="target.max_retries > 0" class="badge mono">{{ t('modelRules.targetRetries', { count: target.max_retries }) }}</span>
@@ -703,6 +803,21 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                         class="badge badge-provider-disabled"
                         :title="t('modelRules.targets.providerDisabled')"
                       >{{ t('modelRules.targets.providerDisabled') }}</span>
+                      </div>
+                      <div class="target-diagnostics" :class="{ 'target-diagnostics-empty': !diagnosticFor(rule, target) || !diagnosticFor(rule, target)?.metrics_fresh }">
+                        <template v-if="diagnosticFor(rule, target)?.metrics_fresh">
+                          <span class="diag-score">{{ t('modelRules.diagnostics.score') }} {{ diagnosticScore(diagnosticFor(rule, target)?.overall) }}</span>
+                          <span>{{ t('modelRules.diagnostics.reliability') }} {{ diagnosticScore(diagnosticFor(rule, target)?.reliability) }}</span>
+                          <span>{{ t('modelRules.diagnostics.latencyScore') }} {{ diagnosticScore(diagnosticFor(rule, target)?.latency) }}</span>
+                          <span>{{ t('modelRules.diagnostics.ttftScore') }} {{ diagnosticScore(diagnosticFor(rule, target)?.ttft) }}</span>
+                          <span>{{ t('modelRules.diagnostics.capacity') }} {{ diagnosticScore(diagnosticFor(rule, target)?.capacity) }}</span>
+                          <span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ diagnosticScore(diagnosticFor(rule, target)?.cost_efficiency) }}</span>
+                          <span>{{ t('modelRules.diagnostics.estimatedCost') }} {{ diagnosticNumber(diagnosticFor(rule, target)?.estimated_cost, ' USD') }}</span>
+                          <span class="diag-samples">{{ t('modelRules.diagnostics.samples') }} {{ diagnosticNumber(diagnosticSampleCount(diagnosticFor(rule, target))) }} · {{ t('modelRules.diagnostics.confidence') }} {{ diagnosticScore(diagnosticFor(rule, target)?.confidence) }}</span>
+                          <span v-if="diagnosticFor(rule, target)?.cost.available === false" class="diag-note">{{ t('modelRules.diagnostics.priceUnknown') }}</span>
+                        </template>
+                        <span v-else class="diag-note">{{ diagnosticStatus(rule, target) }}</span>
+                      </div>
                     </div>
                     <div class="target-counters">
                       <span>{{ t('modelRules.targetHits', { count: formatHits(target.hit_count) }) }}</span>
@@ -778,6 +893,15 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
           <label class="field-label">{{ t('modelRules.modal.name') }}</label>
           <input v-model="form.name" class="input" :placeholder="t('modelRules.modal.namePlaceholder')">
           <div class="text-muted" style="font-size: 11px; margin-top: 4px;">{{ t('modelRules.modal.nameHelp') }}</div>
+        </div>
+        <div class="field">
+          <label class="field-label">{{ t('modelRules.modal.strategy') }}</label>
+          <select v-model="form.strategy" class="input" :disabled="saving">
+            <option value="priority_first">{{ t('modelRules.modal.strategyPriority') }}</option>
+            <option value="score_within_tier">{{ t('modelRules.modal.strategyScore') }}</option>
+            <option value="cost_first">{{ t('modelRules.modal.strategyCost') }}</option>
+          </select>
+          <div class="text-muted" style="font-size: 11px; margin-top: 4px;">{{ t('modelRules.modal.strategyHelp') }}</div>
         </div>
         <div class="field">
           <label class="field-label">{{ t('modelRules.modal.timeout') }}</label>
@@ -965,6 +1089,30 @@ html[data-theme="dark"] .rule-drag-handle:hover {
   min-width: 0;
   flex-wrap: wrap;
 }
+.target-primary-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.target-diagnostics {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.target-diagnostics-empty { opacity: 0.72; }
+.diag-score { color: var(--fg); font-weight: 600; }
+.diag-samples { opacity: 0.8; }
+.diag-note { color: var(--warning); font-family: inherit; }
 .target-provider {
   font-size: 13px;
   font-weight: 500;
@@ -1133,6 +1281,10 @@ html[data-theme="dark"] .badge-provider-disabled {
   }
   .target-info {
     flex: 1;
+  }
+  .target-diagnostics {
+    flex-basis: 100%;
+    padding-left: calc(var(--target-icon-size) + var(--target-row-gap));
   }
   .target-counters {
     order: 3;

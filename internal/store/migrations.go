@@ -367,6 +367,65 @@ ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
 		SQL:             `SELECT 1;`,
 		Hook:            ensureDisplayOrder,
 	},
+	{
+		// Phase 1B: provider + upstream model + endpoint price records.
+		// ProviderID is NULL for a global fallback. The unique expression
+		// index prevents duplicate global or provider-specific records.
+		ID: "018_price_schema",
+		SQL: `
+CREATE TABLE IF NOT EXISTS prices (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT REFERENCES providers(id) ON DELETE CASCADE,
+    upstream_model TEXT NOT NULL,
+    endpoint_kind TEXT NOT NULL DEFAULT '',
+    billing_mode TEXT NOT NULL DEFAULT 'unknown' CHECK(billing_mode IN ('token','request','quota','custom','unknown')),
+    input_price_per_million REAL NOT NULL DEFAULT 0 CHECK(input_price_per_million >= 0 AND input_price_per_million = input_price_per_million AND input_price_per_million < 1.7976931348623157e308),
+    output_price_per_million REAL NOT NULL DEFAULT 0 CHECK(output_price_per_million >= 0 AND output_price_per_million = output_price_per_million AND output_price_per_million < 1.7976931348623157e308),
+    cache_read_price_per_million REAL NOT NULL DEFAULT 0 CHECK(cache_read_price_per_million >= 0 AND cache_read_price_per_million = cache_read_price_per_million AND cache_read_price_per_million < 1.7976931348623157e308),
+    cache_write_price_per_million REAL NOT NULL DEFAULT 0 CHECK(cache_write_price_per_million >= 0 AND cache_write_price_per_million = cache_write_price_per_million AND cache_write_price_per_million < 1.7976931348623157e308),
+    request_price_per_request REAL NOT NULL DEFAULT 0 CHECK(request_price_per_request >= 0 AND request_price_per_request = request_price_per_request AND request_price_per_request < 1.7976931348623157e308),
+    currency TEXT NOT NULL DEFAULT 'USD',
+    source TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL DEFAULT '',
+    effective_at INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    confidence TEXT NOT NULL DEFAULT 'unknown',
+    updated_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    CHECK(expires_at = 0 OR effective_at <= expires_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prices_key ON prices(COALESCE(provider_id, ''), upstream_model, endpoint_kind);
+`,
+	},
+	{
+		ID: "019_target_runtime_summary",
+		SQL: `CREATE TABLE IF NOT EXISTS target_runtime_summary (
+    target_id TEXT NOT NULL DEFAULT '',
+    provider_id TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    requests INTEGER NOT NULL DEFAULT 0 CHECK(requests >= 0),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    successes INTEGER NOT NULL DEFAULT 0 CHECK(successes >= 0),
+    failures INTEGER NOT NULL DEFAULT 0 CHECK(failures >= 0),
+    status_429 INTEGER NOT NULL DEFAULT 0 CHECK(status_429 >= 0),
+    status_5xx INTEGER NOT NULL DEFAULT 0 CHECK(status_5xx >= 0),
+    transport INTEGER NOT NULL DEFAULT 0 CHECK(transport >= 0),
+    client_aborts INTEGER NOT NULL DEFAULT 0 CHECK(client_aborts >= 0),
+    truncated INTEGER NOT NULL DEFAULT 0 CHECK(truncated >= 0),
+    downstream INTEGER NOT NULL DEFAULT 0 CHECK(downstream >= 0),
+    last_used INTEGER NOT NULL DEFAULT 0,
+    last_success INTEGER NOT NULL DEFAULT 0 CHECK(last_success = 0 OR last_success <= last_used),
+    last_failure INTEGER NOT NULL DEFAULT 0 CHECK(last_failure = 0 OR last_failure <= last_used),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(target_id, provider_id, model_name, endpoint)
+);`,
+	},
+	{
+		ID:              "020_model_rule_strategy",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "model_rules", "strategy") },
+		SQL:             `ALTER TABLE model_rules ADD COLUMN strategy TEXT NOT NULL DEFAULT 'priority_first';`,
+	},
 }
 
 // backfillCost recomputes cost for historical request_logs rows that have

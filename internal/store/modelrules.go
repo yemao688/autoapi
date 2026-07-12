@@ -16,7 +16,7 @@ import (
 // enabled rules and is the model name exposed to clients.
 func (s *Store) ListModelRules() ([]model.ModelRule, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, enabled, first_byte_timeout_ms, created_at, updated_at
+		SELECT id, name, enabled, first_byte_timeout_ms, strategy, created_at, updated_at
 		FROM model_rules ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list model rules: %w", err)
@@ -27,11 +27,12 @@ func (s *Store) ListModelRules() ([]model.ModelRule, error) {
 	for rows.Next() {
 		var r model.ModelRule
 		var firstByteTimeoutMs int64
-		if err := rows.Scan(&r.ID, &r.Name, &r.Enabled, &firstByteTimeoutMs, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Enabled, &firstByteTimeoutMs, &r.Strategy, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("store: scan model rule: %w", err)
 		}
 		// Stored as milliseconds; exposed to clients as seconds.
 		r.FirstByteTimeoutSeconds = int(firstByteTimeoutMs / 1000)
+		r.Strategy = normalizeStrategy(r.Strategy)
 		rules = append(rules, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -58,7 +59,7 @@ func (s *Store) ListModelRules() ([]model.ModelRule, error) {
 // then id DESC). Proxy matching and /v1/models continue to use ListModelRules.
 func (s *Store) ListModelRulesForDisplay() ([]model.ModelRule, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, enabled, first_byte_timeout_ms, created_at, updated_at
+		SELECT id, name, enabled, first_byte_timeout_ms, strategy, created_at, updated_at
 		FROM model_rules ORDER BY display_order ASC, created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list model rules for display: %w", err)
@@ -69,11 +70,12 @@ func (s *Store) ListModelRulesForDisplay() ([]model.ModelRule, error) {
 	for rows.Next() {
 		var r model.ModelRule
 		var firstByteTimeoutMs int64
-		if err := rows.Scan(&r.ID, &r.Name, &r.Enabled, &firstByteTimeoutMs, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Enabled, &firstByteTimeoutMs, &r.Strategy, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("store: scan model rule for display: %w", err)
 		}
 		// Stored as milliseconds; exposed to clients as seconds.
 		r.FirstByteTimeoutSeconds = int(firstByteTimeoutMs / 1000)
+		r.Strategy = normalizeStrategy(r.Strategy)
 		rules = append(rules, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -103,18 +105,19 @@ func (s *Store) ListModelRulesForDisplay() ([]model.ModelRule, error) {
 // GetModelRule returns a single model rule with targets.
 func (s *Store) GetModelRule(id string) (*model.ModelRule, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, enabled, first_byte_timeout_ms, created_at, updated_at
+		SELECT id, name, enabled, first_byte_timeout_ms, strategy, created_at, updated_at
 		FROM model_rules WHERE id = ?`, id)
 
 	var r model.ModelRule
 	var firstByteTimeoutMs int64
-	if err := row.Scan(&r.ID, &r.Name, &r.Enabled, &firstByteTimeoutMs, &r.CreatedAt, &r.UpdatedAt); err != nil {
+	if err := row.Scan(&r.ID, &r.Name, &r.Enabled, &firstByteTimeoutMs, &r.Strategy, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("store: get model rule %q: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("store: get model rule %q: %w", id, err)
 	}
 	r.FirstByteTimeoutSeconds = int(firstByteTimeoutMs / 1000)
+	r.Strategy = normalizeStrategy(r.Strategy)
 
 	targets, err := s.listTargets(r.ID)
 	if err != nil {
@@ -135,6 +138,7 @@ func (s *Store) CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, erro
 		Name:                    in.Name,
 		Enabled:                 in.Enabled,
 		FirstByteTimeoutSeconds: in.FirstByteTimeoutSeconds,
+		Strategy:                normalizeStrategy(in.Strategy),
 		CreatedAt:               now,
 		UpdatedAt:               now,
 	}
@@ -156,9 +160,9 @@ func (s *Store) CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, erro
 			return err
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO model_rules (id, name, enabled, first_byte_timeout_ms, display_order, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			r.ID, r.Name, boolInt(r.Enabled), int64(r.FirstByteTimeoutSeconds)*1000, 0, r.CreatedAt, r.UpdatedAt); err != nil {
+			INSERT INTO model_rules (id, name, enabled, first_byte_timeout_ms, strategy, display_order, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.ID, r.Name, boolInt(r.Enabled), int64(r.FirstByteTimeoutSeconds)*1000, r.Strategy, 0, r.CreatedAt, r.UpdatedAt); err != nil {
 			return err
 		}
 		targets, err := s.insertTargets(tx, r.ID, in.Targets)
@@ -190,9 +194,9 @@ func (s *Store) UpdateModelRule(id string, in model.ModelRuleInput) (*model.Mode
 			return fmt.Errorf("store: model rule name %q is already in use", in.Name)
 		}
 		res, err := tx.Exec(`
-			UPDATE model_rules SET name=?, enabled=?, first_byte_timeout_ms=?, updated_at=?
+			UPDATE model_rules SET name=?, enabled=?, first_byte_timeout_ms=?, strategy=?, updated_at=?
 			WHERE id=?`,
-			in.Name, boolInt(in.Enabled), int64(in.FirstByteTimeoutSeconds)*1000, now, id)
+			in.Name, boolInt(in.Enabled), int64(in.FirstByteTimeoutSeconds)*1000, normalizeStrategy(in.Strategy), now, id)
 		if err != nil {
 			return err
 		}
@@ -213,6 +217,15 @@ func (s *Store) UpdateModelRule(id string, in model.ModelRuleInput) (*model.Mode
 	}
 	slog.Info("store: model rule updated", "id", id, "name", in.Name)
 	return s.GetModelRule(id)
+}
+
+func normalizeStrategy(s string) string {
+	switch s {
+	case "score_within_tier", "cost_first", "priority_first":
+		return s
+	default:
+		return "priority_first"
+	}
 }
 
 // DeleteModelRule removes a model rule (targets cascade).
@@ -297,8 +310,8 @@ func (s *Store) ReorderModelRules(orderedIDs []string) error {
 
 func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
 	rows, err := s.db.Query(`
-		SELECT id, rule_id, provider_id, model_name, timeout_ms, max_retries, hit_count, failure_count, enabled
-		FROM rule_targets WHERE rule_id = ? ORDER BY tier ASC`, ruleID)
+		SELECT id, rule_id, provider_id, model_name, timeout_ms, tier, max_retries, hit_count, failure_count, enabled
+		FROM rule_targets WHERE rule_id = ? ORDER BY tier ASC, rowid ASC`, ruleID)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +321,7 @@ func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
 	for rows.Next() {
 		var t model.ModelRuleTarget
 		var timeoutMs int64
-		if err := rows.Scan(&t.ID, &t.RuleID, &t.ProviderID, &t.ModelName, &timeoutMs, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
+		if err := rows.Scan(&t.ID, &t.RuleID, &t.ProviderID, &t.ModelName, &timeoutMs, &t.Tier, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
 			return nil, err
 		}
 		t.FirstTokenTimeoutSeconds = int(timeoutMs / 1000)
@@ -334,48 +347,51 @@ func targetTimeoutMillis(seconds int) (int64, error) {
 //
 // CONTRACT (api consumer-facing): every target inserted here is treated as
 // "new". The Go zero-value for Enabled is false, so a caller that omits
-// `Enabled` (or sends a freshly-constructed ModelRuleTarget) would
-// otherwise produce a disabled target. We coerce Enabled=true on insert so
-// a brand-new target is always usable without the caller having to opt in.
-// Toggling to false happens via the UPDATE path on a subsequent
-// UpdateModelRule. This matches the spec "default to true when created
-// without an explicit value" — the "explicit false" case is the supported
-// way to create a disabled target and is exercised by re-issuing
-// UpdateModelRule with Enabled: false.
-func (s *Store) insertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTarget) ([]model.ModelRuleTarget, error) {
+// `Enabled` (or sends a freshly-constructed ModelRuleTargetInput) would
+// otherwise produce a disabled target. We coerce Enabled=true on insert so a
+// brand-new target is always usable without the caller having to opt in. A nil
+// `Tier` falls back to the slice index (legacy positional ordering); any
+// explicit value (including 0) is stored verbatim. Toggling to false happens via
+// the UPDATE path on a subsequent UpdateModelRule. This matches the spec
+// "default to true when created without an explicit value" — the "explicit
+// false" case is the supported way to create a disabled target and is exercised
+// by re-issuing UpdateModelRule with Enabled: false.
+func (s *Store) insertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTargetInput) ([]model.ModelRuleTarget, error) {
 	out := make([]model.ModelRuleTarget, len(in))
 	for i, t := range in {
 		timeoutMs, err := targetTimeoutMillis(t.FirstTokenTimeoutSeconds)
 		if err != nil {
 			return nil, err
 		}
-		// Defense in depth: the frontend clamps to >= 0, but a negative value
-		// would make the retry loop body execute zero times (target silently
-		// skipped). Clamp rather than error — friendlier for API consumers.
 		if t.MaxRetries < 0 {
 			t.MaxRetries = 0
 		}
-		// New target path: default-to-true (see CONTRACT above). Without this
-		// line, a caller that constructs ModelRuleTarget{ProviderID: "p1"} and
-		// submits it would get a disabled row that the proxy silently drops.
 		if !t.Enabled {
 			t.Enabled = true
 		}
-		t.ID = makeID()
-		t.RuleID = ruleID
-		// `tier` is the internal positional sort key (kept from the slice
-		// index so the target order round-trips through Create/UpdateModelRule);
-		// hit_count/failure_count are managed by IncrementTargetStats and
-		// default to 0 on insert. The legacy `timeout_ms` column is no
-		// longer written (per-target timeout moved to the rule level);
-		// its default of 0 is preserved.
+		// nil tier means the legacy "use positional order" sentinel; any
+		// explicit value (including 0) is stored verbatim.
+		effectiveTier := i
+		if t.Tier != nil {
+			effectiveTier = *t.Tier
+		}
+		id := makeID()
 		if _, err := tx.Exec(`
 			INSERT INTO rule_targets (id, rule_id, provider_id, model_name, timeout_ms, tier, max_retries, enabled)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, t.RuleID, t.ProviderID, t.ModelName, timeoutMs, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+			id, ruleID, t.ProviderID, t.ModelName, timeoutMs, effectiveTier, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 			return nil, err
 		}
-		out[i] = t
+		out[i] = model.ModelRuleTarget{
+			ID:                       id,
+			RuleID:                   ruleID,
+			ProviderID:               t.ProviderID,
+			ModelName:                t.ModelName,
+			MaxRetries:               t.MaxRetries,
+			Tier:                     effectiveTier,
+			FirstTokenTimeoutSeconds: t.FirstTokenTimeoutSeconds,
+			Enabled:                  t.Enabled,
+		}
 	}
 	return out, nil
 }
@@ -393,12 +409,14 @@ func (s *Store) insertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 //   - Existing rows whose IDs are NOT present in `in` are DELETEd — the user
 //     removed them.
 //
-// `tier` is always written from the slice index `i` on both UPDATE and INSERT
-// paths so that a target whose position changed still has its row updated
-// (the ID round-trips, but tier moves with it).
+// `tier` is written from the slice index `i` on both UPDATE and INSERT paths
+// when the caller leaves it nil (legacy positional ordering). An explicit tier
+// (including 0) is written verbatim so priority groups round-trip. The ID
+// round-trips; tier moves with the position only when the caller relies on the
+// default.
 //
 // max_retries is clamped to >= 0 — see insertTargets for the rationale.
-func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTarget) ([]model.ModelRuleTarget, error) {
+func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTargetInput) ([]model.ModelRuleTarget, error) {
 	out := make([]model.ModelRuleTarget, len(in))
 
 	// Clamp max_retries up-front so the clamp applies to both UPDATE and
@@ -445,8 +463,14 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 		if err != nil {
 			return nil, err
 		}
-		t.RuleID = ruleID
-		if t.ID == "" {
+		// nil tier means the legacy "use positional order" sentinel; any
+		// explicit value (including 0) is stored verbatim.
+		effectiveTier := i
+		if t.Tier != nil {
+			effectiveTier = *t.Tier
+		}
+		id := t.ID
+		if id == "" {
 			// New target: INSERT with a fresh ID. Apply the default-to-enabled
 			// heuristic (same CONTRACT as insertTargets) so a caller that omits
 			// `Enabled` still gets a usable target. Toggling to false happens
@@ -454,11 +478,11 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 			if !t.Enabled {
 				t.Enabled = true
 			}
-			t.ID = makeID()
+			id = makeID()
 			if _, err := tx.Exec(`
 				INSERT INTO rule_targets (id, rule_id, provider_id, model_name, timeout_ms, tier, max_retries, enabled)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				t.ID, t.RuleID, t.ProviderID, t.ModelName, timeoutMs, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+				id, ruleID, t.ProviderID, t.ModelName, timeoutMs, effectiveTier, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 				return nil, err
 			}
 		} else {
@@ -474,11 +498,20 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 				UPDATE rule_targets
 				SET provider_id = ?, model_name = ?, timeout_ms = ?, tier = ?, max_retries = ?, enabled = ?
 				WHERE id = ? AND rule_id = ?`,
-				t.ProviderID, t.ModelName, timeoutMs, i, t.MaxRetries, boolInt(t.Enabled), t.ID, t.RuleID); err != nil {
+				t.ProviderID, t.ModelName, timeoutMs, effectiveTier, t.MaxRetries, boolInt(t.Enabled), id, ruleID); err != nil {
 				return nil, err
 			}
 		}
-		out[i] = t
+		out[i] = model.ModelRuleTarget{
+			ID:                       id,
+			RuleID:                   ruleID,
+			ProviderID:               t.ProviderID,
+			ModelName:                t.ModelName,
+			MaxRetries:               t.MaxRetries,
+			Tier:                     effectiveTier,
+			FirstTokenTimeoutSeconds: t.FirstTokenTimeoutSeconds,
+			Enabled:                  t.Enabled,
+		}
 	}
 	return out, nil
 }

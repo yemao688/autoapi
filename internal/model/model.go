@@ -109,6 +109,7 @@ type ModelRule struct {
 	Name                    string `json:"name"`
 	Enabled                 bool   `json:"enabled"`
 	FirstByteTimeoutSeconds int    `json:"first_byte_timeout_seconds"`
+	Strategy                string `json:"strategy"`
 	CreatedAt               int64  `json:"created_at"`
 	UpdatedAt               int64  `json:"updated_at"`
 
@@ -134,6 +135,10 @@ type ModelRuleTarget struct {
 	ProviderID string `json:"provider_id"`
 	ModelName  string `json:"model_name"`
 	MaxRetries int    `json:"max_retries"` // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
+	// Tier is the user-configurable priority group. Smaller values are tried
+	// first. The stored value is always an int; it is 0 for the highest-priority
+	// group (or for a target that accepted the legacy positional default).
+	Tier int `json:"tier"`
 	// FirstTokenTimeoutSeconds caps each attempt until its first upstream
 	// response-body byte. Zero inherits the rule cumulative budget. It is
 	// persisted in the legacy rule_targets.timeout_ms column.
@@ -141,6 +146,21 @@ type ModelRuleTarget struct {
 	HitCount                 int64 `json:"hit_count"`     // incremented once on successful dispatch
 	FailureCount             int64 `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
 	Enabled                  bool  `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
+}
+
+// ModelRuleTargetInput is the payload for creating or updating a target.
+// Tier is a pointer so that a missing tier (nil) can be distinguished from an
+// explicit tier of 0. When Tier is nil, the store falls back to the legacy
+// positional order (slice index). The output ModelRuleTarget.Tier is always an
+// int that reflects the resolved value.
+type ModelRuleTargetInput struct {
+	ID                       string `json:"id"`
+	ProviderID               string `json:"provider_id"`
+	ModelName                string `json:"model_name"`
+	MaxRetries               int    `json:"max_retries"`
+	Tier                     *int   `json:"tier"`
+	FirstTokenTimeoutSeconds int    `json:"first_token_timeout_seconds"`
+	Enabled                  bool   `json:"enabled"`
 }
 
 // RequestLog is one proxied request through the gateway.
@@ -208,15 +228,71 @@ type RequestLogChainEntry struct {
 	FirstTokenMs int    `json:"first_token_ms"` // TTFT for this chain entry (streaming); 0 for non-streaming or failed attempts
 }
 
-// RequestOutcome is the categorical completion state of an attempt.
+// AttemptOutcome is the categorical completion state of a single attempt.
+type AttemptOutcome string
+
+const (
+	AttemptOutcomeSuccess         AttemptOutcome = "success"
+	AttemptOutcomeRetryable       AttemptOutcome = "retryable"
+	AttemptOutcomeNonRetryable    AttemptOutcome = "non_retryable"
+	AttemptOutcomeCircuitOpen     AttemptOutcome = "circuit_open"
+	AttemptOutcomePreflightError  AttemptOutcome = "preflight_error"
+	AttemptOutcomeClientAbort     AttemptOutcome = "client_abort"
+	AttemptOutcomeTruncated       AttemptOutcome = "truncated"
+	AttemptOutcomeDownstreamError AttemptOutcome = "downstream_error"
+	AttemptOutcomeUnknown         AttemptOutcome = "unknown"
+
+	// Legacy aliases (kept for compatibility with existing proxy code and tests).
+	// Deprecated: use the AttemptOutcome* constants instead.
+	OutcomeSuccess         = AttemptOutcomeSuccess
+	OutcomeTruncated       = AttemptOutcomeTruncated
+	OutcomeDownstreamError = AttemptOutcomeDownstreamError
+	OutcomeClientAbort     = AttemptOutcomeClientAbort
+)
+
+func (o AttemptOutcome) Valid() bool {
+	switch o {
+	case AttemptOutcomeSuccess, AttemptOutcomeRetryable, AttemptOutcomeNonRetryable,
+		AttemptOutcomeCircuitOpen, AttemptOutcomePreflightError, AttemptOutcomeClientAbort,
+		AttemptOutcomeTruncated, AttemptOutcomeDownstreamError, AttemptOutcomeUnknown:
+		return true
+	}
+	return false
+}
+
+func (o AttemptOutcome) Normalized() AttemptOutcome {
+	if o.Valid() {
+		return o
+	}
+	return AttemptOutcomeUnknown
+}
+
+// RequestOutcome is the categorical completion state of a whole request.
 type RequestOutcome string
 
 const (
-	OutcomeSuccess         RequestOutcome = "success"
-	OutcomeTruncated       RequestOutcome = "truncated"
-	OutcomeDownstreamError RequestOutcome = "downstream_error"
-	OutcomeClientAbort     RequestOutcome = "client_abort"
+	RequestOutcomeSuccess RequestOutcome = "success"
+	RequestOutcomePartial RequestOutcome = "partial_success"
+	RequestOutcomeFailure RequestOutcome = "failure"
+	RequestOutcomeAborted RequestOutcome = "aborted"
+	RequestOutcomeUnknown RequestOutcome = "unknown"
 )
+
+func (o RequestOutcome) Valid() bool {
+	switch o {
+	case RequestOutcomeSuccess, RequestOutcomePartial, RequestOutcomeFailure,
+		RequestOutcomeAborted, RequestOutcomeUnknown:
+		return true
+	}
+	return false
+}
+
+func (o RequestOutcome) Normalized() RequestOutcome {
+	if o.Valid() {
+		return o
+	}
+	return RequestOutcomeUnknown
+}
 
 // ----- Aggregation DTOs (dashboard / usage-stats) -----
 
@@ -414,10 +490,11 @@ type ProviderInput struct {
 }
 
 type ModelRuleInput struct {
-	Name                    string            `json:"name"`
-	Enabled                 bool              `json:"enabled"`
-	FirstByteTimeoutSeconds int               `json:"first_byte_timeout_seconds"`
-	Targets                 []ModelRuleTarget `json:"targets"`
+	Name                    string                 `json:"name"`
+	Enabled                 bool                   `json:"enabled"`
+	FirstByteTimeoutSeconds int                    `json:"first_byte_timeout_seconds"`
+	Strategy                string                 `json:"strategy"`
+	Targets                 []ModelRuleTargetInput `json:"targets"`
 }
 
 // ReorderModelRuleTargetsResult reports an expected stale-target conflict

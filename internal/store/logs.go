@@ -120,6 +120,29 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 	return logs, total, nil
 }
 
+// GetRequestLog fetches exactly one log by its persisted ID. Unlike QueryLogs,
+// this path is deliberately not paginated or text-filtered for replay.
+func (s *Store) GetRequestLog(id string) (*model.RequestLog, error) {
+	var l model.RequestLog
+	var chainJS string
+	err := s.db.QueryRow(`SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
+		input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
+		route_id, route_label, api_key_id, COALESCE(error, ''), cache_creation, cache_hit,
+		COALESCE(chain_json, ''), user_agent, client_ip, request_id, request_uri
+		FROM request_logs WHERE id = ?`, id).Scan(&l.ID, &l.Timestamp, &l.StatusCode, &l.ProviderID, &l.ProviderName, &l.Model,
+		&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
+		&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error, &l.CacheCreation, &l.CacheHit,
+		&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID, &l.RequestURI)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("request log %q not found: %w", id, err)
+		}
+		return nil, fmt.Errorf("store: get log: %w", err)
+	}
+	l.Chain = chainFromJSON(chainJS)
+	return &l, nil
+}
+
 // InsertRequestLog appends a single log entry. Used by the proxy (Phase 4)
 // through the Writer.
 func (s *Store) InsertRequestLog(l model.RequestLog) error {

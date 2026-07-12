@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { model } from '../../../wailsjs/go/models'
+import { api } from '@/api/bridge'
 
 import { useProviderStyle } from '@/composables/useProviderStyle'
 
@@ -22,6 +23,46 @@ const { color: providerColor, initial: providerInitial, textColor: providerTextC
 // panel. A Set keyed by log.id avoids O(N) scans on toggle. The detail
 // panel only renders for expanded rows so memory cost is minimal.
 const expandedRows = ref<Set<string>>(new Set())
+const replayResults = ref<Map<string, model.ReplayResult>>(new Map())
+const replayErrors = ref<Set<string>>(new Set())
+const replayLoadingId = ref<string | null>(null)
+
+function replayFor(log: model.RequestLog): model.ReplayResult | undefined {
+  return replayResults.value.get(log.id)
+}
+
+async function replay(log: model.RequestLog) {
+  if (replayLoadingId.value) return
+  replayLoadingId.value = log.id
+  const errors = new Set(replayErrors.value)
+  errors.delete(log.id)
+  replayErrors.value = errors
+  try {
+    const result = await api.replayLog(log.id)
+    const next = new Map(replayResults.value)
+    next.set(log.id, result)
+    replayResults.value = next
+  } catch {
+    const next = new Set(replayErrors.value)
+    next.add(log.id)
+    replayErrors.value = next
+  } finally {
+    replayLoadingId.value = null
+  }
+}
+
+function replayScore(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(0) : '—'
+}
+
+function replayCost(value: number): string {
+  return Number.isFinite(value) && value > 0 ? `$${value.toFixed(4)} USD` : '—'
+}
+
+function replayPrice(attempt: model.ReplayAttemptScore): string {
+  if (!attempt.score.cost?.available) return t('usage.logTable.replayPriceUnknown')
+  return [attempt.price_confidence, attempt.price_version].filter(Boolean).join(' · ') || t('usage.logTable.replayUnknown')
+}
 
 function isExpanded(log: model.RequestLog): boolean {
   return expandedRows.value.has(log.id)
@@ -368,6 +409,33 @@ const columnCount = computed(() => columns)
                   </li>
                 </ol>
               </div>
+              <div class="replay-panel">
+                <div class="replay-header">
+                  <div>
+                    <div class="log-detail-label">{{ t('usage.logTable.replay') }}</div>
+                    <div v-if="replayFor(log)" class="replay-summary">
+                      <span>{{ t('usage.logTable.replayOutcome') }}: {{ replayFor(log)?.request_outcome || t('usage.logTable.replayUnknown') }}</span>
+                      <span>{{ t('usage.logTable.replaySelectedTarget') }}: {{ replayFor(log)?.selected_target || '—' }}</span>
+                      <span>{{ t('usage.logTable.replayRule') }}: {{ replayFor(log)?.rule_name || t('usage.logTable.replayNoRule') }}</span>
+                      <span v-if="replayFor(log)?.endpoint_assumed" class="replay-note">{{ t('usage.logTable.replayEndpointAssumed') }}</span>
+                    </div>
+                  </div>
+                  <button class="btn btn-secondary replay-button" type="button" :disabled="replayLoadingId !== null" @click.stop="replay(log)">{{ replayLoadingId === log.id ? t('usage.logTable.replayLoading') : replayFor(log) ? t('usage.logTable.replayRefresh') : t('usage.logTable.replay') }}</button>
+                </div>
+                <div v-if="replayErrors.has(log.id)" class="replay-error">{{ t('usage.logTable.replayUnavailable') }}</div>
+                <template v-else-if="replayFor(log)">
+                  <div v-if="replayFor(log)?.warnings?.length" class="replay-warnings"><strong>{{ t('usage.logTable.replayWarnings') }}</strong><span v-for="warning in replayFor(log)?.warnings" :key="warning">{{ warning }}</span></div>
+                  <div v-if="replayFor(log)?.attempts?.length" class="replay-attempts">
+                    <div class="replay-attempts-title">{{ t('usage.logTable.replayAttempts') }} · {{ t('usage.logTable.replayScores') }}</div>
+                    <div v-for="(replayAttempt, index) in replayFor(log)?.attempts" :key="replayAttempt.attempt.attempt_order || index" class="replay-attempt">
+                      <div class="replay-attempt-main"><span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: replayAttempt.attempt.attempt_order }) }}</span><span>{{ replayAttempt.provider_id || replayAttempt.attempt.provider_name || '—' }}</span><span class="text-mono text-muted">{{ replayAttempt.model_name || replayAttempt.attempt.model_name || '—' }}</span><span class="text-muted">{{ t('usage.logTable.replayTarget') }}: {{ replayAttempt.target_id || '—' }}</span><span class="badge" :class="chainStatusClass(effectiveChainStatus(replayAttempt.attempt))">{{ chainStatusLabel(effectiveChainStatus(replayAttempt.attempt)) }}</span></div>
+                      <div class="replay-score-grid"><span>{{ t('modelRules.diagnostics.score') }} {{ replayScore(replayAttempt.score.overall) }}</span><span>{{ t('modelRules.diagnostics.reliability') }} {{ replayScore(replayAttempt.score.reliability) }}</span><span>{{ t('modelRules.diagnostics.latencyScore') }} {{ replayScore(replayAttempt.score.latency) }}</span><span>{{ t('modelRules.diagnostics.ttftScore') }} {{ replayScore(replayAttempt.score.ttft) }}</span><span>{{ t('modelRules.diagnostics.capacity') }} {{ replayScore(replayAttempt.score.capacity) }}</span><span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ replayScore(replayAttempt.score.cost_efficiency) }}</span><span>{{ t('usage.logTable.replayEstimatedCost') }} {{ replayCost(replayAttempt.score.estimated_cost) }}</span><span>{{ t('usage.logTable.replayPrice') }}: {{ replayPrice(replayAttempt) }}</span><span>{{ t('usage.logTable.replayAvailability') }}: {{ replayAttempt.score.availability || t('usage.logTable.replayUnknown') }}{{ replayAttempt.score.reason ? ` · ${replayAttempt.score.reason}` : '' }}</span></div>
+                      <div v-if="replayAttempt.target_missing || replayAttempt.provider_missing || replayAttempt.replay_limitation || !replayAttempt.score.metrics_fresh" class="replay-attempt-notes"><span v-if="replayAttempt.target_missing">{{ t('usage.logTable.replayMissingTarget') }}</span><span v-if="replayAttempt.provider_missing">{{ t('usage.logTable.replayMissingProvider') }}</span><span v-if="!replayAttempt.score.metrics_fresh">{{ t('usage.logTable.replayNoSamples') }}</span><span v-if="replayAttempt.replay_limitation">{{ t('usage.logTable.replayLimitation') }}: {{ replayAttempt.replay_limitation }}</span></div>
+                    </div>
+                  </div>
+                  <div v-else class="replay-muted">{{ t('usage.logTable.replayNoChain') }}</div>
+                </template>
+              </div>
             </div>
           </td>
         </tr>
@@ -697,5 +765,38 @@ const columnCount = computed(() => columns)
 .log-detail-chain-downstream-label {
   font-weight: 500;
   color: var(--warning, #ad6700);
+}
+.replay-panel {
+  border-top: 1px dashed var(--border, rgba(0, 0, 0, 0.08));
+  padding-top: 12px;
+}
+.replay-header,
+.replay-summary,
+.replay-attempt-main,
+.replay-warnings,
+.replay-attempt-notes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.replay-header { justify-content: space-between; gap: 12px; }
+.replay-summary { margin-top: 4px; color: var(--muted); font-size: 11.5px; }
+.replay-button { padding: 4px 9px; font-size: 11.5px; flex-shrink: 0; }
+.replay-note,
+.replay-error,
+.replay-attempt-notes { color: var(--warning, #ad6700); }
+.replay-error,
+.replay-muted { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.replay-warnings { margin-top: 8px; color: var(--warning, #ad6700); font-size: 11.5px; }
+.replay-warnings span { flex-basis: 100%; padding-left: 8px; }
+.replay-attempts { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.replay-attempts-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.replay-attempt { padding: 7px 8px; border-radius: 6px; background: var(--bg, rgba(0, 0, 0, 0.02)); }
+.replay-score-grid { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 5px; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.replay-attempt-notes { margin-top: 5px; font-size: 11px; }
+@media (max-width: 700px) {
+  .replay-header { align-items: flex-start; }
+  .replay-score-grid { gap: 5px 9px; }
 }
 </style>

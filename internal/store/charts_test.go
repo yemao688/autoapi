@@ -21,7 +21,7 @@ func TestUsageTrends_Empty(t *testing.T) {
 
 func TestUsageTrends_BucketShape(t *testing.T) {
 	st := newTestStore(t)
-	now := time.Now().Truncate(time.Hour).UnixMilli()
+	now := time.Date(2025, 1, 15, 12, 0, 0, 0, time.Local).UnixMilli()
 
 	logs := []model.RequestLog{
 		{ID: "l1", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, FirstTokenMs: 120, IsStream: true, RouteID: "r1", RouteLabel: "default"},

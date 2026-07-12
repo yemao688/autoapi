@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"autoapi/internal/metrics"
 	"autoapi/internal/model"
 	"autoapi/internal/store"
 
@@ -165,6 +166,7 @@ type Proxy struct {
 	errorLog    *log.Logger
 	activeConns atomic.Int32
 	writer      *logWriter
+	metricSink  metricSink
 
 	// transport is the shared http.RoundTripper used for every upstream
 	// call (both streaming and non-streaming). It is built from
@@ -178,10 +180,21 @@ type Proxy struct {
 	breakers   map[string]*CircuitBreaker
 }
 
+// BreakerStatuses returns a detached snapshot and never claims a half-open probe.
+func (p *Proxy) BreakerStatuses() map[string]BreakerStatus {
+	p.breakersMu.RLock()
+	defer p.breakersMu.RUnlock()
+	out := make(map[string]BreakerStatus, len(p.breakers))
+	for id, cb := range p.breakers {
+		out[id] = BreakerStatus{State: cb.CurrentState()}
+	}
+	return out
+}
+
 // New creates a Proxy. The settingsProvider is called on Start/Restart to read
 // the current port/bind configuration. Pass a concrete *store.Store as the
 // store argument.
-func New(store storeProxy, service upstreamKeyProvider, defaultPort int, settingsProvider func() (*model.Settings, error)) *Proxy {
+func New(store storeProxy, service upstreamKeyProvider, defaultPort int, settingsProvider func() (*model.Settings, error), registries ...*metrics.Registry) *Proxy {
 	if defaultPort == 0 {
 		defaultPort = 8344
 	}
@@ -201,6 +214,9 @@ func New(store storeProxy, service upstreamKeyProvider, defaultPort int, setting
 		breakers:  make(map[string]*CircuitBreaker),
 		writer:    newLogWriter(store),
 		listen:    net.Listen,
+	}
+	if len(registries) > 0 && registries[0] != nil {
+		p.metricSink = registries[0]
 	}
 	p.router = p.setupRouter()
 	return p
@@ -640,7 +656,11 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	p.breakersMu.RUnlock()
 
-	return selectCandidates(req, rules, breakers, p.store.GetProvider)
+	candidates, err := selectCandidates(req, rules, breakers, p.store.GetProvider)
+	if err != nil {
+		return nil, err
+	}
+	return p.planCandidates(req, candidates), nil
 }
 
 // breakerFor returns the circuit breaker for a provider, creating one if needed.
@@ -657,6 +677,18 @@ func (p *Proxy) breakerFor(providerID string) *CircuitBreaker {
 	p.breakers[providerID] = cb
 	slog.Debug("proxy: new circuit breaker", "provider", providerID)
 	return cb
+}
+
+// breakerState reads a provider breaker without creating one or claiming a
+// half-open probe. A provider with no breaker has the implicit closed state.
+func (p *Proxy) breakerState(providerID string) (State, bool) {
+	p.breakersMu.RLock()
+	cb, ok := p.breakers[providerID]
+	p.breakersMu.RUnlock()
+	if !ok || cb == nil {
+		return StateClosed, false
+	}
+	return cb.CurrentState(), true
 }
 
 // forwardWithFailover tries each candidate in order. It buffers each upstream
@@ -1070,6 +1102,15 @@ outer:
 			finalCat = cat
 			finalAttemptErr = attemptErr
 			latencyMs := int(time.Since(attemptStart).Milliseconds())
+			attemptOutcome := model.AttemptOutcomeRetryable
+			if cat == CategoryClientAbort {
+				attemptOutcome = model.AttemptOutcomeClientAbort
+			} else if cat == CategoryNonRetryable {
+				attemptOutcome = model.AttemptOutcomeNonRetryable
+			} else if attemptErr == nil && effectiveStatus < 400 {
+				attemptOutcome = model.AttemptOutcomeSuccess
+			}
+			p.emitAttempt(c, r.URL.Path, middleware.GetReqID(r.Context()), attemptOutcome, effectiveStatus, buf.wrote, 0, 0)
 			slog.Debug("proxy: candidate attempt",
 				"provider", c.provider.Name,
 				"model", c.modelName,
@@ -1605,12 +1646,12 @@ outer:
 				logEntry.Error = result.Error
 				succeeded = true
 				return
-			case model.RequestOutcome("non_retryable"):
+			case model.AttemptOutcomeNonRetryable:
 				logEntry.StatusCode = result.StatusCode
 				logEntry.Error = result.Error
 				succeeded = true
 				return
-			case model.RequestOutcome("retryable"):
+			case model.AttemptOutcomeRetryable:
 				firstByteCumulativeMs += result.LatencyMs
 				if result.StatusCode != 0 {
 					lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, result.StatusCode)
@@ -1719,7 +1760,20 @@ outer:
 //
 // Resource safety: resp.Body.Close() is deferred immediately after a
 // successful Do, so every code path releases the upstream connection.
-func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (streamAttemptResult, int) {
+func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
+	order = attemptOrder
+	emitted := false
+	defer func() {
+		if emitted {
+			return
+		}
+		emitted = true
+		outcome := model.AttemptOutcome(result.Status)
+		if outcome == "" {
+			outcome = model.AttemptOutcomeUnknown
+		}
+		p.emitAttempt(c, r.URL.Path, middleware.GetReqID(r.Context()), outcome, result.StatusCode, result.StatusCode >= 200 && result.StatusCode < 300, int64(result.FirstTokenMs), int64(result.FirstTokenMs))
+	}()
 	// Per-candidate first-byte timeout. We use the TRANSPORT's
 	// ResponseHeaderTimeout (not a context.WithTimeout on the
 	// request) because http.Client monitors req.Context() for the
@@ -1990,12 +2044,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		category := CategorizeError(initialErr, 0)
 		latencyMs := int(time.Since(attemptStart).Milliseconds())
 		attemptOrder++
-		status := model.RequestOutcome("retryable")
+		status := model.AttemptOutcomeRetryable
 		if category == CategoryClientAbort {
 			status = model.OutcomeClientAbort
 		}
 		if category == CategoryNonRetryable {
-			status = model.RequestOutcome("non_retryable")
+			status = model.AttemptOutcomeNonRetryable
 		}
 		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: string(status), Error: initialErr.Error(), LatencyMs: latencyMs})
 		return streamAttemptResult{Status: status, Error: initialErr.Error(), LatencyMs: latencyMs, StatusCode: 0}, attemptOrder
@@ -2166,7 +2220,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = chainEntry.Error
 		return streamAttemptResult{
-			Status:       model.RequestOutcome(chainEntry.Status),
+			Status:       model.AttemptOutcome(chainEntry.Status),
 			StatusCode:   upstreamStatus,
 			Error:        chainEntry.Error,
 			LatencyMs:    attemptLatencyMs,
@@ -2193,7 +2247,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		return streamAttemptResult{
-			Status:       model.RequestOutcome(chainEntry.Status),
+			Status:       model.AttemptOutcome(chainEntry.Status),
 			StatusCode:   upstreamStatus,
 			LatencyMs:    attemptLatencyMs,
 			FirstTokenMs: int(firstByteTime.Milliseconds()),
@@ -2346,7 +2400,7 @@ func (bp *bufferPool) Put(b []byte) { bp.pool.Put(b) }
 // build the top-level log entry, decide retry vs. failover, and compute
 // cumulative latency.
 type streamAttemptResult struct {
-	Status       model.RequestOutcome
+	Status       model.AttemptOutcome
 	StatusCode   int
 	Error        string
 	LatencyMs    int // attempt wall-clock (for retryable entries; sum from caller)

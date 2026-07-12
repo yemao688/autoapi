@@ -115,3 +115,20 @@ func TestCircuitBreaker_SuccessResetsFailures(t *testing.T) {
 		t.Fatalf("expected open, got %v", cb.CurrentState())
 	}
 }
+
+func TestCircuitBreaker_CurrentStateDoesNotClaimHalfOpenProbe(t *testing.T) {
+	now := time.Now()
+	cb := NewCircuitBreaker()
+	cb.nowFn = func() time.Time { return now }
+	cb.recoveryTimeout = time.Minute
+	for i := 0; i < failureThreshold; i++ {
+		cb.Record(false)
+	}
+	now = now.Add(2 * time.Minute)
+	if cb.CurrentState() != StateOpen {
+		t.Fatalf("state read changed open breaker: %v", cb.CurrentState())
+	}
+	if !cb.Allow() {
+		t.Fatal("expected the actual Allow call to claim the probe")
+	}
+}

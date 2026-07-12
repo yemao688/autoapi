@@ -1,0 +1,140 @@
+package proxy
+
+import (
+	"errors"
+	"testing"
+
+	"autoapi/internal/metrics"
+	"autoapi/internal/model"
+	"autoapi/internal/routing"
+)
+
+type planningMetricSpy struct {
+	calls int
+	byID  map[string]metrics.Snapshot
+}
+
+func (s *planningMetricSpy) Submit(model.TargetMetricEvent) bool { return true }
+func (s *planningMetricSpy) CurrentSnapshot(k model.TargetMetricKey) metrics.Snapshot {
+	s.calls++
+	if v, ok := s.byID[k.ProviderID]; ok {
+		return v
+	}
+	return s.byID[k.TargetID]
+}
+
+type planningPriceStore struct {
+	*mockStore
+	calls  int
+	prices map[string]*model.Price
+	err    error
+}
+
+func (s *planningPriceStore) ResolvePrice(providerID, modelName, endpointKind string) (*model.Price, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.prices[providerID+":"+modelName], nil
+}
+
+func planningCandidates(strategy routing.Strategy) []candidate {
+	return []candidate{
+		{targetID: "a", provider: &model.Provider{ID: "pa"}, modelName: "ma", tier: 0, strategy: strategy},
+		{targetID: "b", provider: &model.Provider{ID: "pb"}, modelName: "mb", tier: 0, strategy: strategy},
+		{targetID: "c", provider: &model.Provider{ID: "pc"}, modelName: "mc", tier: 1, strategy: strategy},
+	}
+}
+
+func planningRequest() *InboundRequest { return &InboundRequest{Endpoint: "/v1/chat/completions"} }
+
+func TestPlanCandidatesPriorityAndEmptyDoNotReadPlanningDependencies(t *testing.T) {
+	spy := &planningMetricSpy{byID: map[string]metrics.Snapshot{}}
+	p := &Proxy{metricSink: spy, store: &planningPriceStore{mockStore: &mockStore{}}}
+	cs := planningCandidates(routing.PriorityFirst)
+	out := p.planCandidates(planningRequest(), cs)
+	if spy.calls != 0 || len(out) != len(cs) || out[0].targetID != "a" || out[1].targetID != "b" {
+		t.Fatalf("priority planner unexpectedly read dependencies or changed order: calls=%d out=%v", spy.calls, out)
+	}
+	if got := p.planCandidates(planningRequest(), nil); got != nil {
+		t.Fatalf("empty candidates changed: %#v", got)
+	}
+}
+
+func TestPlanCandidatesScoreWithinTierAndCostFirst(t *testing.T) {
+	spy := &planningMetricSpy{byID: map[string]metrics.Snapshot{
+		"a": {Attempts: 10, Status5xx: 8}, "b": {Attempts: 10}, "c": {Attempts: 10},
+	}}
+	p := &Proxy{metricSink: spy}
+	out := p.planCandidates(planningRequest(), planningCandidates(routing.ScoreWithinTier))
+	if out[0].targetID != "b" || out[1].targetID != "a" || out[2].targetID != "c" {
+		t.Fatalf("score crossed tier or did not rank within tier: %v", ids(out))
+	}
+	prices := &planningPriceStore{mockStore: &mockStore{}, prices: map[string]*model.Price{
+		"pa:ma": {UpstreamModel: "ma", BillingMode: model.BillingModeToken, InputPricePerMillion: 10, Currency: "USD", Confidence: model.CostConfidenceExact},
+		"pb:mb": {UpstreamModel: "mb", BillingMode: model.BillingModeToken, InputPricePerMillion: 1, Currency: "USD", Confidence: model.CostConfidenceExact},
+	}}
+	p.store = prices
+	out = p.planCandidates(planningRequest(), planningCandidates(routing.CostFirst))
+	if out[0].targetID != "b" || out[1].targetID != "a" || out[2].targetID != "c" {
+		t.Fatalf("cost order/unknown handling wrong: %v", ids(out))
+	}
+	if prices.calls != 3 {
+		t.Fatalf("price resolver calls=%d, want 3", prices.calls)
+	}
+}
+
+func TestPlanCandidatesSnapshotsPricesAndFallback(t *testing.T) {
+	spy := &planningMetricSpy{byID: map[string]metrics.Snapshot{}}
+	prices := &planningPriceStore{mockStore: &mockStore{}, err: errors.New("price unavailable")}
+	p := &Proxy{metricSink: spy, store: prices}
+	cs := planningCandidates(routing.CostFirst)
+	out := p.planCandidates(planningRequest(), cs)
+	if spy.calls != 3 || prices.calls != 3 {
+		t.Fatalf("calls metrics=%d prices=%d", spy.calls, prices.calls)
+	}
+	for i := range cs {
+		if out[i].targetID != cs[i].targetID {
+			t.Fatalf("price error did not fallback: %v", ids(out))
+		}
+	}
+
+	p = &Proxy{metricSink: spy}
+	cb := p.breakerFor("existing")
+	cb.state = StateHalfOpen // test package access; planner must only read it.
+	before := len(p.breakers)
+	p.planCandidates(planningRequest(), cs)
+	if len(p.breakers) != before {
+		t.Fatal("planner created a breaker")
+	}
+	if cb.pendingProbe {
+		t.Fatal("planner claimed a half-open probe")
+	}
+	if _, ok := p.breakerState("missing"); ok {
+		t.Fatal("missing breaker reported present")
+	}
+}
+
+func TestPlanCandidatesDuplicateTargetIDUsesOriginalIndex(t *testing.T) {
+	spy := &planningMetricSpy{byID: map[string]metrics.Snapshot{
+		"p1": {Attempts: 10, Status5xx: 9}, "p2": {Attempts: 10}, "p3": {Attempts: 10, Status5xx: 8},
+	}}
+	p := &Proxy{metricSink: spy}
+	cs := []candidate{
+		{targetID: "same", provider: &model.Provider{ID: "p1"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier},
+		{targetID: "same", provider: &model.Provider{ID: "p2"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier},
+		{targetID: "other", provider: &model.Provider{ID: "p3"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier},
+	}
+	out := p.planCandidates(planningRequest(), cs)
+	if out[0].provider.ID != "p2" || out[1].provider.ID != "p3" || out[2].provider.ID != "p1" {
+		t.Fatalf("duplicate target mapping wrong: %v", ids(out))
+	}
+}
+
+func ids(cs []candidate) []string {
+	out := make([]string, len(cs))
+	for i := range cs {
+		out[i] = cs[i].targetID
+	}
+	return out
+}

@@ -19,6 +19,7 @@ const navItems = computed(() => [
   { to: '/model-rules', labelKey: 'nav.modelRules', icon: 'modelRules', badge: modelRuleCount.value },
   { to: '/api-keys', labelKey: 'nav.apiKeys', icon: 'key', badge: null as number | null },
   { to: '/usage-stats', labelKey: 'nav.usage', icon: 'chart', badge: null as number | null },
+  { to: '/pricing', labelKey: 'nav.pricing', icon: 'dollar', badge: null as number | null },
 ])
 
 function isActive(to: string): boolean {
@@ -57,6 +58,7 @@ usePolling(refresh, 30000)
         <svg v-else-if="item.icon === 'key'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l3 3"/></svg>
         <!-- Chart icon -->
         <svg v-else-if="item.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-6"/></svg>
+        <svg v-else-if="item.icon === 'dollar'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
         <span>{{ $t(item.labelKey) }}</span>
         <span v-if="item.badge" class="badge">{{ item.badge }}</span>
       </RouterLink>

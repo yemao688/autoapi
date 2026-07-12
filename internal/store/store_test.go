@@ -16,7 +16,7 @@ func TestModelRuleTargetTimeoutPersistenceAndLegacyConversion(t *testing.T) {
 		name    string
 		seconds int
 	}{{"2000ms", 2}, {"1500ms", 1}, {"999ms", 0}} {
-		rule, err := s.CreateModelRule(model.ModelRuleInput{Name: tc.name, Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", FirstTokenTimeoutSeconds: tc.seconds, Enabled: true}}})
+		rule, err := s.CreateModelRule(model.ModelRuleInput{Name: tc.name, Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m", FirstTokenTimeoutSeconds: tc.seconds, Enabled: true}}})
 		if err != nil {
 			t.Fatalf("create %s: %v", tc.name, err)
 		}
@@ -43,7 +43,7 @@ func TestModelRuleTargetTimeoutPersistenceAndLegacyConversion(t *testing.T) {
 
 func TestModelRuleTargetTimeoutValidationIsTransactional(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.CreateModelRule(model.ModelRuleInput{Name: "negative", Targets: []model.ModelRuleTarget{{ProviderID: "p", FirstTokenTimeoutSeconds: -1}}}); err == nil {
+	if _, err := s.CreateModelRule(model.ModelRuleInput{Name: "negative", Targets: []model.ModelRuleTargetInput{{ProviderID: "p", FirstTokenTimeoutSeconds: -1}}}); err == nil {
 		t.Fatal("expected negative timeout rejection")
 	}
 	rules, err := s.ListModelRules()
@@ -56,7 +56,7 @@ func TestModelRuleTargetTimeoutValidationIsTransactional(t *testing.T) {
 		}
 	}
 	max := int(math.MaxInt64 / 1000)
-	if _, err := s.CreateModelRule(model.ModelRuleInput{Name: "overflow", Targets: []model.ModelRuleTarget{{ProviderID: "p", FirstTokenTimeoutSeconds: max + 1}}}); err == nil {
+	if _, err := s.CreateModelRule(model.ModelRuleInput{Name: "overflow", Targets: []model.ModelRuleTargetInput{{ProviderID: "p", FirstTokenTimeoutSeconds: max + 1}}}); err == nil {
 		t.Fatal("expected overflow timeout rejection")
 	}
 }
@@ -326,7 +326,7 @@ func TestModelRuleCRUD(t *testing.T) {
 	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Test Model",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p01", ModelName: "gpt-4o"},
 		},
 	})
@@ -359,7 +359,7 @@ func TestModelRuleCRUD(t *testing.T) {
 	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Updated Model",
 		Enabled: false,
-		Targets: []model.ModelRuleTarget{},
+		Targets: []model.ModelRuleTargetInput{},
 	})
 	if err != nil {
 		t.Fatalf("UpdateModelRule: %v", err)
@@ -396,7 +396,7 @@ func TestModelRule_NameUniqueness(t *testing.T) {
 	if _, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "shared-name",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{{ProviderID: "p01", ModelName: "m"}},
+		Targets: []model.ModelRuleTargetInput{{ProviderID: "p01", ModelName: "m"}},
 	}); err != nil {
 		t.Fatalf("CreateModelRule (first): %v", err)
 	}
@@ -405,7 +405,7 @@ func TestModelRule_NameUniqueness(t *testing.T) {
 	if _, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "shared-name",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{{ProviderID: "p02", ModelName: "m"}},
+		Targets: []model.ModelRuleTargetInput{{ProviderID: "p02", ModelName: "m"}},
 	}); err == nil {
 		t.Fatal("expected error for duplicate name, got nil")
 	}
@@ -414,7 +414,7 @@ func TestModelRule_NameUniqueness(t *testing.T) {
 	if _, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "different-name",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{{ProviderID: "p03", ModelName: "m"}},
+		Targets: []model.ModelRuleTargetInput{{ProviderID: "p03", ModelName: "m"}},
 	}); err != nil {
 		t.Fatalf("CreateModelRule (different name): %v", err)
 	}
@@ -428,7 +428,7 @@ func TestModelRule_UpdateRenameRejectsDuplicate(t *testing.T) {
 	r1, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "alpha",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{{ProviderID: "p01", ModelName: "m"}},
+		Targets: []model.ModelRuleTargetInput{{ProviderID: "p01", ModelName: "m"}},
 	})
 	if err != nil {
 		t.Fatalf("CreateModelRule (r1): %v", err)
@@ -436,7 +436,7 @@ func TestModelRule_UpdateRenameRejectsDuplicate(t *testing.T) {
 	if _, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "beta",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{{ProviderID: "p02", ModelName: "m"}},
+		Targets: []model.ModelRuleTargetInput{{ProviderID: "p02", ModelName: "m"}},
 	}); err != nil {
 		t.Fatalf("CreateModelRule (r2): %v", err)
 	}
@@ -445,7 +445,7 @@ func TestModelRule_UpdateRenameRejectsDuplicate(t *testing.T) {
 	if _, err := s.UpdateModelRule(r1.ID, model.ModelRuleInput{
 		Name:    "beta",
 		Enabled: true,
-		Targets: r1.Targets,
+		Targets: targetsToInput(r1.Targets),
 	}); err == nil {
 		t.Fatal("expected rename-to-duplicate error, got nil")
 	}
@@ -454,7 +454,7 @@ func TestModelRule_UpdateRenameRejectsDuplicate(t *testing.T) {
 	if _, err := s.UpdateModelRule(r1.ID, model.ModelRuleInput{
 		Name:    "alpha",
 		Enabled: true,
-		Targets: r1.Targets,
+		Targets: targetsToInput(r1.Targets),
 	}); err != nil {
 		t.Fatalf("UpdateModelRule (same name): %v", err)
 	}
@@ -472,7 +472,7 @@ func TestModelRuleUpdatePreservesTargetCounters(t *testing.T) {
 	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Counter Test",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p01", ModelName: "m1"}, // tier 0
 			{ProviderID: "p01", ModelName: "m2"}, // tier 1
 			{ProviderID: "p02", ModelName: "m3"}, // tier 2
@@ -527,7 +527,7 @@ func TestModelRuleUpdatePreservesTargetCounters(t *testing.T) {
 	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Counter Test (renamed)",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ID: m3.ID, ProviderID: "p02", ModelName: "m3"},
 			{ID: m1.ID, ProviderID: "p01", ModelName: "m1", MaxRetries: 4},
 			{ProviderID: "p03", ModelName: "m4"}, // new, empty ID
@@ -611,7 +611,7 @@ func TestModelRuleUpdatePreservesTargetCounters(t *testing.T) {
 	cleared, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Counter Test (renamed)",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{},
+		Targets: []model.ModelRuleTargetInput{},
 	})
 	if err != nil {
 		t.Fatalf("UpdateModelRule (clear): %v", err)
@@ -631,7 +631,7 @@ func TestModelRuleClampsNegativeMaxRetries(t *testing.T) {
 	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Clamp Test",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p01", ModelName: "m1", MaxRetries: -7},
 		},
 	})
@@ -646,7 +646,7 @@ func TestModelRuleClampsNegativeMaxRetries(t *testing.T) {
 	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Clamp Test",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ID: r.Targets[0].ID, ProviderID: "p01", ModelName: "m1", MaxRetries: -1},
 		},
 	})
@@ -675,7 +675,7 @@ func TestReorderModelRuleTargets(t *testing.T) {
 	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Reorder Target Test",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p01", ModelName: "m1"}, // tier 0
 			{ProviderID: "p01", ModelName: "m2"}, // tier 1
 			{ProviderID: "p02", ModelName: "m3"}, // tier 2
@@ -765,7 +765,7 @@ func TestModelRuleTarget_EnabledDefaultsToTrueOnInsert(t *testing.T) {
 	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Default-enabled",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p01", ModelName: "m1"}, // Enabled unset (zero value)
 		},
 	})
@@ -790,7 +790,7 @@ func TestModelRuleTarget_EnabledDefaultsToTrueOnInsert(t *testing.T) {
 	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Default-enabled",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ID: r.Targets[0].ID, ProviderID: "p01", ModelName: "m1", Enabled: true},
 			{ProviderID: "p02", ModelName: "m2"}, // new target, Enabled unset
 		},
@@ -812,7 +812,7 @@ func TestModelRuleTarget_EnabledToggleRoundTrip(t *testing.T) {
 	r, err := s.CreateModelRule(model.ModelRuleInput{
 		Name:    "Toggle",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ProviderID: "p01", ModelName: "m1", Enabled: true},
 			{ProviderID: "p02", ModelName: "m2", Enabled: true},
 		},
@@ -831,7 +831,7 @@ func TestModelRuleTarget_EnabledToggleRoundTrip(t *testing.T) {
 	updated, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Toggle",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ID: t0.ID, ProviderID: "p01", ModelName: "m1", Enabled: false},
 			{ID: t1.ID, ProviderID: "p02", ModelName: "m2", Enabled: true},
 		},
@@ -880,7 +880,7 @@ func TestModelRuleTarget_EnabledToggleRoundTrip(t *testing.T) {
 	reEnabled, err := s.UpdateModelRule(r.ID, model.ModelRuleInput{
 		Name:    "Toggle",
 		Enabled: true,
-		Targets: []model.ModelRuleTarget{
+		Targets: []model.ModelRuleTargetInput{
 			{ID: t0.ID, ProviderID: "p01", ModelName: "m1", Enabled: true},
 			{ID: t1.ID, ProviderID: "p02", ModelName: "m2", Enabled: true},
 		},

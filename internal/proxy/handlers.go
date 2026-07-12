@@ -86,6 +86,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
+	defer p.emitRequest(logEntry, r.URL.Path)
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -140,6 +141,8 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		EstimatedTokens: estimateChatInputTokens(len(chatReq.Messages)),
 		Task:            chatReq.Task,
 		TimeHour:        time.Now().Hour(),
+		Endpoint:        r.URL.Path,
+		Stream:          chatReq.Stream,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 
@@ -179,6 +182,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
+	defer p.emitRequest(logEntry, r.URL.Path)
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -226,6 +230,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		EstimatedTokens: estimateEmbeddingInputTokens(embReq.Input) / 4,
 		Task:            "embeddings",
 		TimeHour:        time.Now().Hour(),
+		Endpoint:        r.URL.Path,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 	p.insertPendingLog(logEntry)
@@ -268,6 +273,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	}
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
+	defer p.emitRequest(logEntry, r.URL.Path)
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -334,6 +340,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		EstimatedTokens: len(body) / 16,
 		Task:            task,
 		TimeHour:        time.Now().Hour(),
+		Endpoint:        r.URL.Path,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 	p.insertPendingLog(logEntry)
