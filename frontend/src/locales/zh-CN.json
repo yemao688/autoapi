@@ -167,13 +167,7 @@
       "goVersion": "Go {version}",
       "checkUpdate": "检查更新",
       "checkingUpdates": "正在检查更新...",
-      "recentUpdates": "最近更新",
-      "viewChangelog": "查看完整 Changelog →",
-      "updates": {
-        "v0.5.1": "新增每个映射模型的首字超时 · 明确流式截断状态 · 优化映射排序可靠性与隐藏窗口图表资源",
-        "v0.5.0": "新增后台运行、启动行为与菜单栏图标设置 · 单实例锁 · 完善代理、数据与安全能力",
-        "v0.4.2": "新增设置面板 · 智能路由节省统计 · 30 日 Token 堆叠图"
-      }
+      "repository": "GitHub 仓库"
     }
   },
   "modelRules": {

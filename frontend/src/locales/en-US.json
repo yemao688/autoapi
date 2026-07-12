@@ -167,13 +167,7 @@
       "goVersion": "Go {version}",
       "checkUpdate": "Check for updates",
       "checkingUpdates": "Checking for updates...",
-      "recentUpdates": "Recent updates",
-      "viewChangelog": "View full changelog →",
-      "updates": {
-        "v0.5.1": "Per-mapping first-byte timeouts · clearer partial-stream outcomes · reliable mapping reorder · lower hidden-window chart activity",
-        "v0.5.0": "Background mode, startup behavior, and menu bar settings · single-instance lock · expanded proxy, data, and security capabilities",
-        "v0.4.2": "New settings panel · smart routing savings stats · 30-day token stacked chart"
-      }
+      "repository": "GitHub Repository"
     }
   },
   "modelRules": {

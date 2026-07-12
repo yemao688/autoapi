@@ -317,6 +317,10 @@ function openReleases() {
   window.open('https://github.com/yemao688/autoapi/releases', '_blank')
 }
 
+function openRepository() {
+  window.open('https://github.com/yemao688/autoapi', '_blank')
+}
+
 onMounted(async () => {
   void loadSettings()
   void loadRuntimePaths()
@@ -968,29 +972,9 @@ watch(activeTheme, (t) => {
                 </div>
               </div>
               <div class="row" style="gap: 8px; flex-shrink: 0;">
+                <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 12px;" @click="openRepository">{{ t('settings.about.repository') }}</button>
                 <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 12px;" @click="openReleases">{{ t('settings.about.checkUpdate') }}</button>
               </div>
-            </div>
-
-            <div class="h-divider" style="margin: 18px 0 14px;"></div>
-
-            <div class="field" style="margin-bottom: 0;">
-              <div class="field-label">{{ t('settings.about.recentUpdates') }}</div>
-              <div class="stack-tight" style="margin-top: 6px; max-height: 145px; overflow-y: auto; padding-right: 4px;">
-                <div class="row" style="gap: 12px; padding: 6px 0;">
-                  <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.5.1</span>
-                  <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.5.1') }}</div>
-                </div>
-                <div class="row" style="gap: 12px; padding: 6px 0;">
-                  <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.5.0</span>
-                  <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.5.0') }}</div>
-                </div>
-                <div class="row" style="gap: 12px; padding: 6px 0;">
-                  <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.4.2</span>
-                  <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.4.2') }}</div>
-                </div>
-              </div>
-              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px; margin-top: 8px;" @click="openReleases">{{ t('settings.about.viewChangelog') }}</button>
             </div>
           </section>
         </div>
