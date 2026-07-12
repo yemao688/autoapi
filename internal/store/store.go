@@ -149,6 +149,7 @@ type rowScanner interface {
 
 var (
 	ErrNotFound  = fmt.Errorf("store: not found")
+	ErrConflict  = fmt.Errorf("store: conflict")
 	ErrQueueFull = fmt.Errorf("store: writer queue full")
 )
 

@@ -3,11 +3,63 @@ package store
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"testing"
 
 	"autoapi/internal/model"
 )
+
+func TestModelRuleTargetTimeoutPersistenceAndLegacyConversion(t *testing.T) {
+	s := newTestStore(t)
+	for _, tc := range []struct {
+		name    string
+		seconds int
+	}{{"2000ms", 2}, {"1500ms", 1}, {"999ms", 0}} {
+		rule, err := s.CreateModelRule(model.ModelRuleInput{Name: tc.name, Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", FirstTokenTimeoutSeconds: tc.seconds, Enabled: true}}})
+		if err != nil {
+			t.Fatalf("create %s: %v", tc.name, err)
+		}
+		got, err := s.GetModelRule(rule.ID)
+		if err != nil || got.Targets[0].FirstTokenTimeoutSeconds != tc.seconds {
+			t.Fatalf("round trip %s: got=%+v err=%v", tc.name, got.Targets, err)
+		}
+		list, err := s.ListModelRules()
+		if err != nil {
+			t.Fatalf("list %s: %v", tc.name, err)
+		}
+		var listed *model.ModelRule
+		for i := range list {
+			if list[i].Name == tc.name {
+				listed = &list[i]
+				break
+			}
+		}
+		if listed == nil || len(listed.Targets) != 1 || listed.Targets[0].FirstTokenTimeoutSeconds != tc.seconds {
+			t.Fatalf("list timeout: got %+v want %d", listed, tc.seconds)
+		}
+	}
+}
+
+func TestModelRuleTargetTimeoutValidationIsTransactional(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateModelRule(model.ModelRuleInput{Name: "negative", Targets: []model.ModelRuleTarget{{ProviderID: "p", FirstTokenTimeoutSeconds: -1}}}); err == nil {
+		t.Fatal("expected negative timeout rejection")
+	}
+	rules, err := s.ListModelRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rules {
+		if r.Name == "negative" {
+			t.Fatal("negative timeout partially committed rule")
+		}
+	}
+	max := int(math.MaxInt64 / 1000)
+	if _, err := s.CreateModelRule(model.ModelRuleInput{Name: "overflow", Targets: []model.ModelRuleTarget{{ProviderID: "p", FirstTokenTimeoutSeconds: max + 1}}}); err == nil {
+		t.Fatal("expected overflow timeout rejection")
+	}
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -685,19 +737,19 @@ func TestReorderModelRuleTargets(t *testing.T) {
 		}
 	}
 
-	// Wrong number of IDs: skip silently (concurrent add/delete race).
-	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID}); err != nil {
-		t.Fatalf("expected nil for wrong ID count (silent skip), got %v", err)
+	// Wrong number of IDs is a detectable target-set conflict.
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for wrong ID count, got %v", err)
 	}
 
 	// Unknown ID (same count, bad id) must fail.
-	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID, "unknown-id"}); err == nil {
-		t.Fatal("expected error for unknown ID, got nil")
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m2.ID, "unknown-id"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for unknown ID, got %v", err)
 	}
 
 	// Duplicate ID must fail.
-	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m1.ID, m2.ID}); err == nil {
-		t.Fatal("expected error for duplicate ID, got nil")
+	if err := s.ReorderModelRuleTargets(r.ID, []string{m1.ID, m1.ID, m2.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for duplicate ID, got %v", err)
 	}
 }
 

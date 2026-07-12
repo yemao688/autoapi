@@ -42,6 +42,14 @@ export function DeleteProvider(arg1) {
   return window['go']['api']['App']['DeleteProvider'](arg1);
 }
 
+export function EnterBackground() {
+  return window['go']['api']['App']['EnterBackground']();
+}
+
+export function EnterForeground() {
+  return window['go']['api']['App']['EnterForeground']();
+}
+
 export function ExportData(arg1) {
   return window['go']['api']['App']['ExportData'](arg1);
 }
@@ -52,6 +60,10 @@ export function FetchUpstreamModels(arg1) {
 
 export function GetAppInfo() {
   return window['go']['api']['App']['GetAppInfo']();
+}
+
+export function GetAppVisibilityState() {
+  return window['go']['api']['App']['GetAppVisibilityState']();
 }
 
 export function GetDashboard() {
@@ -168,6 +180,10 @@ export function SaveSettings(arg1) {
 
 export function SetAppInfo(arg1) {
   return window['go']['api']['App']['SetAppInfo'](arg1);
+}
+
+export function SetInitialVisibility(arg1) {
+  return window['go']['api']['App']['SetInitialVisibility'](arg1);
 }
 
 export function SetModelsActive(arg1, arg2, arg3) {

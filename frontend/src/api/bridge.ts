@@ -1,6 +1,11 @@
 import * as wails from '../../wailsjs/go/api/App'
 import type { model, api as apiModels } from '../../wailsjs/go/models'
 
+// Temporary frontend-only type for the Phase 2 app visibility API.
+// The backend binding already exists and returns the string 'foreground' or
+// 'background'; the frontend exposes it as a typed union for clarity.
+export type AppVisibilityState = 'foreground' | 'background'
+
 function ensureWails(): void {
   if (typeof window === 'undefined' || !(window as any).go) {
     throw new Error(
@@ -23,6 +28,14 @@ export const api = {
   showApp: (): Promise<void> => {
     ensureWails()
     return wails.ShowApp() as Promise<void>
+  },
+
+  // App visibility (Phase 2). The backend returns 'foreground' or
+  // 'background' via the generated Wails binding. We expose it as a
+  // typed union for clarity and consistency across the frontend.
+  getAppVisibilityState: (): Promise<AppVisibilityState> => {
+    ensureWails()
+    return wails.GetAppVisibilityState() as Promise<AppVisibilityState>
   },
 
   // Dashboard
@@ -122,9 +135,9 @@ export const api = {
     ensureWails()
     return wails.UpdateModelRule(id, input) as Promise<model.ModelRule>
   },
-  reorderRuleTargets: (ruleId: string, targetIds: string[]): Promise<void> => {
+  reorderRuleTargets: (ruleId: string, targetIds: string[]): Promise<model.ReorderModelRuleTargetsResult> => {
     ensureWails()
-    return wails.ReorderModelRuleTargets(ruleId, targetIds) as Promise<void>
+    return wails.ReorderModelRuleTargets(ruleId, targetIds) as Promise<model.ReorderModelRuleTargetsResult>
   },
   deleteModelRule: (id: string): Promise<void> => {
     ensureWails()

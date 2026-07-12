@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-07-12
+
+### Added
+
+- **Per-mapping first-byte timeout**: each model mapping can define its own first response-body-byte timeout in seconds, while the enclosing model rule retains its cumulative timeout budget.
+- **Clearer request outcomes**: streaming completions now distinguish successful delivery, upstream truncation, client abort, and downstream delivery failures.
+
+### Changed
+
+- **Model mapping reorder**: rapid consecutive drags are coalesced and persisted safely; the UI confirms the authoritative saved order and distinguishes mapping-set conflicts from ordinary save failures.
+- **Background resource use**: Usage charts unmount when inactive or hidden, and relative-time refresh timers pause while the application is in background mode.
+
+### Fixed
+
+- A streaming upstream response that ends before `[DONE]` is no longer recorded as a successful completion merely because HTTP 200 was already committed.
+- Close-to-tray lifecycle now uses a centralized visibility state so hidden-window polling and realtime refresh work do not restart from stale async completions.
+
 ## [0.5.0] - 2026-07-11
 
 ### Added

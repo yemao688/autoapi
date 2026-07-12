@@ -49,13 +49,14 @@ type InboundRequest struct {
 // through. It is identical for every candidate in the same rule (the
 // budget is set on the rule, not the target).
 type candidate struct {
-	provider        *model.Provider
-	modelName       string
-	ruleID          string
-	ruleLabel       string
-	targetID        string
-	maxRetries      int
-	firstByteBudget time.Duration
+	provider                   *model.Provider
+	modelName                  string
+	ruleID                     string
+	ruleLabel                  string
+	targetID                   string
+	maxRetries                 int
+	firstByteBudget            time.Duration
+	targetFirstBodyByteTimeout time.Duration
 }
 
 // selectCandidates picks the enabled model rule whose Name equals req.Model
@@ -107,13 +108,14 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 			continue
 		}
 		out = append(out, candidate{
-			provider:        p,
-			modelName:       modelNameForTarget(t.ModelName, req.Model),
-			ruleID:          rule.ID,
-			ruleLabel:       rule.Name,
-			targetID:        t.ID,
-			maxRetries:      t.MaxRetries,
-			firstByteBudget: firstByteBudget,
+			provider:                   p,
+			modelName:                  modelNameForTarget(t.ModelName, req.Model),
+			ruleID:                     rule.ID,
+			ruleLabel:                  rule.Name,
+			targetID:                   t.ID,
+			maxRetries:                 t.MaxRetries,
+			firstByteBudget:            firstByteBudget,
+			targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds),
 		})
 	}
 
@@ -125,6 +127,26 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		return nil, fmt.Errorf("no available provider: all targets of model %q are disabled or have open circuits", req.Model)
 	}
 	return out, nil
+}
+
+func targetFirstBodyByteTimeout(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// effectiveAttemptFirstBodyByteDeadline returns the earliest positive deadline
+// for an attempt. A zero target timeout means the rule deadline alone applies.
+func effectiveAttemptFirstBodyByteDeadline(now, ruleDeadline time.Time, targetTimeout time.Duration) time.Time {
+	deadline := ruleDeadline
+	if targetTimeout > 0 {
+		targetDeadline := now.Add(targetTimeout)
+		if deadline.IsZero() || targetDeadline.Before(deadline) {
+			deadline = targetDeadline
+		}
+	}
+	return deadline
 }
 
 func isOpen(providerID string, breakers map[string]*CircuitBreaker) bool {

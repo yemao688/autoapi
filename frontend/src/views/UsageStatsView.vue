@@ -10,6 +10,7 @@ import { useToast } from "@/composables/useToast";
 import { useConfirm } from "@/composables/useConfirm";
 import { useTabKeyboard } from "@/composables/useTabKeyboard";
 import { useCompactNumber } from "@/composables/useCompactNumber";
+import { useAppVisibility } from "@/composables/useAppVisibility";
 import type { ProviderOption } from "@/types/usage";
 import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
 import TokensPane from "@/components/usage/TokensPane.vue";
@@ -42,6 +43,7 @@ const activePane = ref<"logs" | "tokens">("logs");
 // values: 'realtime', '5s', '30s', 'off'. The composable owns the
 // localStorage read/write logic.
 const { liveSync } = useLiveSync();
+const { isVisible } = useAppVisibility();
 // isRefreshing guards against overlapping refreshes from realtime events
 // or polling timers when multiple triggers land in quick succession.
 const isRefreshing = ref(false);
@@ -52,6 +54,11 @@ let eventsOff: (() => void) | null = null;
 // to be throttled/suspended.
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// Generation token for polling. stopPolling increments this; any in-flight
+// poll tick whose captured token no longer matches is abandoned instead of
+// scheduling the next tick or restarting the countdown.
+let pollGen = 0;
 
 const POLL_MS: Record<Exclude<SyncMode, "realtime" | "off">, number> = {
   "5s": 5000,
@@ -382,6 +389,9 @@ async function refreshAll() {
 }
 
 function stopPolling() {
+  // Invalidate any in-flight tick scheduling so backgrounding or a mode
+  // change cannot be undone by a finally() that fires after we stop.
+  pollGen++;
   if (pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
@@ -403,8 +413,12 @@ function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
   const ms = POLL_MS[mode];
   if (!ms) return;
 
+  // Capture the generation at the moment polling starts. Any stop/apply mode
+  // change increments pollGen and invalidates this tick chain.
+  const gen = pollGen;
+
   function tick() {
-    if (liveSync.value !== mode) {
+    if (liveSync.value !== mode || !isVisible.value || gen !== pollGen) {
       return;
     }
     // Set the next deadline BEFORE refreshing so the countdown never blanks
@@ -413,7 +427,7 @@ function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
     nextPollAt.value = Date.now() + ms;
     updateCountdownLabel();
     void refreshAll().finally(() => {
-      if (liveSync.value !== mode) {
+      if (liveSync.value !== mode || !isVisible.value || gen !== pollGen) {
         return;
       }
       startCountdownTimer();
@@ -423,7 +437,7 @@ function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
 
   // Kick off an immediate refresh, then schedule the next tick.
   void refreshAll().finally(() => {
-    if (liveSync.value !== mode) {
+    if (liveSync.value !== mode || !isVisible.value || gen !== pollGen) {
       return;
     }
     nextPollAt.value = Date.now() + ms;
@@ -437,9 +451,12 @@ function startRealtime() {
   const off = EventsOn("log:new", () => {
     try {
       sseState.value = "connected";
-      if (liveSync.value === "realtime") {
-        void refreshAll();
+      // Guard against events that were already queued when the app was
+      // backgrounded (or if the mode changed) before the listener is removed.
+      if (liveSync.value !== "realtime" || !isVisible.value) {
+        return;
       }
+      void refreshAll();
     } catch (e: any) {
       console.warn("[sync] log:new handler error", e);
       sseState.value = "error";
@@ -463,6 +480,12 @@ function applyMode(mode: SyncMode) {
   nextPollAt.value = null;
   pollCountdown.value = "";
   clearCountdownTimer();
+  // Do not start timers or listeners while the app is backgrounded. This
+  // also prevents an in-flight refreshAll().finally() that calls applyMode
+  // after backgrounding from restarting work.
+  if (!isVisible.value) {
+    return;
+  }
   if (mode === "realtime") {
     startRealtime();
   } else if (mode === "5s" || mode === "30s") {
@@ -581,7 +604,12 @@ const { handleKeydown: handleTabKeydown } = useTabKeyboard(
 );
 
 onMounted(() => {
-  void refreshAll();
+  // Only refresh immediately if the app window is visible. When the app
+  // is backgrounded, the visibility watcher below will refresh once when
+  // it becomes visible again.
+  if (isVisible.value) {
+    void refreshAll();
+  }
   void fetchModelRules().catch((e) =>
     toast.push(e?.message || String(e), "error"),
   );
@@ -598,8 +626,30 @@ onUnmounted(() => {
   if (searchDebounce) clearTimeout(searchDebounce);
 });
 
-// Start/stop the correct refresh mechanism whenever the user changes sync mode.
-watch(liveSync, applyMode, { immediate: true });
+// Start/stop the correct refresh mechanism whenever the user changes sync mode,
+// but only while the app window is visible. When hidden, timers and listeners stay
+// stopped until visibility returns.
+watch(liveSync, (mode) => {
+  if (isVisible.value) {
+    applyMode(mode);
+  }
+}, { immediate: true });
+
+// Pause all auto-refresh while the app is backgrounded; resume once with a
+// refresh and the selected sync mode when it comes back to the foreground.
+watch(isVisible, (visible) => {
+  if (visible) {
+    // Refresh once with current filters, then re-apply the selected mode.
+    // refreshAll's isRefreshing guard prevents duplicate in-flight requests.
+    void refreshAll().finally(() => {
+      applyMode(liveSync.value);
+    });
+  } else {
+    stopPolling();
+    stopRealtime();
+    clearCountdownTimer();
+  }
+});
 
 // Re-query immediately when selection or date range changes.
 watch(
@@ -799,6 +849,8 @@ watch([modelFilter, searchText], () => {
         :modelRanking="modelRanking"
         :modelRankingFull="modelRankingFull"
         :providerShares="providerShares"
+        :is-visible="isVisible"
+        :active-pane="activePane"
       />
 
       <!-- ================== LOGS VIEW ================== -->
@@ -810,6 +862,8 @@ watch([modelFilter, searchText], () => {
         :logPage="logPage"
         :logPageSize="logPageSize"
         :chartData="chartData"
+        :is-visible="isVisible"
+        :active-pane="activePane"
         @first="goFirstPage"
         @prev="goPrevPage"
         @goto="(p: number) => goToPage(p)"

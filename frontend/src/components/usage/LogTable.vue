@@ -48,7 +48,9 @@ function chainLength(log: model.RequestLog): number {
 // chainStatusLabel maps a ChainEntry.status string to the i18n key
 // shown as a badge in the detail row. Unknown statuses fall through to
 // the raw string so future server-side additions don't render blank.
-function chainStatusLabel(status: string): string {
+type ChainStatus = model.RequestLogChainEntry['status'] | 'truncated' | 'downstream_error'
+
+function chainStatusLabel(status: ChainStatus): string {
   switch (status) {
     case 'success':
       return t('usage.logTable.statusSuccess')
@@ -62,6 +64,10 @@ function chainStatusLabel(status: string): string {
       return t('usage.logTable.statusPreflightError')
     case 'client_abort':
       return t('usage.logTable.statusClientAbort')
+    case 'truncated':
+      return t('usage.logTable.statusTruncated')
+    case 'downstream_error':
+      return t('usage.logTable.statusDownstreamError')
     default:
       return status
   }
@@ -70,13 +76,15 @@ function chainStatusLabel(status: string): string {
 // chainStatusClass colors the status badge in the chain timeline. The
 // classes (success/warn/error/info) are the same ones used in the
 // status cell on the main row so the visual language stays consistent.
-function chainStatusClass(status: string): string {
+function chainStatusClass(status: ChainStatus): string {
   switch (status) {
     case 'success':
       return 'success'
     case 'retryable':
     case 'circuit_open':
     case 'client_abort':
+    case 'downstream_error':
+    case 'truncated':
       return 'warn'
     case 'non_retryable':
     case 'preflight_error':
@@ -150,6 +158,32 @@ function chainArray(log: model.RequestLog): model.RequestLogChainEntry[] {
   return Array.isArray(log.chain) ? log.chain : []
 }
 
+function effectiveChainStatus(entry: model.RequestLogChainEntry): ChainStatus {
+  // downstream_error can be reported either as a status string or as a
+  // runtime field on a nominally successful upstream response.
+  if ((entry as any).downstream_error && String((entry as any).downstream_error).length > 0) {
+    return 'downstream_error'
+  }
+  return entry.status as ChainStatus
+}
+
+// Explicit top-level 2xx presentations derived from the final chain entry.
+// We do not fall back to a generic "non-success == partial" heuristic;
+// only these named outcomes change the status badge from a clean success.
+type OutcomePresentation = 'success' | 'truncated' | 'downstream_error' | 'client_abort'
+
+function topLevel2xxOutcome(log: model.RequestLog): OutcomePresentation | null {
+  if (log.status_code < 200 || log.status_code >= 300) return null
+  const chain = chainArray(log)
+  if (chain.length === 0) return null
+  const final = effectiveChainStatus(chain[chain.length - 1])
+  if (final === 'success') return 'success'
+  if (final === 'truncated') return 'truncated'
+  if (final === 'downstream_error') return 'downstream_error'
+  if (final === 'client_abort') return 'client_abort'
+  return null
+}
+
 // hitModel finds the last successful chain entry and returns the
 // provider/model that actually served the request. Returns null when
 // no attempt succeeded (e.g. all retries exhausted).
@@ -201,9 +235,26 @@ const columnCount = computed(() => columns)
 
           <!-- 2. Status -->
           <td>
-            <span class="badge" :class="statusBadgeClass(log.status_code)">
-              <span :class="'dot ' + statusDotClass(log.status_code)"></span>{{ statusText(log.status_code) }}
-            </span>
+            <template v-if="topLevel2xxOutcome(log) === 'truncated'">
+              <span class="badge warn" :title="t('usage.logTable.partialTruncatedTitle')">
+                <span class="dot amber"></span>~{{ log.status_code }}
+              </span>
+            </template>
+            <template v-else-if="topLevel2xxOutcome(log) === 'downstream_error'">
+              <span class="badge warn" :title="t('usage.logTable.partialDownstreamTitle')">
+                <span class="dot amber"></span>~{{ log.status_code }}
+              </span>
+            </template>
+            <template v-else-if="topLevel2xxOutcome(log) === 'client_abort'">
+              <span class="badge warn" :title="t('usage.logTable.partialClientAbortTitle')">
+                <span class="dot amber"></span>~{{ log.status_code }}
+              </span>
+            </template>
+            <template v-else>
+              <span class="badge" :class="statusBadgeClass(log.status_code)">
+                <span :class="'dot ' + statusDotClass(log.status_code)"></span>{{ statusText(log.status_code) }}
+              </span>
+            </template>
             <span
               v-if="showRetryIndicator(log)"
               class="retry-indicator"
@@ -306,10 +357,14 @@ const columnCount = computed(() => columns)
                     <span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: entry.attempt_order }) }}</span>
                     <span class="log-detail-chain-provider">{{ entry.provider_name || '—' }}</span>
                     <span class="log-detail-chain-model text-mono">{{ entry.model_name || '—' }}</span>
-                    <span class="badge" :class="chainStatusClass(entry.status)">{{ chainStatusLabel(entry.status) }}</span>
+                    <span class="badge" :class="chainStatusClass(effectiveChainStatus(entry))">{{ chainStatusLabel(effectiveChainStatus(entry)) }}</span>
                     <span class="log-detail-chain-latency text-muted">{{ formatLatency(entry.latency_ms) }}</span>
                     <span v-if="entry.first_token_ms > 0" class="log-detail-chain-latency text-muted" style="margin-left: 2px;">· {{ t('usage.logTable.ttft') }} {{ formatLatency(entry.first_token_ms) }}</span>
-                    <span v-if="entry.error" class="log-detail-chain-error text-mono">{{ entry.error }}</span>
+                    <span v-if="(entry as any).downstream_error" class="log-detail-chain-downstream-error text-mono">
+                      <span class="log-detail-chain-downstream-label">{{ t('usage.logTable.downstreamError') }}:</span>
+                      {{ (entry as any).downstream_error }}
+                    </span>
+                    <span v-else-if="entry.error" class="log-detail-chain-error text-mono">{{ entry.error }}</span>
                   </li>
                 </ol>
               </div>
@@ -632,5 +687,15 @@ const columnCount = computed(() => columns)
   font-size: 11px;
   color: var(--muted, #6e6e73);
   word-break: break-all;
+}
+.log-detail-chain-downstream-error {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--warning, #ad6700);
+  word-break: break-all;
+}
+.log-detail-chain-downstream-label {
+  font-weight: 500;
+  color: var(--warning, #ad6700);
 }
 </style>

@@ -124,14 +124,18 @@ type ModelRule struct {
 // (FirstByteTimeoutSeconds): the budget is now a per-rule concern
 // covering the total time across all candidates and retries.
 type ModelRuleTarget struct {
-	ID           string `json:"id"`
-	RuleID       string `json:"rule_id"`
-	ProviderID   string `json:"provider_id"`
-	ModelName    string `json:"model_name"`
-	MaxRetries   int    `json:"max_retries"`   // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
-	HitCount     int64  `json:"hit_count"`     // incremented once on successful dispatch
-	FailureCount int64  `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
-	Enabled      bool   `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
+	ID         string `json:"id"`
+	RuleID     string `json:"rule_id"`
+	ProviderID string `json:"provider_id"`
+	ModelName  string `json:"model_name"`
+	MaxRetries int    `json:"max_retries"` // 0 = try once, no in-target retry; N = up to N additional attempts on retryable errors before falling through
+	// FirstTokenTimeoutSeconds caps each attempt until its first upstream
+	// response-body byte. Zero inherits the rule cumulative budget. It is
+	// persisted in the legacy rule_targets.timeout_ms column.
+	FirstTokenTimeoutSeconds int   `json:"first_token_timeout_seconds"`
+	HitCount                 int64 `json:"hit_count"`     // incremented once on successful dispatch
+	FailureCount             int64 `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
+	Enabled                  bool  `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
 }
 
 // RequestLog is one proxied request through the gateway.
@@ -192,12 +196,22 @@ type RequestLogChainEntry struct {
 	ProviderName string `json:"provider_name"`
 	ModelName    string `json:"model_name"`
 	TargetID     string `json:"target_id"`
-	Status       string `json:"status"` // success, retryable, non_retryable, circuit_open, preflight_error, client_abort
+	Status       string `json:"status"` // success, retryable, non_retryable, circuit_open, preflight_error, client_abort, truncated, downstream_error
 	StatusCode   int    `json:"status_code"`
 	Error        string `json:"error"`
 	LatencyMs    int    `json:"latency_ms"`
 	FirstTokenMs int    `json:"first_token_ms"` // TTFT for this chain entry (streaming); 0 for non-streaming or failed attempts
 }
+
+// RequestOutcome is the categorical completion state of an attempt.
+type RequestOutcome string
+
+const (
+	OutcomeSuccess         RequestOutcome = "success"
+	OutcomeTruncated       RequestOutcome = "truncated"
+	OutcomeDownstreamError RequestOutcome = "downstream_error"
+	OutcomeClientAbort     RequestOutcome = "client_abort"
+)
 
 // ----- Aggregation DTOs (dashboard / usage-stats) -----
 
@@ -387,6 +401,13 @@ type ModelRuleInput struct {
 	Enabled                 bool              `json:"enabled"`
 	FirstByteTimeoutSeconds int               `json:"first_byte_timeout_seconds"`
 	Targets                 []ModelRuleTarget `json:"targets"`
+}
+
+// ReorderModelRuleTargetsResult reports an expected stale-target conflict
+// without turning it into a transport/API failure. Operational store errors
+// are still returned as Go errors.
+type ReorderModelRuleTargetsResult struct {
+	Conflict bool `json:"conflict"`
 }
 
 // Note on `ModelRuleTarget.Enabled` in this input: a target with an empty ID

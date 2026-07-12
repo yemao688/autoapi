@@ -28,6 +28,7 @@ func main() {
 	// after an app restart.
 	settings, sErr := app.GetSettings()
 	cfg := resolveLaunchConfig(settings)
+	app.SetInitialVisibility(cfg.startHidden)
 	if sErr != nil {
 		slog.Warn("launch: failed to read settings, using safe defaults", "error", sErr)
 	}
@@ -96,13 +97,25 @@ func main() {
 	}
 
 	err := wails.Run(&options.App{
-		Title:             "Autoapi",
-		Width:             1280,
-		Height:            800,
-		MinWidth:          480,
-		MinHeight:         400,
-		StartHidden:       cfg.startHidden,
-		HideWindowOnClose: cfg.hideOnClose,
+		Title:       "Autoapi",
+		Width:       1280,
+		Height:      800,
+		MinWidth:    480,
+		MinHeight:   400,
+		StartHidden: cfg.startHidden,
+		// Close interception is the sole hide-on-close mechanism when tray
+		// mode is enabled. Wails' HideWindowOnClose is intentionally disabled
+		// to avoid competing native transitions.
+		HideWindowOnClose: false,
+		OnBeforeClose: func(_ context.Context) bool {
+			if !cfg.enableTray {
+				return false
+			}
+			if err := app.EnterBackground(); err != nil {
+				slog.Warn("lifecycle: failed to enter background", "error", err)
+			}
+			return true
+		},
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: singleInstanceLockID(profile),
 			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 
 	"autoapi/internal/model"
@@ -194,12 +195,8 @@ func (s *Store) ReorderModelRules(orderedIDs []string) error {
 // ---------------------------------------------------------------------------
 
 func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
-	// timeout_ms is still selected for backward compatibility but is no
-	// longer scanned into ModelRuleTarget (the per-target timeout moved
-	// to the enclosing rule). The column is intentionally left in the
-	// schema by migration 014 (append-only per the migration policy).
 	rows, err := s.db.Query(`
-		SELECT id, rule_id, provider_id, model_name, max_retries, hit_count, failure_count, enabled
+		SELECT id, rule_id, provider_id, model_name, timeout_ms, max_retries, hit_count, failure_count, enabled
 		FROM rule_targets WHERE rule_id = ? ORDER BY tier ASC`, ruleID)
 	if err != nil {
 		return nil, err
@@ -209,15 +206,27 @@ func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
 	var out []model.ModelRuleTarget
 	for rows.Next() {
 		var t model.ModelRuleTarget
-		if err := rows.Scan(&t.ID, &t.RuleID, &t.ProviderID, &t.ModelName, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
+		var timeoutMs int64
+		if err := rows.Scan(&t.ID, &t.RuleID, &t.ProviderID, &t.ModelName, &timeoutMs, &t.MaxRetries, &t.HitCount, &t.FailureCount, &t.Enabled); err != nil {
 			return nil, err
 		}
+		t.FirstTokenTimeoutSeconds = int(timeoutMs / 1000)
 		out = append(out, t)
 	}
 	if out == nil {
 		out = []model.ModelRuleTarget{}
 	}
 	return out, rows.Err()
+}
+
+func targetTimeoutMillis(seconds int) (int64, error) {
+	if seconds < 0 {
+		return 0, fmt.Errorf("first_token_timeout_seconds must not be negative")
+	}
+	if int64(seconds) > math.MaxInt64/1000 {
+		return 0, fmt.Errorf("first_token_timeout_seconds is too large")
+	}
+	return int64(seconds) * 1000, nil
 }
 
 // insertTargets writes a slice of targets for a freshly-created rule.
@@ -235,6 +244,10 @@ func (s *Store) listTargets(ruleID string) ([]model.ModelRuleTarget, error) {
 func (s *Store) insertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTarget) ([]model.ModelRuleTarget, error) {
 	out := make([]model.ModelRuleTarget, len(in))
 	for i, t := range in {
+		timeoutMs, err := targetTimeoutMillis(t.FirstTokenTimeoutSeconds)
+		if err != nil {
+			return nil, err
+		}
 		// Defense in depth: the frontend clamps to >= 0, but a negative value
 		// would make the retry loop body execute zero times (target silently
 		// skipped). Clamp rather than error — friendlier for API consumers.
@@ -256,9 +269,9 @@ func (s *Store) insertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 		// longer written (per-target timeout moved to the rule level);
 		// its default of 0 is preserved.
 		if _, err := tx.Exec(`
-			INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, enabled)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+			INSERT INTO rule_targets (id, rule_id, provider_id, model_name, timeout_ms, tier, max_retries, enabled)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, t.RuleID, t.ProviderID, t.ModelName, timeoutMs, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 			return nil, err
 		}
 		out[i] = t
@@ -327,6 +340,10 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 
 	// Step 2: UPSERT each incoming target.
 	for i, t := range in {
+		timeoutMs, err := targetTimeoutMillis(t.FirstTokenTimeoutSeconds)
+		if err != nil {
+			return nil, err
+		}
 		t.RuleID = ruleID
 		if t.ID == "" {
 			// New target: INSERT with a fresh ID. Apply the default-to-enabled
@@ -338,9 +355,9 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 			}
 			t.ID = makeID()
 			if _, err := tx.Exec(`
-				INSERT INTO rule_targets (id, rule_id, provider_id, model_name, tier, max_retries, enabled)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				t.ID, t.RuleID, t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
+				INSERT INTO rule_targets (id, rule_id, provider_id, model_name, timeout_ms, tier, max_retries, enabled)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				t.ID, t.RuleID, t.ProviderID, t.ModelName, timeoutMs, i, t.MaxRetries, boolInt(t.Enabled)); err != nil {
 				return nil, err
 			}
 		} else {
@@ -354,9 +371,9 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 			// timeout moved to the rule level).
 			if _, err := tx.Exec(`
 				UPDATE rule_targets
-				SET provider_id = ?, model_name = ?, tier = ?, max_retries = ?, enabled = ?
+				SET provider_id = ?, model_name = ?, timeout_ms = ?, tier = ?, max_retries = ?, enabled = ?
 				WHERE id = ? AND rule_id = ?`,
-				t.ProviderID, t.ModelName, i, t.MaxRetries, boolInt(t.Enabled), t.ID, t.RuleID); err != nil {
+				t.ProviderID, t.ModelName, timeoutMs, i, t.MaxRetries, boolInt(t.Enabled), t.ID, t.RuleID); err != nil {
 				return nil, err
 			}
 		}
@@ -365,11 +382,9 @@ func (s *Store) upsertTargets(tx *sql.Tx, ruleID string, in []model.ModelRuleTar
 	return out, nil
 }
 
-// ReorderModelRuleTargets updates the tier (display order / failover priority)
-// of targets within a rule. It verifies that the provided IDs exactly match the
-// rule's current target set (no additions, no deletions) and then updates only
-// the tier column. This is a safe, non-destructive reorder that preserves all
-// target data (counters, provider, model name, etc.).
+// ReorderModelRuleTargets updates target tiers transactionally. A target-set
+// mismatch returns ErrConflict so callers reload authoritative state. Concurrent
+// reorders with the same target set intentionally remain last-write-wins.
 func (s *Store) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) error {
 	return s.execTx(func(tx *sql.Tx) error {
 		// 1. Verify the incoming IDs exactly match the rule's current targets.
@@ -389,34 +404,32 @@ func (s *Store) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		// Check count match. A mismatch means a concurrent add/delete
-		// changed the target set between the frontend reading it and
-		// submitting the reorder. Rather than failing the request, we
-		// skip the reorder silently — the next loadRules() will refresh
-		// the UI with the correct state. Reorder is non-destructive
-		// (only writes tier values) so skipping is always safe.
 		if len(orderedTargetIDs) != len(existing) {
-			slog.Warn("store: reorder targets skipped due to count mismatch",
-				"rule_id", ruleID,
-				"got", len(orderedTargetIDs),
-				"expected", len(existing))
-			return nil
+			return fmt.Errorf("store: reorder targets %q: target set changed: %w", ruleID, ErrConflict)
 		}
 		// Check each incoming ID exists in the rule
 		seen := make(map[string]bool, len(orderedTargetIDs))
 		for _, id := range orderedTargetIDs {
 			if !existing[id] {
-				return fmt.Errorf("store: reorder targets %q: unknown target id %q", ruleID, id)
+				return fmt.Errorf("store: reorder targets %q: unknown target id %q: %w", ruleID, id, ErrConflict)
 			}
 			if seen[id] {
-				return fmt.Errorf("store: reorder targets %q: duplicate target id %q", ruleID, id)
+				return fmt.Errorf("store: reorder targets %q: duplicate target id %q: %w", ruleID, id, ErrConflict)
 			}
 			seen[id] = true
 		}
 		// 2. Update tier for each target.
 		for i, id := range orderedTargetIDs {
-			if _, err := tx.Exec(`UPDATE rule_targets SET tier = ? WHERE id = ? AND rule_id = ?`, i, id, ruleID); err != nil {
+			res, err := tx.Exec(`UPDATE rule_targets SET tier = ? WHERE id = ? AND rule_id = ?`, i, id, ruleID)
+			if err != nil {
 				return fmt.Errorf("store: reorder targets %q: %w", ruleID, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("store: reorder targets %q: rows affected: %w", ruleID, err)
+			}
+			if n != 1 {
+				return fmt.Errorf("store: reorder targets %q: target %q affected %d rows: %w", ruleID, id, n, ErrConflict)
 			}
 		}
 		return nil

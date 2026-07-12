@@ -1402,8 +1402,17 @@ func TestStreaming_RetriesPerTargetBeforeFailover(t *testing.T) {
 		t.Fatalf("expected t0 hit=0 fail=3, got hit=%d fail=%d", h0, f0)
 	}
 	h1, f1 := store.statsFor("t1")
-	if h1 != 1 || f1 != 0 {
-		t.Fatalf("expected t1 hit=1 fail=0, got hit=%d fail=%d", h1, f1)
+	if h1 != 0 || f1 != 1 {
+		t.Fatalf("expected truncated t1 to have exactly one failure and no hit, got hit=%d fail=%d", h1, f1)
+	}
+	p.Shutdown()
+	log, ok := store.LastLog()
+	if !ok || len(log.Chain) == 0 {
+		t.Fatal("expected request chain for truncated committed stream")
+	}
+	last := log.Chain[len(log.Chain)-1]
+	if last.Status != string(model.OutcomeTruncated) || last.StatusCode != http.StatusOK {
+		t.Fatalf("expected committed truncated HTTP 200 outcome, got status=%q code=%d", last.Status, last.StatusCode)
 	}
 }
 
@@ -2156,8 +2165,8 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	p.Shutdown() // drain async writer
 
-	// The breaker should have recorded a failure (since the stream
-	// ended without [DONE]). Use the exported accessors.
+	// A committed stream ending without [DONE] is truncated: it is not a
+	// successful hit, but the provider is penalized as a failed completion.
 	afterState := breaker.CurrentState()
 	afterSuccess := breaker.consecutiveFailures
 	if afterSuccess <= beforeSuccess {
@@ -2169,6 +2178,22 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 	if prov.Status != model.ProviderStatusError {
 		t.Fatalf("expected provider status=error after mid-stream failure, got %q (err=%q)",
 			prov.Status, prov.ErrorMessage)
+	}
+	log, ok := store.LastLog()
+	if !ok {
+		t.Fatal("expected request log")
+	}
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.OutcomeTruncated) {
+		t.Fatalf("expected one committed truncated chain entry, got %+v", log.Chain)
+	}
+	if log.Chain[0].StatusCode != http.StatusOK {
+		t.Fatalf("expected committed truncated HTTP 200, got %d", log.Chain[0].StatusCode)
+	}
+	if log.Chain[0].Error == "" {
+		t.Fatal("expected truncated chain entry to include an interruption error")
+	}
+	if log.StatusCode != http.StatusOK {
+		t.Fatalf("expected top-level committed HTTP 200, got %d", log.StatusCode)
 	}
 }
 

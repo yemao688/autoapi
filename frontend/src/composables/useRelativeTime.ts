@@ -1,9 +1,11 @@
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import i18n from '@/locales'
+import { useAppVisibility } from './useAppVisibility'
 
 export function useRelativeTime() {
   const tick = ref(0)
   let timer: ReturnType<typeof setInterval> | null = null
+  const { isVisible } = useAppVisibility()
 
   function format(timestamp: number | string | undefined): string {
     if (!timestamp) return '—'
@@ -34,13 +36,42 @@ export function useRelativeTime() {
     })
   }
 
-  onMounted(() => {
-    refreshAll()
+  function startInterval() {
+    if (timer) return
     timer = setInterval(refreshAll, 30000)
+  }
+
+  function stopInterval() {
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
+  function resume() {
+    // Refresh once immediately, then restart the local 30s timer exactly once.
+    refreshAll()
+    startInterval()
+  }
+
+  onMounted(() => {
+    if (isVisible.value) {
+      resume()
+    }
+  })
+
+  // Pause the local interval while the app is backgrounded; resume once with a
+  // single refresh and a single timer restart when it returns to foreground.
+  watch(isVisible, (visible) => {
+    if (visible) {
+      resume()
+    } else {
+      stopInterval()
+    }
   })
 
   onUnmounted(() => {
-    if (timer) clearInterval(timer)
+    stopInterval()
   })
 
   return { tick, format }

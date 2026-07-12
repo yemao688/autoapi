@@ -16,6 +16,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,11 +24,13 @@ import (
 	"path/filepath"
 	stdruntime "runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"autoapi/internal/dock"
 	"autoapi/internal/logger"
 	"autoapi/internal/model"
+	"autoapi/internal/store"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -144,15 +147,66 @@ type ProxyService interface {
 // App is the single struct bound to the Wails runtime. All methods here are
 // auto-generated as TypeScript bindings under frontend/wailsjs/go/main/App.
 type App struct {
-	ctx     context.Context
-	deps    Deps
-	appInfo model.AppInfo
+	ctx                 context.Context
+	deps                Deps
+	appInfo             model.AppInfo
+	visibilityMu        sync.Mutex
+	visibility          string
+	initiallyBackground bool
+}
+
+// SetInitialVisibility records Wails' StartHidden option before startup.
+func (a *App) SetInitialVisibility(background bool) { a.initiallyBackground = background }
+
+// GetAppVisibilityState returns the native lifecycle state for startup
+// reconciliation by the frontend.
+func (a *App) GetAppVisibilityState() string {
+	a.visibilityMu.Lock()
+	defer a.visibilityMu.Unlock()
+	return a.visibility
+}
+
+func (a *App) EnterBackground() error {
+	if a.ctx == nil {
+		return fmt.Errorf("app: EnterBackground called before Startup")
+	}
+	a.visibilityMu.Lock()
+	if a.visibility == "background" {
+		a.visibilityMu.Unlock()
+		return nil
+	}
+	a.visibility = "background"
+	a.visibilityMu.Unlock()
+	runtime.WindowHide(a.ctx)
+	runtime.Hide(a.ctx)
+	dock.HideDockIcon()
+	runtime.EventsEmit(a.ctx, "app:visibility", "background")
+	return nil
+}
+
+func (a *App) EnterForeground() error {
+	if a.ctx == nil {
+		return fmt.Errorf("app: EnterForeground called before Startup")
+	}
+	a.visibilityMu.Lock()
+	if a.visibility == "foreground" {
+		a.visibilityMu.Unlock()
+		return nil
+	}
+	a.visibility = "foreground"
+	a.visibilityMu.Unlock()
+	dock.ShowDockIcon()
+	runtime.Show(a.ctx)
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+	runtime.EventsEmit(a.ctx, "app:visibility", "foreground")
+	return nil
 }
 
 // NewApp constructs an App with the given dependencies. Pass Deps{} (zero) to
 // get a contract-only instance that returns ErrNotImplemented from every call.
 func NewApp(deps Deps) *App {
-	return &App{deps: deps}
+	return &App{deps: deps, visibility: "foreground"}
 }
 
 // SetAppInfo injects build-time version metadata. Called from main after
@@ -168,6 +222,12 @@ func (a *App) SetAppInfo(info model.AppInfo) {
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	slog.Info("app: starting up")
+	// Wails may have created the window hidden before OnStartup. Route the
+	// initial state through the same authority so Dock visibility and the
+	// frontend event are consistent from the first callback onward.
+	if a.initiallyBackground {
+		_ = a.EnterBackground()
+	}
 	if a.deps.Proxy != nil {
 		if err := a.deps.Proxy.Start(); err != nil {
 			slog.Error("app: failed to start proxy", "err", err)
@@ -256,23 +316,13 @@ func (a *App) GetSystemHealth() (model.ServiceHealth, error) {
 // not just the window. WindowShow handles the case where the window was
 // individually hidden via WindowHide. WindowUnminimise handles minimised state.
 func (a *App) ShowWindow() error {
-	if a.ctx == nil {
-		return fmt.Errorf("app: ShowWindow called before Startup")
-	}
-	runtime.Show(a.ctx)
-	runtime.WindowShow(a.ctx)
-	runtime.WindowUnminimise(a.ctx)
-	return nil
+	return a.EnterForeground()
 }
 
 // HideWindow hides the main window. Used when the user picks "hide" from the
 // tray / menu bar instead of closing the app.
 func (a *App) HideWindow() error {
-	if a.ctx == nil {
-		return fmt.Errorf("app: HideWindow called before Startup")
-	}
-	runtime.WindowHide(a.ctx)
-	return nil
+	return a.EnterBackground()
 }
 
 // Quit terminates the application. The Wails runtime.Quit helper requires a
@@ -588,11 +638,18 @@ func (a *App) ReorderModelRules(orderedIDs []string) error {
 // ReorderModelRuleTargets reorders the targets within a model rule by updating
 // only their tier values. Unlike UpdateModelRule, it does NOT delete or recreate
 // targets — counters and IDs are fully preserved.
-func (a *App) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) error {
+func (a *App) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) (model.ReorderModelRuleTargetsResult, error) {
 	if a.deps.Store == nil {
-		return errNotImpl
+		return model.ReorderModelRuleTargetsResult{}, errNotImpl
 	}
-	return a.deps.Store.ReorderModelRuleTargets(ruleID, orderedTargetIDs)
+	err := a.deps.Store.ReorderModelRuleTargets(ruleID, orderedTargetIDs)
+	if errors.Is(err, store.ErrConflict) {
+		return model.ReorderModelRuleTargetsResult{Conflict: true}, nil
+	}
+	if err != nil {
+		return model.ReorderModelRuleTargetsResult{}, err
+	}
+	return model.ReorderModelRuleTargetsResult{}, nil
 }
 
 // ----- Dashboard / usage -----
@@ -855,24 +912,11 @@ func (a *App) GetAppInfo() (model.AppInfo, error) {
 // a background accessory process. The HTTP proxy on :8344 keeps running.
 // On non-macOS platforms, only the window is hidden.
 func (a *App) HideApp() error {
-	if a.ctx == nil {
-		return fmt.Errorf("app: HideApp called before Startup")
-	}
-	runtime.WindowHide(a.ctx)
-	runtime.Hide(a.ctx)
-	dock.HideDockIcon()
-	return nil
+	return a.EnterBackground()
 }
 
 // ShowApp restores the Dock icon and brings the window back to the
 // foreground. This is the inverse of HideApp.
 func (a *App) ShowApp() error {
-	if a.ctx == nil {
-		return fmt.Errorf("app: ShowApp called before Startup")
-	}
-	dock.ShowDockIcon()
-	runtime.Show(a.ctx)
-	runtime.WindowShow(a.ctx)
-	runtime.WindowUnminimise(a.ctx)
-	return nil
+	return a.EnterForeground()
 }

@@ -24,11 +24,17 @@ export function DeleteModelRule(arg1:string):Promise<void>;
 
 export function DeleteProvider(arg1:string):Promise<void>;
 
+export function EnterBackground():Promise<void>;
+
+export function EnterForeground():Promise<void>;
+
 export function ExportData(arg1:model.ExportFormat):Promise<api.ExportResult>;
 
 export function FetchUpstreamModels(arg1:string):Promise<Array<model.Model>>;
 
 export function GetAppInfo():Promise<model.AppInfo>;
+
+export function GetAppVisibilityState():Promise<string>;
 
 export function GetDashboard():Promise<model.DashboardData>;
 
@@ -76,7 +82,7 @@ export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;
 
 export function Quit():Promise<void>;
 
-export function ReorderModelRuleTargets(arg1:string,arg2:Array<string>):Promise<void>;
+export function ReorderModelRuleTargets(arg1:string,arg2:Array<string>):Promise<model.ReorderModelRuleTargetsResult>;
 
 export function ReorderModelRules(arg1:Array<string>):Promise<void>;
 
@@ -87,6 +93,8 @@ export function RestartProxy():Promise<void>;
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 
 export function SetAppInfo(arg1:model.AppInfo):Promise<void>;
+
+export function SetInitialVisibility(arg1:boolean):Promise<void>;
 
 export function SetModelsActive(arg1:string,arg2:Array<string>,arg3:boolean):Promise<void>;
 

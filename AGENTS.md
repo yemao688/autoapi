@@ -5,7 +5,7 @@ Compact ramp-up guide for OpenCode sessions working in this repo.
 ## Project type & entrypoints
 
 - **Wails v2 desktop app**: Go backend + Vue 3 + TypeScript frontend.
-- Product name: `Autoapi`, version in `wails.json` (currently 0.4.2).
+- Product name: `Autoapi`, version in `wails.json` (currently 0.5.1).
 - Backend entry: `main.go` (`wails.Run`, menu + tray wiring) and `app.go` (dependency wiring).
 - Frontend entry: `frontend/src/main.ts` → `App.vue` → `router.ts`.
 - Local OpenAI-compatible proxy: `internal/proxy/proxy.go`, listens on `0.0.0.0:8344` by default. The UI never fetches 8344 directly; metrics/logs flow through bound `App` methods in `internal/api/app.go`.

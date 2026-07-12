@@ -41,6 +41,17 @@ func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
 	}
 }
 
+func TestEffectiveAttemptFirstBodyByteDeadline(t *testing.T) {
+	now := time.Unix(100, 0)
+	rule := now.Add(10 * time.Second)
+	if got := effectiveAttemptFirstBodyByteDeadline(now, rule, 2*time.Second); !got.Equal(now.Add(2 * time.Second)) {
+		t.Fatalf("target cap should win: %v", got)
+	}
+	if got := effectiveAttemptFirstBodyByteDeadline(now, rule, 0); !got.Equal(rule) {
+		t.Fatalf("rule deadline should apply when target cap is zero: %v", got)
+	}
+}
+
 func TestSelectCandidates_FiltersOpenBreaker(t *testing.T) {
 	rules := []model.ModelRule{
 		{

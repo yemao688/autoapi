@@ -10,6 +10,14 @@ import TestModelChatModal from '@/components/TestModelChatModal.vue'
 const { t } = useI18n()
 const toast = useToast()
 
+function getTargetTimeout(target: model.ModelRuleTarget): number {
+  return target.first_token_timeout_seconds ?? 0
+}
+
+function setTargetTimeout(target: model.ModelRuleTarget, value: number): void {
+  target.first_token_timeout_seconds = value ?? 0
+}
+
 const props = defineProps<{
   open: boolean
   target: model.ModelRuleTarget | null
@@ -45,6 +53,7 @@ function reset() {
     max_retries: 0,
     enabled: true,
   })
+  setTargetTimeout(form.value, 0)
   availableModels.value = []
   loadingModels.value = false
 }
@@ -61,6 +70,7 @@ watch(() => props.target, (t) => {
       hit_count: t.hit_count,
       failure_count: t.failure_count,
     })
+    setTargetTimeout(form.value, getTargetTimeout(t))
     // If editing an existing target, load the models for its provider
     if (t.provider_id) {
       void loadAvailableModels(t.provider_id)
@@ -107,6 +117,12 @@ async function loadAvailableModels(providerId: string) {
 
 const isEdit = computed(() => !!props.target)
 
+// Two-way binding for the per-mapping first-token timeout.
+const formFirstTokenTimeout = computed({
+  get: () => getTargetTimeout(form.value),
+  set: (v) => setTargetTimeout(form.value, v),
+})
+
 // Validation: a target must have a provider and a non-empty (post-trim) model
 // name. We trim here so the computed is the single source of truth for both
 // the inline message and the Save button's disabled state.
@@ -129,8 +145,9 @@ function save() {
   if (!isValid.value) return
   // Trim model_name before emitting so the persisted value never carries
   // accidental leading/trailing whitespace. provider_id comes from a <select>
-  // and is already canonical.
-  emit('save', new model.ModelRuleTarget({
+  // and is already canonical. Preserve first_token_timeout_seconds on the
+  // emitted object.
+  const toSave = new model.ModelRuleTarget({
     id: form.value.id,
     rule_id: form.value.rule_id,
     provider_id: form.value.provider_id,
@@ -142,7 +159,9 @@ function save() {
     enabled: form.value.enabled,
     hit_count: form.value.hit_count,
     failure_count: form.value.failure_count,
-  }))
+  })
+  setTargetTimeout(toSave, getTargetTimeout(form.value))
+  emit('save', toSave)
 }
 
 async function testModel() {
@@ -190,6 +209,11 @@ async function testModel() {
         <div class="field">
           <label class="field-label">{{ t('modelRules.targets.maxRetries') }}</label>
           <input v-model.number="form.max_retries" type="number" class="input" min="0" step="1" :disabled="saving">
+        </div>
+        <div class="field">
+          <label class="field-label">{{ t('modelRules.targets.firstTokenTimeout') }}</label>
+          <input v-model.number="formFirstTokenTimeout" type="number" class="input" min="0" step="1" :disabled="saving">
+          <div class="field-help">{{ t('modelRules.targets.firstTokenTimeoutHelp') }}</div>
         </div>
         <div v-if="showValidation" class="text-muted" style="font-size: 12px; color: var(--negative); margin-top: -4px;">
           {{ t('modelRules.targets.validation') }}

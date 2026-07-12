@@ -952,7 +952,7 @@ watch(activeTheme, (t) => {
             <div class="section-head">
               <div>
                 <div class="section-title">{{ t('settings.about.title') }}</div>
-                <div class="section-sub">{{ t('settings.about.subtitle', { version: appInfo?.version || '0.5.0' }) }}</div>
+                <div class="section-sub">{{ t('settings.about.subtitle', { version: appInfo?.version || '0.5.1' }) }}</div>
               </div>
             </div>
 
@@ -962,7 +962,7 @@ watch(activeTheme, (t) => {
                 <div style="font-size: 15px; font-weight: 600;">{{ t('app.tagline') }}</div>
                 <div class="text-muted" style="font-size: 12.5px; margin-top: 2px;">{{ t('settings.about.tagline') }}</div>
                 <div class="row" style="gap: 16px; margin-top: 12px; font-size: 12px; color: var(--muted);">
-                  <span>{{ t('settings.about.versionLine', { version: appInfo?.version || '0.5.0', build: appInfo?.build || '—' }) }}</span>
+                  <span>{{ t('settings.about.versionLine', { version: appInfo?.version || '0.5.1', build: appInfo?.build || '—' }) }}</span>
                   <span>{{ t('settings.about.platformArch', { platform: appInfo?.platform || '—', arch: appInfo?.arch || '—' }) }}</span>
                   <span>Go {{ appInfo?.goVersion || '—' }}</span>
                 </div>
@@ -977,6 +977,10 @@ watch(activeTheme, (t) => {
             <div class="field" style="margin-bottom: 0;">
               <div class="field-label">{{ t('settings.about.recentUpdates') }}</div>
               <div class="stack-tight" style="margin-top: 6px; max-height: 145px; overflow-y: auto; padding-right: 4px;">
+                <div class="row" style="gap: 12px; padding: 6px 0;">
+                  <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.5.1</span>
+                  <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.5.1') }}</div>
+                </div>
                 <div class="row" style="gap: 12px; padding: 6px 0;">
                   <span class="text-mono text-muted" style="width: 76px; flex-shrink: 0; font-size: 11.5px;">v0.5.0</span>
                   <div style="flex: 1; font-size: 12.5px;">{{ t('settings.about.updates.v0.5.0') }}</div>

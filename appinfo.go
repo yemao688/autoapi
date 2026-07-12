@@ -8,12 +8,16 @@ import (
 )
 
 // appVersion is set at build time via:
-//   go build -ldflags "-X main.appVersion=0.5.0"
+//
+//	go build -ldflags "-X main.appVersion=0.5.1"
+//
 // Defaults to "dev" when unset (e.g. during wails dev).
 var appVersion = "dev"
 
 // appBuild is set at build time via:
-//   go build -ldflags "-X main.appBuild=20260712"
+//
+//	go build -ldflags "-X main.appBuild=20260712"
+//
 // Defaults to "" which triggers a VCS hash fallback.
 var appBuild = ""
 

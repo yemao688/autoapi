@@ -1587,24 +1587,30 @@ outer:
 			attemptOrder = newOrder
 
 			switch result.Status {
-			case "success":
+			case model.OutcomeSuccess:
 				// Top-level FirstTokenMs = Σ prior failed chain
 				// LatencyMs + success chain FirstTokenMs.
 				logEntry.FirstTokenMs = firstByteCumulativeMs + result.FirstTokenMs
 				logEntry.StatusCode = result.StatusCode
 				succeeded = true
 				return
-			case "client_abort":
+			case model.OutcomeTruncated, model.OutcomeDownstreamError:
+				// The response was committed; never retry or fail over after
+				// forwarding any upstream body bytes.
+				logEntry.StatusCode = result.StatusCode
+				logEntry.Error = result.Error
+				return
+			case model.OutcomeClientAbort:
 				logEntry.StatusCode = result.StatusCode
 				logEntry.Error = result.Error
 				succeeded = true
 				return
-			case "non_retryable":
+			case model.RequestOutcome("non_retryable"):
 				logEntry.StatusCode = result.StatusCode
 				logEntry.Error = result.Error
 				succeeded = true
 				return
-			case "retryable":
+			case model.RequestOutcome("retryable"):
 				firstByteCumulativeMs += result.LatencyMs
 				if result.StatusCode != 0 {
 					lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, result.StatusCode)
@@ -1734,6 +1740,9 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	// attempt should not wait longer than the remaining time until
 	// the first-byte deadline.
 	timeout := c.firstByteBudget
+	if c.targetFirstBodyByteTimeout > 0 && c.targetFirstBodyByteTimeout < timeout {
+		timeout = c.targetFirstBodyByteTimeout
+	}
 	if dl, ok := ctx.Deadline(); ok {
 		if remaining := time.Until(dl); remaining > 0 && remaining < timeout {
 			timeout = remaining
@@ -1962,12 +1971,35 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}, attemptOrder
 	}
 
-	// 2xx — TRUE PASS-THROUGH STREAMING. No more buffering; chunks
-	// flow upstream → client in real time.
+	// 2xx — first obtain a body byte before committing downstream headers.
 	slog.Debug("proxy: stream upstream success",
 		"provider", c.provider.Name,
 		"model", c.modelName,
 		"status", upstreamStatus)
+
+	deadline := time.Time{}
+	if dl, ok := ctx.Deadline(); ok {
+		deadline = dl
+	}
+	deadline = effectiveAttemptFirstBodyByteDeadline(time.Now(), deadline, c.targetFirstBodyByteTimeout)
+	initial, initialErr := readFirstBodyByte(r.Context(), resp.Body, deadline)
+	if len(initial) == 0 {
+		if initialErr == nil {
+			initialErr = io.EOF
+		}
+		category := CategorizeError(initialErr, 0)
+		latencyMs := int(time.Since(attemptStart).Milliseconds())
+		attemptOrder++
+		status := model.RequestOutcome("retryable")
+		if category == CategoryClientAbort {
+			status = model.OutcomeClientAbort
+		}
+		if category == CategoryNonRetryable {
+			status = model.RequestOutcome("non_retryable")
+		}
+		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: string(status), Error: initialErr.Error(), LatencyMs: latencyMs})
+		return streamAttemptResult{Status: status, Error: initialErr.Error(), LatencyMs: latencyMs, StatusCode: 0}, attemptOrder
+	}
 
 	ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 	flusher, _ := ww.(http.Flusher)
@@ -1989,20 +2021,25 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	// Do call, not on body reads), so a long LLM stream can run for
 	// arbitrarily long.
 	var firstByteTime time.Duration
-	firstByteRecorded := false
 	usageAcc := &streamUsageAccumulator{}
 
 	buf := make([]byte, 32*1024)
 	var streamErr error
 	var writeErr error
+	firstByteTime = time.Since(attemptStart)
+	usageAcc.Feed(initial)
+	if _, writeErr = ww.Write(initial); writeErr == nil && flusher != nil {
+		flusher.Flush()
+	}
+	if writeErr == nil && initialErr != nil && initialErr != io.EOF {
+		streamErr = initialErr
+	}
 	for {
+		if streamErr != nil {
+			break
+		}
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			if !firstByteRecorded {
-				firstByteTime = time.Since(attemptStart)
-				firstByteRecorded = true
-				p.recordStreamSuccess(c)
-			}
 			usageAcc.Feed(buf[:n])
 			if _, werr := ww.Write(buf[:n]); werr != nil {
 				writeErr = werr
@@ -2071,11 +2108,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}, attemptOrder
 	case writeErr != nil:
 		// Other write error (e.g. response writer closed).
+		chainEntry.Status = "downstream_error"
 		chainEntry.Error = writeErr.Error()
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = writeErr.Error()
 		return streamAttemptResult{
-			Status:       "success",
+			Status:       "downstream_error",
 			StatusCode:   upstreamStatus,
 			Error:        writeErr.Error(),
 			LatencyMs:    attemptLatencyMs,
@@ -2089,6 +2127,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		// right after receiving the full response) is NOT a failure
 		// of any kind — treat it as a clean completion.
 		if usageAcc.Done() {
+			p.recordStreamSuccess(c)
 			logEntry.Chain = append(logEntry.Chain, chainEntry)
 			return streamAttemptResult{
 				Status:       "success",
@@ -2104,6 +2143,11 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		// the breaker.
 		if !isClientDisconnect(streamErr) {
 			p.breakerFor(c.provider.ID).Record(false)
+			if c.targetID != "" {
+				if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
+					slog.Error("proxy: increment target failure count (truncated stream)", "err", err)
+				}
+			}
 			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, streamErr.Error()); err != nil {
 				slog.Error("proxy: update provider health", "err", err)
 			}
@@ -2116,12 +2160,13 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				"model", c.modelName,
 				"err", streamErr.Error())
 		} else {
+			chainEntry.Status = "truncated"
 			chainEntry.Error = streamErr.Error()
 		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = chainEntry.Error
 		return streamAttemptResult{
-			Status:       "success",
+			Status:       model.RequestOutcome(chainEntry.Status),
 			StatusCode:   upstreamStatus,
 			Error:        chainEntry.Error,
 			LatencyMs:    attemptLatencyMs,
@@ -2132,14 +2177,23 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		// Clean EOF. If [DONE] was not seen, this is a mid-stream
 		// failure and the provider misbehaved.
 		if !usageAcc.Done() {
+			chainEntry.Status = "truncated"
 			p.breakerFor(c.provider.ID).Record(false)
+			if c.targetID != "" {
+				if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
+					slog.Error("proxy: increment target failure count (truncated stream)", "err", err)
+				}
+			}
 			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, "stream closed without [DONE]"); err != nil {
 				slog.Error("proxy: update provider health", "err", err)
 			}
 		}
+		if usageAcc.Done() {
+			p.recordStreamSuccess(c)
+		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		return streamAttemptResult{
-			Status:       "success",
+			Status:       model.RequestOutcome(chainEntry.Status),
 			StatusCode:   upstreamStatus,
 			LatencyMs:    attemptLatencyMs,
 			FirstTokenMs: int(firstByteTime.Milliseconds()),
@@ -2292,7 +2346,7 @@ func (bp *bufferPool) Put(b []byte) { bp.pool.Put(b) }
 // build the top-level log entry, decide retry vs. failover, and compute
 // cumulative latency.
 type streamAttemptResult struct {
-	Status       string // "success", "retryable", "non_retryable", "client_abort"
+	Status       model.RequestOutcome
 	StatusCode   int
 	Error        string
 	LatencyMs    int // attempt wall-clock (for retryable entries; sum from caller)
