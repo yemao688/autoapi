@@ -1,4 +1,140 @@
-# Autoapi — AI 模型路由桌面端
+# Autoapi
+
+> 自托管 AI 模型路由网关 — 一个桌面应用，统一管理多家大模型 API。
+
+把 OpenAI、Anthropic、DeepSeek、Moonshot、智谱 GLM 等多家上游聚合到一个本地 OpenAI 兼容端点。客户端只需指向 `http://localhost:8344`，Autoapi 负责模型路由、密钥管理、故障转移和使用统计。
+
+## ✨ 核心特性
+
+- **🔧 多上游聚合** — 一端点接入 OpenAI、Anthropic、DeepSeek、Moonshot、智谱 GLM 及任意 OpenAI 兼容服务。
+- **🔀 智能模型路由** — 为每个客户端模型定义映射规则，按优先级故障转移；支持每个映射独立的首字超时。
+- **🔐 密钥安全** — 本地 AES-256-GCM 加密，主密码派生 Argon2id；上游密钥永不明文存储。
+- **📊 实时统计** — Token 用量、请求日志、Provider 占比、模型排行、延迟直方图，支持 CSV/JSON 导出。
+- **🖥️ 后台运行** — 关闭窗口自动收入托盘，代理持续运行；macOS Dock 智能隐藏。
+- **🌍 双语界面** — 中文 / English，支持深色模式。
+
+## 📸 界面预览
+
+| 仪表盘 | 模型规则 | 使用统计 |
+:---:|:---:|:---:|
+| Dashboard | Model Rules | Usage Stats |
+
+## 🚀 快速开始
+
+### 下载安装
+
+前往 [Releases](https://github.com/yemao688/autoapi/releases) 下载最新版本：
+
+- **macOS**：`autoapi.app`（Universal，支持 Intel / Apple Silicon）
+- **Windows**：`autoapi.exe`
+- **Linux**：`autoapi.deb` / `autoapi.tar.gz`
+
+下载后拖入 Applications（macOS）或双击安装即可。
+
+### 从源码构建
+
+<details>
+<summary>展开构建步骤</summary>
+
+**前置要求**：Go 1.25+、Node.js 20+、Wails CLI v2.12+
+
+```bash
+# 安装 Wails CLI（仅需一次）
+go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+# 克隆仓库
+git clone https://github.com/yemao688/autoapi.git
+cd autoapi
+
+# 安装前端依赖
+cd frontend && npm install && cd ..
+
+# 开发模式（热重载）
+wails dev
+
+# 生产构建
+wails build -platform darwin/universal -clean    # macOS
+wails build -platform windows/amd64 -clean       # Windows
+wails build -platform linux/amd64 -clean         # Linux
+```
+
+</details>
+
+## 💡 使用指南
+
+### 1. 添加上游 Provider
+
+打开 **Providers** 页面，添加你的 API 密钥。Autoapi 已预置主流服务商模板，也支持自定义 OpenAI 兼容端点。点击「测试」验证连通性。
+
+### 2. 创建模型规则
+
+在 **模型规则** 页面定义客户端可见的模型名。例如创建 `gpt-4o`，映射到：
+
+| 优先级 | 上游 | 模型 | 首字超时 |
+|:---:|---|---|---|
+| T1 | OpenAI | gpt-4o | 30s |
+| T2 | DeepSeek | deepseek-chat | 15s |
+
+客户端请求 `gpt-4o` 时，Autoapi 先尝试 T1，超时或失败自动切换 T2。
+
+### 3. 生成 API 密钥
+
+在 **API 密钥** 页面创建本地密钥（ID 即密钥本身），供客户端使用。
+
+### 4. 开始调用
+
+```bash
+# 客户端只需指向本地端点
+export AUTOAPI_KEY='<your-local-api-key>'
+
+curl -X POST http://localhost:8344/v1/chat/completions \
+  -H "Authorization: Bearer $AUTOAPI_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
+```
+
+> 客户端使用的 Bearer token 是 Autoapi 生成的本地密钥 ID，**不是**上游 Provider 的密钥。上游密钥由 Autoapi 自动解密替换。
+
+## 🏗️ 架构
+
+- **后端**：Go 1.25 · Wails v2 · chi/v5 · modernc.org/sqlite
+- **前端**：Vue 3.5 · Vite 8 · TypeScript 6 · vue-router 4 · Chart.js
+- **安全**：Argon2id 主密码 · AES-256-GCM 密钥加密 · SQLite WAL
+- **界面**：Apple 设计语言 · CSS 变量主题 · 响应式布局
+
+## 📁 数据路径
+
+| 内容 | 路径 |
+|---|---|
+| SQLite 数据库 | `~/.autoapi/autoapi.db` |
+| 应用日志 | `~/.autoapi/logs/autoapi.log` |
+| AES 密钥 | `~/.autoapi/` |
+
+> 开发模式使用独立数据目录 `~/.autoapi-dev/`，不影响正式环境。
+
+## 📝 开发
+
+```bash
+go test ./internal/...     # 后端测试
+cd frontend && npm run build   # 前端类型检查 + 构建
+wails build                 # 完整构建
+```
+
+详见 [AGENTS.md](AGENTS.md)。
+
+## 📜 更新日志
+
+详见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 📄 许可证
+
+[MIT](LICENSE) © 2026 yemao688
+
+## 🔗 链接
+
+- **仓库**：<https://github.com/yemao688/autoapi>
+- **发布**：<https://github.com/yemao688/autoapi/releases>
+- **问题反馈**：<https://github.com/yemao688/autoapi/issues>
 
 OpenAI 兼容的本地代理网关 + 可视化管理面板，wails v2 + Go + Vue 3 + TypeScript 实现。
 
