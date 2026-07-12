@@ -108,6 +108,12 @@ func main() {
 		// to avoid competing native transitions.
 		HideWindowOnClose: false,
 		OnBeforeClose: func(_ context.Context) bool {
+			// If the user explicitly chose Quit from the app menu or tray,
+			// allow the window to close. Otherwise, when the tray is enabled,
+			// treat the close button as "hide to background".
+			if app.IsQuitting() {
+				return false
+			}
 			if !cfg.enableTray {
 				return false
 			}

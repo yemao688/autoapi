@@ -25,6 +25,7 @@ import (
 	stdruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"autoapi/internal/dock"
@@ -153,6 +154,7 @@ type App struct {
 	visibilityMu        sync.Mutex
 	visibility          string
 	initiallyBackground bool
+	quitting            atomic.Bool
 }
 
 // SetInitialVisibility records Wails' StartHidden option before startup.
@@ -330,10 +332,21 @@ func (a *App) HideWindow() error {
 // (e.g. the menu is clicked during shutdown), which is preferable to the
 // log.Fatal that runtime.Quit would otherwise trigger.
 func (a *App) Quit() {
+	// Record the explicit quit intent before asking the runtime to close so
+	// OnBeforeClose can distinguish a menu/tray Quit from a window close.
+	a.quitting.Store(true)
 	if a.ctx == nil {
 		return
 	}
 	runtime.Quit(a.ctx)
+}
+
+// IsQuitting reports whether an explicit quit intent has been recorded (e.g.
+// from the application menu, tray menu, or frontend binding). It is safe for
+// concurrent use and is intended for lifecycle handlers such as
+// OnBeforeClose.
+func (a *App) IsQuitting() bool {
+	return a.quitting.Load()
 }
 
 // NavigateTo asks the frontend to push a route. We use a Wails event rather

@@ -41,3 +41,20 @@ func TestAppVisibilityStartsForegroundAndAcceptsHiddenStartup(t *testing.T) {
 		t.Fatal("expected hidden startup preference to be retained")
 	}
 }
+
+func TestQuitIntentInitiallyFalse(t *testing.T) {
+	app := NewApp(Deps{})
+	if app.IsQuitting() {
+		t.Fatal("IsQuitting() = true initially, want false")
+	}
+}
+
+func TestQuitSetsIntentBeforeInvokingRuntime(t *testing.T) {
+	// No Wails context is wired, so runtime.Quit will not be invoked. We can
+	// still verify that Quit records the explicit-quit intent safely.
+	app := NewApp(Deps{})
+	app.Quit()
+	if !app.IsQuitting() {
+		t.Fatal("IsQuitting() = false after Quit(), want true")
+	}
+}
