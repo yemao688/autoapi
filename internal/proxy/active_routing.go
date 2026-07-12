@@ -30,6 +30,7 @@ func (p *Proxy) planCandidates(req *InboundRequest, candidates []candidate) []ca
 	scoreInputs := make([]scoring.TargetInput, len(candidates))
 	snapshotter, hasMetrics := p.metricSink.(metricSnapshotter)
 	prices, hasPrices := p.store.(priceResolver)
+	endpointKind, knownEndpoint := endpointKind(req.Endpoint)
 	var priceErr error
 	for i, c := range candidates {
 		target := model.ModelRuleTarget{ID: c.targetID, ProviderID: c.provider.ID, ModelName: c.modelName, Tier: c.tier}
@@ -39,12 +40,8 @@ func (p *Proxy) planCandidates(req *InboundRequest, candidates []candidate) []ca
 			snapshot = snapshotter.CurrentSnapshot(key)
 		}
 		cost := model.DefaultEffectiveCost()
-		if !hasPrices && candidates[0].strategy == routing.CostFirst {
-			// Unknown pricing is intentionally retained as unknown; routing's
-			// cost comparator places it after comparable prices, never as free.
-		}
-		if hasPrices {
-			price, err := prices.ResolvePrice(c.provider.ID, c.modelName, endpointKind(req.Endpoint))
+		if hasPrices && knownEndpoint {
+			price, err := prices.ResolvePrice(c.provider.ID, c.modelName, endpointKind)
 			if err != nil {
 				priceErr = err
 			} else {
@@ -89,9 +86,13 @@ func activeStrategy(strategy routing.Strategy) bool {
 	return strategy == routing.ScoreWithinTier || strategy == routing.CostFirst
 }
 
-func endpointKind(path string) string {
-	if path == "/v1/embeddings" {
-		return "embedding"
+func endpointKind(path string) (string, bool) {
+	switch path {
+	case "/v1/embeddings":
+		return "embedding", true
+	case "/v1/chat/completions", "/v1/completions", "/v1/responses":
+		return "chat", true
+	default:
+		return "", false
 	}
-	return "chat"
 }

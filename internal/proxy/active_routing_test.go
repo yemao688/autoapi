@@ -26,12 +26,14 @@ func (s *planningMetricSpy) CurrentSnapshot(k model.TargetMetricKey) metrics.Sna
 type planningPriceStore struct {
 	*mockStore
 	calls  int
+	kinds  []string
 	prices map[string]*model.Price
 	err    error
 }
 
 func (s *planningPriceStore) ResolvePrice(providerID, modelName, endpointKind string) (*model.Price, error) {
 	s.calls++
+	s.kinds = append(s.kinds, endpointKind)
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -47,6 +49,30 @@ func planningCandidates(strategy routing.Strategy) []candidate {
 }
 
 func planningRequest() *InboundRequest { return &InboundRequest{Endpoint: "/v1/chat/completions"} }
+
+func TestEndpointKind(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		kind string
+		ok   bool
+	}{
+		{path: "/v1/chat/completions", kind: "chat", ok: true},
+		{path: "/v1/completions", kind: "chat", ok: true},
+		{path: "/v1/responses", kind: "chat", ok: true},
+		{path: "/v1/embeddings", kind: "embedding", ok: true},
+		{path: "/v1/images/generations", ok: false},
+		{path: "/v1/audio/transcriptions", ok: false},
+		{path: "/v1/files", ok: false},
+		{path: "/v1/unknown", ok: false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			kind, ok := endpointKind(tc.path)
+			if kind != tc.kind || ok != tc.ok {
+				t.Fatalf("endpointKind(%q) = (%q, %v), want (%q, %v)", tc.path, kind, ok, tc.kind, tc.ok)
+			}
+		})
+	}
+}
 
 func TestPlanCandidatesPriorityAndEmptyDoNotReadPlanningDependencies(t *testing.T) {
 	for _, tc := range []struct {
@@ -106,6 +132,61 @@ func TestPlanCandidatesScoreWithinTierAndCostFirst(t *testing.T) {
 	}
 	if prices.calls != 3 {
 		t.Fatalf("price resolver calls=%d, want 3", prices.calls)
+	}
+	if len(prices.kinds) != 3 || prices.kinds[0] != "chat" || prices.kinds[1] != "chat" || prices.kinds[2] != "chat" {
+		t.Fatalf("price resolver endpoint kinds=%v, want [chat chat chat]", prices.kinds)
+	}
+}
+
+func TestPlanCandidatesKnownEndpointKindsAndUnknownEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, wantKind string
+	}{
+		{name: "chat", endpoint: "/v1/chat/completions", wantKind: "chat"},
+		{name: "embedding", endpoint: "/v1/embeddings", wantKind: "embedding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prices := &planningPriceStore{mockStore: &mockStore{}}
+			p := &Proxy{store: prices}
+			p.planCandidates(&InboundRequest{Endpoint: tc.endpoint}, planningCandidates(routing.CostFirst))
+			if prices.calls != 3 || len(prices.kinds) != 3 {
+				t.Fatalf("price resolver calls=%d kinds=%v, want three calls", prices.calls, prices.kinds)
+			}
+			for _, kind := range prices.kinds {
+				if kind != tc.wantKind {
+					t.Fatalf("endpoint kind=%q, want %q", kind, tc.wantKind)
+				}
+			}
+		})
+	}
+
+	for _, endpoint := range []string{"/v1/images/generations", "/v1/audio/transcriptions", "/v1/files"} {
+		t.Run(endpoint, func(t *testing.T) {
+			prices := &planningPriceStore{mockStore: &mockStore{}, prices: map[string]*model.Price{
+				"pb:mb": {UpstreamModel: "mb", BillingMode: model.BillingModeToken, InputPricePerMillion: 1, Currency: "USD", Confidence: model.CostConfidenceExact},
+			}}
+			p := &Proxy{store: prices}
+			cs := planningCandidates(routing.CostFirst)
+			out := p.planCandidates(&InboundRequest{Endpoint: endpoint}, cs)
+			if prices.calls != 0 {
+				t.Fatalf("unknown endpoint called price resolver %d times", prices.calls)
+			}
+			if got := ids(out); len(got) != len(ids(cs)) || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+				t.Fatalf("unknown endpoint changed order: %v", got)
+			}
+		})
+	}
+}
+
+func TestUnknownEndpointCostIsNotFree(t *testing.T) {
+	prices := &planningPriceStore{mockStore: &mockStore{}, prices: map[string]*model.Price{
+		"pa:ma": {UpstreamModel: "ma", BillingMode: model.BillingModeToken, InputPricePerMillion: 10, Currency: "USD", Confidence: model.CostConfidenceExact},
+	}}
+	p := &Proxy{store: prices}
+	cs := planningCandidates(routing.CostFirst)
+	out := p.planCandidates(&InboundRequest{Endpoint: "/v1/images/generations"}, cs)
+	if prices.calls != 0 || ids(out)[0] != "a" {
+		t.Fatalf("unknown endpoint should preserve original order without pricing: calls=%d order=%v", prices.calls, ids(out))
 	}
 }
 
