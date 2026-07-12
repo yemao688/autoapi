@@ -1135,6 +1135,52 @@ func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
 	}
 }
 
+func TestHandlerPlansCandidatesOnceBeforeRetryAndFailover(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"ok"}`)
+	}))
+	defer srv.Close()
+
+	store := &planningPriceStore{mockStore: &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+		},
+		rules: []model.ModelRule{{
+			ID: "r1", Name: "x", Enabled: true, Strategy: string("score_within_tier"),
+			Targets: []model.ModelRuleTarget{
+				{ProviderID: "p0", ModelName: "m0", MaxRetries: 1, Enabled: true},
+				{ProviderID: "p1", ModelName: "m1", Enabled: true},
+			},
+		}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}}
+	metricsSpy := &planningMetricSpy{byID: map[string]metrics.Snapshot{}}
+	p := New(store, &mockService{}, 0, nil)
+	p.metricSink = metricsSpy
+	t.Cleanup(func() { _ = p.Shutdown() })
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || p0Hits != 2 || p1Hits != 1 {
+		t.Fatalf("response=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	if metricsSpy.calls != 2 || store.calls != 2 {
+		t.Fatalf("resolve planning calls repeated during retry/failover: metrics=%d prices=%d, want 2 each", metricsSpy.calls, store.calls)
+	}
+}
+
 // TestFailover_RetryBoundedExhaustedFallsThrough verifies that when a target
 // exhausts its retry budget on CategoryRetryable errors, the proxy falls
 // through to the next candidate AND records failure_count for ALL attempts

@@ -49,15 +49,40 @@ func planningCandidates(strategy routing.Strategy) []candidate {
 func planningRequest() *InboundRequest { return &InboundRequest{Endpoint: "/v1/chat/completions"} }
 
 func TestPlanCandidatesPriorityAndEmptyDoNotReadPlanningDependencies(t *testing.T) {
-	spy := &planningMetricSpy{byID: map[string]metrics.Snapshot{}}
-	p := &Proxy{metricSink: spy, store: &planningPriceStore{mockStore: &mockStore{}}}
-	cs := planningCandidates(routing.PriorityFirst)
-	out := p.planCandidates(planningRequest(), cs)
-	if spy.calls != 0 || len(out) != len(cs) || out[0].targetID != "a" || out[1].targetID != "b" {
-		t.Fatalf("priority planner unexpectedly read dependencies or changed order: calls=%d out=%v", spy.calls, out)
-	}
-	if got := p.planCandidates(planningRequest(), nil); got != nil {
-		t.Fatalf("empty candidates changed: %#v", got)
+	for _, tc := range []struct {
+		name       string
+		strategy   routing.Strategy
+		candidates []candidate
+		wantIDs    []string
+	}{
+		{name: "priority", strategy: routing.PriorityFirst, candidates: planningCandidates(routing.PriorityFirst), wantIDs: []string{"a", "b", "c"}},
+		{name: "empty strategy", strategy: routing.Strategy(""), candidates: planningCandidates(routing.Strategy("")), wantIDs: []string{"a", "b", "c"}},
+		{name: "bogus strategy", strategy: routing.Strategy("bogus"), candidates: planningCandidates(routing.Strategy("bogus")), wantIDs: []string{"a", "b", "c"}},
+		{name: "empty candidates", strategy: routing.PriorityFirst, candidates: nil, wantIDs: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metricsSpy := &planningMetricSpy{byID: map[string]metrics.Snapshot{}}
+			prices := &planningPriceStore{mockStore: &mockStore{}}
+			p := &Proxy{metricSink: metricsSpy, store: prices}
+			out := p.planCandidates(planningRequest(), tc.candidates)
+			if got := ids(out); len(got) != len(tc.wantIDs) {
+				t.Fatalf("candidate count=%d, want %d: %v", len(got), len(tc.wantIDs), got)
+			}
+			for i := range tc.wantIDs {
+				if out[i].targetID != tc.wantIDs[i] {
+					t.Fatalf("candidate order=%v, want %v", ids(out), tc.wantIDs)
+				}
+			}
+			if metricsSpy.calls != 0 || prices.calls != 0 {
+				t.Fatalf("strategy %q read planning dependencies: metrics=%d prices=%d", tc.strategy, metricsSpy.calls, prices.calls)
+			}
+			if len(tc.candidates) == 0 && out != nil {
+				t.Fatalf("empty candidates changed: %#v", out)
+			}
+			if len(p.breakers) != 0 {
+				t.Fatalf("strategy %q created breaker dependencies: %v", tc.strategy, p.breakers)
+			}
+		})
 	}
 }
 
