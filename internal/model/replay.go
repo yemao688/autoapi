@@ -22,7 +22,5 @@ type ReplayAttemptScore struct {
 	TargetMissing    bool                 `json:"target_missing"`
 	ProviderMissing  bool                 `json:"provider_missing"`
 	Score            TargetShadowScore    `json:"score"`
-	PriceConfidence  CostConfidence       `json:"price_confidence"`
-	PriceVersion     string               `json:"price_version"`
 	ReplayLimitation string               `json:"replay_limitation,omitempty"`
 }

@@ -35,11 +35,17 @@ import (
 	"autoapi/internal/proxy"
 	"autoapi/internal/routing"
 	"autoapi/internal/scoring"
-	"autoapi/internal/service"
 	"autoapi/internal/store"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+func requestCost(m *model.Model, attempts int) model.EffectiveCost {
+	if m == nil || attempts < 1 {
+		return model.DefaultEffectiveCost()
+	}
+	return model.EffectiveCost{Cost: m.RequestPrice * float64(attempts), Currency: "USD", Available: true}
+}
 
 // Deps bundles the collaborators App needs. Any nil field makes the
 // corresponding method return an "not yet implemented" error, so the contract
@@ -69,10 +75,11 @@ type StoreService interface {
 
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
+	GetModel(providerID, name string) (*model.Model, error)
 	SetModelsActive(providerID string, modelNames []string, active bool) error
 	DeleteModel(providerID, modelName string) error
 	ClearProviderModels(providerID string) error
-	UpdateModelName(providerID, oldName, newName string) error
+	UpdateProviderModel(in model.ProviderModelUpdate) error
 	RecalcModelsCount(providerID string) error
 	UpdateProviderTestResult(id string, status model.ProviderStatus, avgLatency int, errMsg string) error
 
@@ -119,16 +126,6 @@ type StoreService interface {
 
 	// Lifecycle
 	Close() error
-
-	// Prices
-	ListPrices() ([]model.Price, error)
-	UpsertPrice(in model.PriceInput) (*model.Price, error)
-	DeletePrice(id string) error
-	ResolvePrice(providerID, modelName, endpointKind string) (*model.Price, error)
-}
-
-type replayPriceStore interface {
-	ResolvePriceAt(providerID, modelName, endpointKind string, timestampMs int64) (*model.Price, error)
 }
 
 // BusinessService is the higher-level logic implemented by internal/service
@@ -208,12 +205,9 @@ func (a *App) GetTargetDiagnostics() ([]model.TargetShadowScore, error) {
 			endpoint := "/v1/chat/completions"
 			key := model.TargetMetricKey{TargetID: target.ID, ProviderID: target.ProviderID, ModelName: target.ModelName, Endpoint: endpoint}
 			ms := a.deps.Metrics.CurrentSnapshot(key)
-			price, priceErr := a.deps.Store.ResolvePrice(target.ProviderID, target.ModelName, "chat")
-			priceBad := priceErr != nil
-			if priceBad {
-				price = nil
-			}
-			cost := service.EstimateEffectiveCost(price, model.DiagnosticsInputTokens, model.DiagnosticsOutputTokens, 0, 0, 1, 0)
+			m, priceErr := a.deps.Store.GetModel(target.ProviderID, target.ModelName)
+			priceBad := priceErr != nil || m == nil
+			cost := requestCost(m, 1+target.MaxRetries)
 			hard := scoring.HardState{Disabled: !rule.Enabled || !target.Enabled}
 			if b, ok := breakers[target.ProviderID]; ok {
 				hard.CircuitOpen = b.State == proxy.StateOpen
@@ -254,7 +248,6 @@ func (a *App) GetTargetDiagnostics() ([]model.TargetShadowScore, error) {
 		v.SampleCount = converted.SampleCount
 		v.Availability = converted.Availability
 		v.Reason = converted.Reason
-		v.PriceVersion = converted.PriceVersion
 		v.Cost = converted.Cost
 		// These are diagnostic-only overrides. The scorer remains unchanged and
 		// unavailable provider/price failures must not be hidden by its generic
@@ -297,8 +290,8 @@ func (a *App) GetModelRuleShadowComparisons() ([]model.ModelRuleShadowComparison
 			}
 			p, pErr := a.deps.Store.GetProvider(target.ProviderID)
 			providerOK := pErr == nil && p != nil && p.Enabled
-			price, priceErr := a.deps.Store.ResolvePrice(target.ProviderID, target.ModelName, "chat")
-			cost := service.EstimateEffectiveCost(price, model.DiagnosticsInputTokens, model.DiagnosticsOutputTokens, 0, 0, 1, 0)
+			m, priceErr := a.deps.Store.GetModel(target.ProviderID, target.ModelName)
+			cost := requestCost(m, 1+target.MaxRetries)
 			if pErr != nil {
 				assumptions = append(assumptions, "provider_error:"+target.ProviderID)
 			}
@@ -742,18 +735,18 @@ func (a *App) ClearProviderModels(providerID string) error {
 	return a.deps.Store.ClearProviderModels(providerID)
 }
 
-// UpdateModelName renames a model in a provider's catalog. Both names are
-// trimmed; an empty new name is rejected.
-func (a *App) UpdateModelName(providerID, oldName, newName string) error {
+// UpdateProviderModel atomically changes a provider model's name and request price.
+func (a *App) UpdateProviderModel(in model.ProviderModelUpdate) error {
 	if a.deps.Store == nil {
 		return errNotImpl
 	}
-	oldName = strings.TrimSpace(oldName)
-	newName = strings.TrimSpace(newName)
-	if newName == "" {
+	in.ProviderID = strings.TrimSpace(in.ProviderID)
+	in.OldName = strings.TrimSpace(in.OldName)
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
 		return fmt.Errorf("model name must not be empty")
 	}
-	return a.deps.Store.UpdateModelName(providerID, oldName, newName)
+	return a.deps.Store.UpdateProviderModel(in)
 }
 
 // GetProviderKey returns the decrypted upstream key for display in the UI.
@@ -865,38 +858,6 @@ func (a *App) ReorderModelRuleTargets(ruleID string, orderedTargetIDs []string) 
 	return model.ReorderModelRuleTargetsResult{}, nil
 }
 
-// ----- Prices -----
-
-func (a *App) ListPrices() ([]model.Price, error) {
-	if a.deps.Store == nil {
-		return nil, errNotImpl
-	}
-	return a.deps.Store.ListPrices()
-}
-
-func (a *App) UpsertPrice(in model.PriceInput) (*model.Price, error) {
-	if a.deps.Store == nil {
-		return nil, errNotImpl
-	}
-	p, err := a.deps.Store.UpsertPrice(in)
-	if err != nil {
-		return nil, err
-	}
-	slog.Info("app: price upserted", "id", p.ID, "upstream_model", p.UpstreamModel, "provider_id", p.ProviderID)
-	return p, nil
-}
-
-func (a *App) DeletePrice(id string) error {
-	if a.deps.Store == nil {
-		return errNotImpl
-	}
-	if err := a.deps.Store.DeletePrice(id); err != nil {
-		return err
-	}
-	slog.Info("app: price deleted", "id", id)
-	return nil
-}
-
 // ----- Dashboard / usage -----
 
 func (a *App) GetDashboard() (*model.DashboardData, error) {
@@ -966,9 +927,6 @@ func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
 		return nil, fmt.Errorf("replay rule %q: %w", log.RouteID, err)
 	}
 	endpoint := "/v1/chat/completions"
-	historicalPriceUnavailable := false
-	priceResolutionErrors := 0
-	priceUnavailable := 0
 	snapshots := map[model.TargetMetricKey]metrics.Snapshot{}
 	if a.deps.Metrics != nil {
 		for _, attempt := range log.Chain {
@@ -989,34 +947,22 @@ func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
 			costs[i] = model.DefaultEffectiveCost()
 			continue
 		}
-		var price *model.Price
-		if ps, ok := a.deps.Store.(replayPriceStore); ok {
-			var priceErr error
-			price, priceErr = ps.ResolvePriceAt(target.ProviderID, target.ModelName, "chat", log.Timestamp)
-			if priceErr != nil {
-				priceResolutionErrors++
-			}
-			if price == nil && priceErr == nil {
-				priceUnavailable++
-			}
+		if attempt.UpstreamStarted && attempt.RequestCostAvailable {
+			costs[i] = model.EffectiveCost{Cost: attempt.RequestCost, Currency: "USD", Available: true}
 		} else {
-			historicalPriceUnavailable = true
+			costs[i] = model.DefaultEffectiveCost()
 		}
-		costs[i] = service.EstimateEffectiveCostAt(price, log.Timestamp, log.InputTokens, log.OutputTokens, int(log.CacheHit), int(log.CacheCreation), 1, additionalRetriesFor(log.Chain, attempt))
 	}
 	scores := scoring.ReplayOneRequest(log, *rule, endpoint, snapshots, costs)
 	result := &model.ReplayResult{LogID: log.ID, Timestamp: log.Timestamp, RuleID: rule.ID, RuleName: rule.Name, RequestOutcome: outcomeFor(log), Endpoint: endpoint, EndpointAssumed: true}
 	if len(log.Chain) == 0 {
 		result.Warnings = append(result.Warnings, "no attempt chain; legacy log has low replay confidence")
 	}
-	if historicalPriceUnavailable {
-		result.Warnings = append(result.Warnings, "historical price resolution is unavailable; costs have low confidence")
-	}
-	if priceResolutionErrors > 0 {
-		result.Warnings = append(result.Warnings, "historical price lookup failed for one or more attempts")
-	}
-	if priceUnavailable > 0 {
-		result.Warnings = append(result.Warnings, "no price was available at the historical timestamp for one or more attempts")
+	for _, attempt := range log.Chain {
+		if attempt.UpstreamStarted && !attempt.RequestCostAvailable {
+			result.Warnings = append(result.Warnings, "one or more upstream attempt prices were unavailable")
+			break
+		}
 	}
 	for i, attempt := range log.Chain {
 		var target model.ModelRuleTarget
@@ -1034,9 +980,6 @@ func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
 		entry := model.ReplayAttemptScore{Attempt: attempt, TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, TargetMissing: target.ID == "", ProviderMissing: providerMissing, ReplayLimitation: "historical breaker state unavailable"}
 		if i < len(scores) {
 			entry.Score = replayShadowScore(scores[i], snapshots[model.TargetMetricKey{TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, Endpoint: endpoint}], endpoint, costs[i])
-			entry.PriceVersion = scores[i].PriceVersion
-			cost := costs[i]
-			entry.PriceConfidence = cost.Confidence
 		}
 		if entry.TargetMissing || entry.ProviderMissing {
 			entry.Score.Availability = scoring.Unavailable
@@ -1071,7 +1014,6 @@ func replayShadowScore(s scoring.TargetScore, snapshot metrics.Snapshot, endpoin
 		SampleCount:      s.SampleCount,
 		Availability:     s.Availability,
 		Reason:           s.Reason,
-		PriceVersion:     s.PriceVersion,
 		ExplorationBonus: s.ExplorationBonus,
 		Metrics: model.TargetRuntimeSummary{
 			Key:          snapshot.Key,

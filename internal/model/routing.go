@@ -175,59 +175,6 @@ func (e TargetMetricEvent) Valid() bool {
 	return true
 }
 
-// BillingMode describes how an upstream provider charges for a model.
-type BillingMode string
-
-const (
-	BillingModeToken   BillingMode = "token"
-	BillingModeRequest BillingMode = "request"
-	BillingModeQuota   BillingMode = "quota"
-	BillingModeCustom  BillingMode = "custom"
-	BillingModeUnknown BillingMode = "unknown"
-)
-
-func (m BillingMode) Valid() bool {
-	switch m {
-	case BillingModeToken, BillingModeRequest, BillingModeQuota, BillingModeCustom, BillingModeUnknown:
-		return true
-	}
-	return false
-}
-
-func (m BillingMode) Normalized() BillingMode {
-	if m.Valid() {
-		return m
-	}
-	return BillingModeUnknown
-}
-
-// CostConfidence expresses how much we trust a cost estimate.
-type CostConfidence string
-
-const (
-	CostConfidenceExact       CostConfidence = "exact"
-	CostConfidenceEstimated   CostConfidence = "estimated"
-	CostConfidencePartial     CostConfidence = "partial"
-	CostConfidenceUnknown     CostConfidence = "unknown"
-	CostConfidenceUnavailable CostConfidence = "unavailable"
-)
-
-func (c CostConfidence) Valid() bool {
-	switch c {
-	case CostConfidenceExact, CostConfidenceEstimated, CostConfidencePartial,
-		CostConfidenceUnknown, CostConfidenceUnavailable:
-		return true
-	}
-	return false
-}
-
-func (c CostConfidence) Normalized() CostConfidence {
-	if c.Valid() {
-		return c
-	}
-	return CostConfidenceUnknown
-}
-
 // EffectiveCost is a routing-time estimate of what a single upstream attempt
 // may cost. It is intentionally separate from the final cost recorded in
 // request logs: estimates may be wrong, incomplete, or unavailable.
@@ -236,14 +183,8 @@ func (c CostConfidence) Normalized() CostConfidence {
 // and Cost is a finite, non-NaN number. Unknown prices must never be treated as
 // free.
 type EffectiveCost struct {
-	InputTokens          int            `json:"input_tokens"`
-	OutputTokens         int            `json:"output_tokens"`
-	BaseRequestCount     int            `json:"base_request_count"`
-	AdditionalRetryCount int            `json:"additional_retry_count"`
-	Cost                 float64        `json:"cost"`
-	Currency             string         `json:"currency"`
-	Confidence           CostConfidence `json:"confidence"`
-	PriceVersion         string         `json:"price_version"`
+	Cost     float64 `json:"cost"`
+	Currency string  `json:"currency"`
 	// Available is false when no price could be resolved (e.g. unknown model).
 	// Callers must treat Cost as invalid in that case.
 	Available bool `json:"available"`
@@ -259,8 +200,7 @@ func (ec EffectiveCost) IsAvailable() bool {
 // DefaultEffectiveCost returns the sentinel for an unresolved price.
 func DefaultEffectiveCost() EffectiveCost {
 	return EffectiveCost{
-		Cost:       0,
-		Confidence: CostConfidenceUnavailable,
-		Available:  false,
+		Cost:      0,
+		Available: false,
 	}
 }

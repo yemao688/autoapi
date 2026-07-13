@@ -49,6 +49,11 @@ func (s *checkpointSink) UpsertTargetRuntimeSummaries([]model.TargetRuntimeSumma
 	return nil
 }
 func (s *checkpointSink) count() int { s.mu.Lock(); defer s.mu.Unlock(); return s.calls }
+func (s *checkpointSink) enteredSignal() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.entered
+}
 func checkpointRegistry() *Registry {
 	r := New(4, time.Hour)
 	r.Submit(model.TargetMetricEvent{Key: model.TargetMetricKey{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "e"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: time.Now()})
@@ -62,7 +67,11 @@ func TestCheckpointLifecycleAndSerializedFlush(t *testing.T) {
 		t.Fatal("first start")
 	}
 	go c.Flush()
-	<-s.entered
+	entered := s.enteredSignal()
+	if entered == nil {
+		t.Fatal("flush did not expose entry signal")
+	}
+	<-entered
 	done := make(chan struct{})
 	go func() { c.Stop(); close(done) }()
 	select {

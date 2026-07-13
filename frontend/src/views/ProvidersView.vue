@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../api/bridge'
 import { useApi } from '../composables/useApi'
@@ -69,10 +69,12 @@ const selectedModelNames = ref<Set<string>>(new Set())
 const manualAddVisible = ref(false)
 const manualAddName = ref('')
 
-// Inline model rename
-const editingModelId = ref('')
-const editingModelName = ref('')
-const renameInputRef = ref<HTMLInputElement | null>(null)
+// Model name and per-call price are edited together through the atomic backend API.
+const modelEditOpen = ref(false)
+const editingModel = ref<model.Model | null>(null)
+const modelEditName = ref('')
+const modelEditPrice = ref('0.1')
+const modelEditSaving = ref(false)
 
 const form = ref<model.ProviderInput>({
   name: '',
@@ -167,8 +169,9 @@ async function refreshModels() {
     if (editingId.value === idAtCall && modalOpen.value) {
       models.value = list
       // If the row being edited disappeared (deleted / renamed), bail out.
-      if (editingModelId.value && !list.find((m) => m.id === editingModelId.value)) {
-        cancelEditModel()
+      const editedModelId = editingModel.value?.id
+      if (editedModelId && !list.find((m) => m.id === editedModelId)) {
+        closeModelEdit()
       }
     }
     // Also refresh the card's badge map for this provider.
@@ -345,40 +348,49 @@ async function confirmManualAdd() {
 
 function startEditModel(m: model.Model) {
   if (mutationBusy.value) return
-  editingModelId.value = m.id
-  editingModelName.value = m.name
-  nextTick(() => {
-    renameInputRef.value?.focus()
-    renameInputRef.value?.select()
-  })
+  editingModel.value = m
+  modelEditName.value = m.name
+  modelEditPrice.value = Number.isFinite(m.request_price) ? String(m.request_price) : '0.1'
+  modelEditOpen.value = true
 }
 
-function cancelEditModel() {
-  editingModelId.value = ''
-  editingModelName.value = ''
+function closeModelEdit() {
+  modelEditOpen.value = false
+  editingModel.value = null
+  modelEditName.value = ''
+  modelEditPrice.value = '0.1'
 }
 
-async function saveEditModel(oldName: string) {
-  if (mutationBusy.value) return
-  const newName = editingModelName.value.trim()
-  if (!newName || newName === oldName) {
-    cancelEditModel()
+const modelEditPriceNumber = computed(() => Number(modelEditPrice.value))
+const modelEditError = computed(() => {
+  if (!modelEditName.value.trim()) return t('providers.modal.modelNameRequired')
+  if (!Number.isFinite(modelEditPriceNumber.value) || modelEditPriceNumber.value < 0) return t('providers.modal.invalidModelPrice')
+  return ''
+})
+
+async function saveModelEdit() {
+  if (mutationBusy.value || modelEditSaving.value || !editingId.value || !editingModel.value) return
+  const oldName = editingModel.value.name
+  const newName = modelEditName.value.trim()
+  if (modelEditError.value) {
+    toast.push(modelEditError.value, 'error')
     return
   }
-  if (!editingId.value) return
-  if (models.value.some((m) => m.name === newName && m.name !== oldName)) {
+  if (models.value.some((m) => m.name === newName && m.id !== editingModel.value?.id)) {
     toast.push(t('providers.modal.alreadyAdded'), 'error')
     return
   }
   mutationBusy.value = true
+  modelEditSaving.value = true
   try {
-    await api.updateModelName(editingId.value, oldName, newName)
-    toast.push(t('providers.modal.modelRenamed', { name: newName }), 'success')
-    cancelEditModel()
+    await api.updateProviderModel({ provider_id: editingId.value, old_name: oldName, name: newName, request_price: modelEditPriceNumber.value })
+    toast.push(t('providers.modal.modelUpdated', { name: newName }), 'success')
+    closeModelEdit()
     await refreshModels()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
   } finally {
+    modelEditSaving.value = false
     mutationBusy.value = false
   }
 }
@@ -396,7 +408,7 @@ async function deleteModelConfirm(m: model.Model) {
   try {
     await api.deleteModel(editingId.value, m.name)
     toast.push(t('providers.modal.modelDeleted', { name: m.name }), 'success')
-    if (editingModelId.value === m.id) cancelEditModel()
+    if (editingModel.value?.id === m.id) closeModelEdit()
     await refreshModels()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
@@ -470,8 +482,7 @@ function resetModalState() {
   selectedModelNames.value = new Set()
   manualAddVisible.value = false
   manualAddName.value = ''
-  editingModelId.value = ''
-  editingModelName.value = ''
+  closeModelEdit()
   keyVisible.value = false
   keyDirty.value = false
   originalKey.value = ''
@@ -936,6 +947,7 @@ onMounted(() => {
                 <tr>
                   <th>{{ t('providers.modal.model') }}</th>
                   <th class="right">{{ t('providers.modal.context') }}</th>
+                  <th class="right">{{ t('providers.modal.price') }}</th>
                   <th class="right">{{ t('providers.modal.latency') }}</th>
                   <th class="right">{{ t('providers.modal.enabled') }}</th>
                   <th></th>
@@ -945,40 +957,11 @@ onMounted(() => {
               <tbody>
                 <tr v-for="m in models" :key="m.id">
                   <td>
-                    <div v-if="editingModelId === m.id" class="row" style="gap: 4px;">
-                      <input
-                        v-model="editingModelName"
-                        ref="renameInputRef"
-                        class="input mono"
-                        style="font-size: 12.5px; padding: 4px 8px; min-width: 140px; max-width: 220px;"
-                        @keydown.enter="saveEditModel(m.name)"
-                        @keydown.escape="cancelEditModel"
-                      >
-                      <button
-                        type="button"
-                        class="btn btn-icon"
-                        :title="t('common.save')"
-                        :aria-label="t('common.save')"
-                        @click="saveEditModel(m.name)"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                      </button>
-                      <button
-                        type="button"
-                        class="btn btn-icon"
-                        :title="t('common.cancel')"
-                        :aria-label="t('common.cancel')"
-                        @click="cancelEditModel"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-                      </button>
-                    </div>
-                    <template v-else>
-                      <div class="model-name">{{ m.name }}</div>
-                      <div class="model-owner">{{ currentProviderName }}</div>
-                    </template>
+                    <div class="model-name">{{ m.name }}</div>
+                    <div class="model-owner">{{ currentProviderName }}</div>
                   </td>
                   <td class="num">{{ formatContext(m.context_window) }}</td>
+                  <td class="num">${{ (Number.isFinite(m.request_price) ? m.request_price : 0.1).toFixed(4) }} / {{ t('providers.modal.call') }}</td>
                   <td class="num">
                     <span v-if="m.latency_ms">{{ m.latency_ms }} ms</span>
                     <span v-else class="text-muted">—</span>
@@ -1028,6 +1011,33 @@ onMounted(() => {
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? t('common.processing') : (modalMode === 'add' ? t('providers.modal.createAndContinue') : t('common.save')) }}</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Focused model editor: pricing belongs to the model catalog, not a separate screen. -->
+  <Teleport to="body">
+    <div v-if="modelEditOpen" class="modal-overlay" @click.self="closeModelEdit">
+      <div class="modal-card" role="dialog" aria-modal="true" :aria-label="t('providers.modal.editModel')">
+        <div class="modal-title">{{ t('providers.modal.editModel') }}</div>
+        <p class="field-help">{{ t('providers.modal.editModelHelp') }}</p>
+        <div class="field">
+          <label class="field-label" for="model-edit-name">{{ t('providers.modal.modelName') }}</label>
+          <input id="model-edit-name" v-model="modelEditName" class="input mono" autocomplete="off" @keydown.enter="saveModelEdit" @keydown.escape="closeModelEdit">
+        </div>
+        <div class="field">
+          <label class="field-label" for="model-edit-price">{{ t('providers.modal.price') }}</label>
+          <div class="row" style="gap: 8px;">
+            <span class="text-muted">$</span>
+            <input id="model-edit-price" v-model="modelEditPrice" class="input mono" type="number" min="0" step="any" inputmode="decimal" @keydown.enter="saveModelEdit" @keydown.escape="closeModelEdit">
+            <span class="text-muted" style="white-space: nowrap;">{{ t('providers.modal.perCall') }}</span>
+          </div>
+          <div v-if="modelEditError" class="field-error" role="alert">{{ modelEditError }}</div>
+        </div>
+        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
+          <button class="btn btn-secondary" @click="closeModelEdit">{{ t('common.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="!!modelEditError || modelEditSaving" @click="saveModelEdit">{{ modelEditSaving ? t('common.processing') : t('common.save') }}</button>
         </div>
       </div>
     </div>

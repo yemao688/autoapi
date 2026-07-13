@@ -10,7 +10,7 @@ import (
 )
 
 func candidate(id string, tier int, score, cost float64) CandidatePlanInput {
-	return CandidatePlanInput{OriginalIndex: tier + len(id), TargetID: id, Tier: tier, Enabled: true, HardAvailable: true, CapabilitySatisfied: true, BudgetSatisfied: true, TargetScore: scoring.TargetScore{Overall: score, Reliability: 100}, EffectiveCost: model.EffectiveCost{Available: true, Currency: "USD", Confidence: model.CostConfidenceExact, Cost: cost}}
+	return CandidatePlanInput{OriginalIndex: tier + len(id), TargetID: id, Tier: tier, Enabled: true, HardAvailable: true, CapabilitySatisfied: true, BudgetSatisfied: true, TargetScore: scoring.TargetScore{Overall: score, Reliability: 100}, EffectiveCost: model.EffectiveCost{Available: true, Currency: "USD", Cost: cost}}
 }
 
 func ids(p CandidatePlan) []string { return p.PlannedOrder }
@@ -60,15 +60,13 @@ func TestPlanTieAndInputImmutability(t *testing.T) {
 }
 
 func TestComparableCostRejectsUnknownAndInvalidValues(t *testing.T) {
-	base := model.EffectiveCost{Available: true, Currency: "USD", Confidence: model.CostConfidenceExact, Cost: 1}
+	base := model.EffectiveCost{Available: true, Currency: "USD", Cost: 1}
 	for name, cost := range map[string]model.EffectiveCost{
-		"unknown confidence":     func() model.EffectiveCost { c := base; c.Confidence = model.CostConfidenceUnknown; return c }(),
-		"unavailable confidence": func() model.EffectiveCost { c := base; c.Confidence = model.CostConfidenceUnavailable; return c }(),
-		"lowercase usd":          func() model.EffectiveCost { c := base; c.Currency = "usd"; return c }(),
-		"nan":                    func() model.EffectiveCost { c := base; c.Cost = math.NaN(); return c }(),
-		"positive infinity":      func() model.EffectiveCost { c := base; c.Cost = math.Inf(1); return c }(),
-		"negative infinity":      func() model.EffectiveCost { c := base; c.Cost = math.Inf(-1); return c }(),
-		"negative":               func() model.EffectiveCost { c := base; c.Cost = -1; return c }(),
+		"lowercase usd":     func() model.EffectiveCost { c := base; c.Currency = "usd"; return c }(),
+		"nan":               func() model.EffectiveCost { c := base; c.Cost = math.NaN(); return c }(),
+		"positive infinity": func() model.EffectiveCost { c := base; c.Cost = math.Inf(1); return c }(),
+		"negative infinity": func() model.EffectiveCost { c := base; c.Cost = math.Inf(-1); return c }(),
+		"negative":          func() model.EffectiveCost { c := base; c.Cost = -1; return c }(),
 	} {
 		if comparableCost(cost) {
 			t.Errorf("%s was considered comparable", name)

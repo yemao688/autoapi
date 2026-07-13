@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"math"
+	"strings"
 
 	"autoapi/internal/model"
 )
@@ -211,15 +213,15 @@ func (s *Store) UpsertModels(providerID string, models []model.Model) error {
 				createdAt = now
 			}
 			_, err := tx.Exec(`
-				INSERT INTO models (id, provider_id, name, context_window, owned_by, active, latency_ms, updated_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO models (id, provider_id, name, context_window, owned_by, active, latency_ms, request_price, updated_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(provider_id, name) DO UPDATE SET
 					context_window = excluded.context_window,
 					owned_by = excluded.owned_by,
 					updated_at = excluded.updated_at
 					-- active, latency_ms, created_at preserved from existing row
 `,
-				id, providerID, m.Name, m.ContextWindow, m.OwnedBy, boolInt(m.Active), m.LatencyMs, now, createdAt)
+				id, providerID, m.Name, m.ContextWindow, m.OwnedBy, boolInt(m.Active), m.LatencyMs, requestPrice(m.RequestPrice), now, createdAt)
 			if err != nil {
 				return err
 			}
@@ -246,11 +248,11 @@ func (s *Store) InsertModelsIfAbsent(providerID string, models []model.Model) er
 				id = makeID()
 			}
 			_, err := tx.Exec(`
-				INSERT INTO models (id, provider_id, name, context_window, owned_by, active, latency_ms, updated_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO models (id, provider_id, name, context_window, owned_by, active, latency_ms, request_price, updated_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(provider_id, name) DO NOTHING
 `,
-				id, providerID, m.Name, m.ContextWindow, m.OwnedBy, boolInt(m.Active), m.LatencyMs, now, now)
+				id, providerID, m.Name, m.ContextWindow, m.OwnedBy, boolInt(m.Active), m.LatencyMs, requestPrice(m.RequestPrice), now, now)
 			if err != nil {
 				return err
 			}
@@ -356,20 +358,45 @@ func (s *Store) ClearProviderModels(providerID string) error {
 	})
 }
 
-// UpdateModelName renames a model in a provider's catalog.
-func (s *Store) UpdateModelName(providerID, oldName, newName string) error {
-	now := nowMs()
+// UpdateProviderModel atomically updates a model and every rule target that
+// points at it. The old rename operation intentionally remains only as a
+// source-level shim for older callers.
+func (s *Store) UpdateProviderModel(in model.ProviderModelUpdate) error {
+	in.ProviderID = strings.TrimSpace(in.ProviderID)
+	in.OldName = strings.TrimSpace(in.OldName)
+	in.Name = strings.TrimSpace(in.Name)
+	if in.ProviderID == "" || in.OldName == "" || in.Name == "" {
+		return fmt.Errorf("store: provider and model names are required")
+	}
+	if math.IsNaN(in.RequestPrice) || math.IsInf(in.RequestPrice, 0) || in.RequestPrice < 0 {
+		return fmt.Errorf("store: request price must be non-negative")
+	}
 	return s.execTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`UPDATE models SET name = ?, updated_at = ? WHERE provider_id = ? AND name = ?`, newName, now, providerID, oldName)
+		now := nowMs()
+		res, err := tx.Exec(`UPDATE models SET name=?, request_price=?, updated_at=? WHERE provider_id=? AND name=?`, in.Name, in.RequestPrice, now, in.ProviderID, in.OldName)
 		if err != nil {
-			return fmt.Errorf("store: rename model %q to %q for provider %q: %w", oldName, newName, providerID, err)
+			return fmt.Errorf("store: update provider model: %w", err)
 		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			return fmt.Errorf("store: rename model %q for provider %q: %w", oldName, providerID, ErrNotFound)
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("store: update provider model: %w", ErrNotFound)
+		}
+		if _, err := tx.Exec(`UPDATE rule_targets SET model_name=? WHERE provider_id=? AND model_name=?`, in.Name, in.ProviderID, in.OldName); err != nil {
+			return fmt.Errorf("store: update model rule targets: %w", err)
+		}
+		// Runtime summaries use the same identity key. SQLite rolls the whole
+		// transaction back if this collides with an existing summary key.
+		if _, err := tx.Exec(`UPDATE target_runtime_summary SET model_name=? WHERE provider_id=? AND model_name=?`, in.Name, in.ProviderID, in.OldName); err != nil {
+			return fmt.Errorf("store: update target runtime summaries: %w", err)
 		}
 		return nil
 	})
+}
+
+func requestPrice(v float64) float64 {
+	if v == 0 {
+		return 0.1
+	}
+	return v
 }
 
 // RecalcModelsCount recalculates and stores the model count for a provider.

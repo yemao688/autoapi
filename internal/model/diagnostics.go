@@ -1,12 +1,5 @@
 package model
 
-// Default diagnostic token assumptions are deliberately fixed and are not used
-// by request serving or billing.
-const (
-	DiagnosticsInputTokens  = 512
-	DiagnosticsOutputTokens = 256
-)
-
 type ModelRuleShadowComparison struct {
 	RuleID        string                `json:"rule_id"`
 	RuleName      string                `json:"rule_name"`
@@ -55,6 +48,5 @@ type TargetShadowScore struct {
 	Cost             EffectiveCost        `json:"cost"`
 	Availability     string               `json:"availability"`
 	Reason           string               `json:"reason"`
-	PriceVersion     string               `json:"price_version"`
 	CircuitState     string               `json:"circuit_state,omitempty"`
 }

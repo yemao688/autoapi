@@ -22,8 +22,6 @@ export function DeleteModel(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteModelRule(arg1:string):Promise<void>;
 
-export function DeletePrice(arg1:string):Promise<void>;
-
 export function DeleteProvider(arg1:string):Promise<void>;
 
 export function EnterBackground():Promise<void>;
@@ -75,8 +73,6 @@ export function ListEndpoints():Promise<Array<model.Endpoint>>;
 export function ListModelRules():Promise<Array<model.ModelRule>>;
 
 export function ListModels(arg1:string):Promise<Array<model.Model>>;
-
-export function ListPrices():Promise<Array<model.Price>>;
 
 export function ListProviders():Promise<Array<model.Provider>>;
 
@@ -132,10 +128,8 @@ export function TestProvider(arg1:string):Promise<model.ProviderTestResult>;
 
 export function UpdateAPIKey(arg1:string,arg2:model.ApiKeyInput):Promise<model.ApiKey>;
 
-export function UpdateModelName(arg1:string,arg2:string,arg3:string):Promise<void>;
-
 export function UpdateModelRule(arg1:string,arg2:model.ModelRuleInput):Promise<model.ModelRule>;
 
 export function UpdateProvider(arg1:string,arg2:model.ProviderInput):Promise<model.Provider>;
 
-export function UpsertPrice(arg1:model.PriceInput):Promise<model.Price>;
+export function UpdateProviderModel(arg1:model.ProviderModelUpdate):Promise<void>;

@@ -98,7 +98,6 @@ type TargetScore struct {
 	SampleCount      int64   `json:"sample_count"`
 	Availability     string  `json:"availability"`
 	Reason           string  `json:"reason"`
-	PriceVersion     string  `json:"price_version"`
 	ExplorationBonus float64 `json:"exploration_bonus"`
 }
 
@@ -109,7 +108,7 @@ const (
 
 // ScoreTarget computes one score without I/O, clocks, randomness, or mutation.
 func ScoreTarget(in TargetInput, context ScoreContext, referenceCost float64) TargetScore {
-	s := TargetScore{TargetID: in.Target.ID, Tier: in.Target.Tier, Availability: Available, PriceVersion: in.Cost.PriceVersion}
+	s := TargetScore{TargetID: in.Target.ID, Tier: in.Target.Tier, Availability: Available}
 	if in.HardState.Disabled {
 		s.Availability, s.Reason = Unavailable, "disabled"
 	} else if in.HardState.CircuitOpen {
@@ -199,8 +198,7 @@ func appendFinite(v []float64, x float64) []float64 {
 	return append(v, x)
 }
 func comparableCost(c model.EffectiveCost) bool {
-	return c.IsAvailable() && finite(c.Cost) && c.Cost >= 0 && c.Currency == "USD" &&
-		c.Confidence != model.CostConfidenceUnknown && c.Confidence != model.CostConfidenceUnavailable
+	return c.IsAvailable() && finite(c.Cost) && c.Cost >= 0 && c.Currency == "USD"
 }
 func comparableReference(x float64) bool { return finite(x) && x >= 0 }
 func percentile(v []int64, p float64) float64 {

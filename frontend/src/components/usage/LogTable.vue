@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { model } from '../../../wailsjs/go/models'
 import { api } from '@/api/bridge'
@@ -55,13 +55,12 @@ function replayScore(value: number): string {
   return Number.isFinite(value) ? value.toFixed(0) : '—'
 }
 
-function replayCost(value: number): string {
-  return Number.isFinite(value) && value > 0 ? `$${value.toFixed(4)} USD` : '—'
+function costLabel(value: number, available: boolean | undefined, decimals: number): string {
+  return available === true && Number.isFinite(value) ? `$${value.toFixed(decimals)}` : '—'
 }
 
-function replayPrice(attempt: model.ReplayAttemptScore): string {
-  if (!attempt.score.cost?.available) return t('usage.logTable.replayPriceUnknown')
-  return [attempt.price_confidence, attempt.price_version].filter(Boolean).join(' · ') || t('usage.logTable.replayUnknown')
+function costTitle(available: boolean | undefined): string {
+  return available === true ? '' : t('usage.logTable.usageUnavailable')
 }
 
 function isExpanded(log: model.RequestLog): boolean {
@@ -83,7 +82,7 @@ function toggleRow(log: model.RequestLog) {
 // only, so the retry indicator and "Tried N targets" summary are
 // reserved for rows that actually show failover.
 function chainLength(log: model.RequestLog): number {
-  return Array.isArray(log.chain) ? log.chain.length : 0
+  return normalizedChainArray(log).length
 }
 
 // chainStatusLabel maps a ChainEntry.status string to the i18n key
@@ -191,21 +190,27 @@ function statusText(statusCode: number): string {
   return String(statusCode)
 }
 
-// chainArray returns the chain slice with a defensive copy so a missing
-// `chain` field (older rows from before migration 012) renders as an
-// empty array instead of throwing. The render code uses chain.length
-// directly so it stays safe.
-function chainArray(log: model.RequestLog): model.RequestLogChainEntry[] {
-  return Array.isArray(log.chain) ? log.chain : []
+interface NormalizedChainEntry extends model.RequestLogChainEntry {
+  status: ChainStatus
+  error: string
 }
 
-function effectiveChainStatus(entry: model.RequestLogChainEntry): ChainStatus {
-  // downstream_error can be reported either as a status string or as a
-  // runtime field on a nominally successful upstream response.
-  if ((entry as any).downstream_error && String((entry as any).downstream_error).length > 0) {
-    return 'downstream_error'
-  }
-  return entry.status as ChainStatus
+// Compatibility boundary for old logs: generated DTOs do not expose the
+// legacy downstream_error field, so inspect the runtime object only here.
+function normalizeChainEntry(entry: model.RequestLogChainEntry): NormalizedChainEntry {
+  const raw = entry as unknown as Record<string, unknown>
+  const downstreamError = typeof raw.downstream_error === 'string' ? raw.downstream_error : ''
+  const error = typeof entry.error === 'string' ? entry.error : ''
+  const status: ChainStatus = entry.status === 'success' && downstreamError ? 'downstream_error' : entry.status as ChainStatus
+  return { ...entry, status, error: downstreamError || error }
+}
+
+function normalizedChainArray(log: model.RequestLog): NormalizedChainEntry[] {
+  return Array.isArray(log.chain) ? log.chain.map(normalizeChainEntry) : []
+}
+
+function replayAttemptEntry(attempt: model.ReplayAttemptScore): NormalizedChainEntry {
+  return normalizeChainEntry(attempt.attempt)
 }
 
 // Explicit top-level 2xx presentations derived from the final chain entry.
@@ -215,9 +220,9 @@ type OutcomePresentation = 'success' | 'truncated' | 'downstream_error' | 'clien
 
 function topLevel2xxOutcome(log: model.RequestLog): OutcomePresentation | null {
   if (log.status_code < 200 || log.status_code >= 300) return null
-  const chain = chainArray(log)
+  const chain = normalizedChainArray(log)
   if (chain.length === 0) return null
-  const final = effectiveChainStatus(chain[chain.length - 1])
+  const final = chain[chain.length - 1].status
   if (final === 'success') return 'success'
   if (final === 'truncated') return 'truncated'
   if (final === 'downstream_error') return 'downstream_error'
@@ -229,19 +234,18 @@ function topLevel2xxOutcome(log: model.RequestLog): OutcomePresentation | null {
 // provider/model that actually served the request. Returns null when
 // no attempt succeeded (e.g. all retries exhausted).
 function hitModel(log: model.RequestLog): { provider: string; model: string } | null {
-  if (!Array.isArray(log.chain) || log.chain.length === 0) return null
-  for (let i = log.chain.length - 1; i >= 0; i--) {
-    if (log.chain[i].status === 'success') {
+  const chain = normalizedChainArray(log)
+  for (let i = chain.length - 1; i >= 0; i--) {
+    if (chain[i].status === 'success') {
       return {
-        provider: log.chain[i].provider_name || '',
-        model: log.chain[i].model_name || '',
+        provider: chain[i].provider_name || '',
+        model: chain[i].model_name || '',
       }
     }
   }
   return null
 }
 
-const columnCount = computed(() => columns)
 </script>
 
 <template>
@@ -363,10 +367,10 @@ const columnCount = computed(() => columns)
           <td class="num"><span :title="log.output_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.output_tokens > 0 ? log.output_tokens.toLocaleString() : '—' }}</span></td>
 
           <!-- 8. Total cost -->
-          <td class="num"><span :title="log.cost > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.cost > 0 ? '$' + log.cost.toFixed(3) : '—' }}</span></td>
+          <td class="num"><span :title="costTitle(log.cost_available)">{{ costLabel(log.cost, log.cost_available, 3) }}</span></td>
         </tr>
         <tr v-if="isExpanded(log)" class="log-detail-row">
-          <td :colspan="columnCount">
+          <td :colspan="columns">
             <div class="log-detail">
               <div class="log-detail-grid">
                 <div class="log-detail-item">
@@ -386,24 +390,24 @@ const columnCount = computed(() => columns)
                   <span class="log-detail-value text-mono">{{ log.client_ip || '—' }}</span>
                 </div>
               </div>
-              <div v-if="chainArray(log).length > 0" class="log-detail-chain">
+              <div v-if="normalizedChainArray(log).length > 0" class="log-detail-chain">
                 <div class="log-detail-chain-header">
                   <span class="log-detail-label">{{ t('usage.logTable.chain') }}</span>
-                  <span v-if="chainArray(log).length > 1" class="text-muted log-detail-tried">
-                    {{ t('usage.logTable.triedTargets', { n: chainArray(log).length }) }}
+                  <span v-if="normalizedChainArray(log).length > 1" class="text-muted log-detail-tried">
+                    {{ t('usage.logTable.triedTargets', { n: normalizedChainArray(log).length }) }}
                   </span>
                 </div>
                 <ol class="log-detail-chain-list">
-                  <li v-for="entry in chainArray(log)" :key="entry.attempt_order" class="log-detail-chain-item">
+                  <li v-for="entry in normalizedChainArray(log)" :key="entry.attempt_order" class="log-detail-chain-item">
                     <span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: entry.attempt_order }) }}</span>
                     <span class="log-detail-chain-provider">{{ entry.provider_name || '—' }}</span>
                     <span class="log-detail-chain-model text-mono">{{ entry.model_name || '—' }}</span>
-                    <span class="badge" :class="chainStatusClass(effectiveChainStatus(entry))">{{ chainStatusLabel(effectiveChainStatus(entry)) }}</span>
+                    <span class="badge" :class="chainStatusClass(entry.status)">{{ chainStatusLabel(entry.status) }}</span><span class="log-detail-chain-latency text-muted" :title="costTitle(entry.request_cost_available)">· {{ costLabel(entry.request_cost, entry.request_cost_available, 4) }}</span>
                     <span class="log-detail-chain-latency text-muted">{{ formatLatency(entry.latency_ms) }}</span>
                     <span v-if="entry.first_token_ms > 0" class="log-detail-chain-latency text-muted" style="margin-left: 2px;">· {{ t('usage.logTable.ttft') }} {{ formatLatency(entry.first_token_ms) }}</span>
-                    <span v-if="(entry as any).downstream_error" class="log-detail-chain-downstream-error text-mono">
+                    <span v-if="entry.status === 'downstream_error' && entry.error" class="log-detail-chain-downstream-error text-mono">
                       <span class="log-detail-chain-downstream-label">{{ t('usage.logTable.downstreamError') }}:</span>
-                      {{ (entry as any).downstream_error }}
+                      {{ entry.error }}
                     </span>
                     <span v-else-if="entry.error" class="log-detail-chain-error text-mono">{{ entry.error }}</span>
                   </li>
@@ -428,8 +432,8 @@ const columnCount = computed(() => columns)
                   <div v-if="replayFor(log)?.attempts?.length" class="replay-attempts">
                     <div class="replay-attempts-title">{{ t('usage.logTable.replayAttempts') }} · {{ t('usage.logTable.replayScores') }}</div>
                     <div v-for="(replayAttempt, index) in replayFor(log)?.attempts" :key="replayAttempt.attempt.attempt_order || index" class="replay-attempt">
-                      <div class="replay-attempt-main"><span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: replayAttempt.attempt.attempt_order }) }}</span><span>{{ replayAttempt.provider_id || replayAttempt.attempt.provider_name || '—' }}</span><span class="text-mono text-muted">{{ replayAttempt.model_name || replayAttempt.attempt.model_name || '—' }}</span><span class="text-muted">{{ t('usage.logTable.replayTarget') }}: {{ replayAttempt.target_id || '—' }}</span><span class="badge" :class="chainStatusClass(effectiveChainStatus(replayAttempt.attempt))">{{ chainStatusLabel(effectiveChainStatus(replayAttempt.attempt)) }}</span></div>
-                      <div class="replay-score-grid"><span>{{ t('modelRules.diagnostics.score') }} {{ replayScore(replayAttempt.score.overall) }}</span><span>{{ t('modelRules.diagnostics.reliability') }} {{ replayScore(replayAttempt.score.reliability) }}</span><span>{{ t('modelRules.diagnostics.latencyScore') }} {{ replayScore(replayAttempt.score.latency) }}</span><span>{{ t('modelRules.diagnostics.ttftScore') }} {{ replayScore(replayAttempt.score.ttft) }}</span><span>{{ t('modelRules.diagnostics.capacity') }} {{ replayScore(replayAttempt.score.capacity) }}</span><span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ replayScore(replayAttempt.score.cost_efficiency) }}</span><span>{{ t('usage.logTable.replayEstimatedCost') }} {{ replayCost(replayAttempt.score.estimated_cost) }}</span><span>{{ t('usage.logTable.replayPrice') }}: {{ replayPrice(replayAttempt) }}</span><span>{{ t('usage.logTable.replayAvailability') }}: {{ replayAttempt.score.availability || t('usage.logTable.replayUnknown') }}{{ replayAttempt.score.reason ? ` · ${replayAttempt.score.reason}` : '' }}</span></div>
+                      <div class="replay-attempt-main"><span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: replayAttemptEntry(replayAttempt).attempt_order }) }}</span><span>{{ replayAttempt.provider_id || replayAttemptEntry(replayAttempt).provider_name || '—' }}</span><span class="text-mono text-muted">{{ replayAttempt.model_name || replayAttemptEntry(replayAttempt).model_name || '—' }}</span><span class="text-muted">{{ t('usage.logTable.replayTarget') }}: {{ replayAttempt.target_id || '—' }}</span><span class="badge" :class="chainStatusClass(replayAttemptEntry(replayAttempt).status)">{{ chainStatusLabel(replayAttemptEntry(replayAttempt).status) }}</span></div>
+                      <div class="replay-score-grid"><span>{{ t('modelRules.diagnostics.score') }} {{ replayScore(replayAttempt.score.overall) }}</span><span>{{ t('modelRules.diagnostics.reliability') }} {{ replayScore(replayAttempt.score.reliability) }}</span><span>{{ t('modelRules.diagnostics.latencyScore') }} {{ replayScore(replayAttempt.score.latency) }}</span><span>{{ t('modelRules.diagnostics.ttftScore') }} {{ replayScore(replayAttempt.score.ttft) }}</span><span>{{ t('modelRules.diagnostics.capacity') }} {{ replayScore(replayAttempt.score.capacity) }}</span><span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ replayScore(replayAttempt.score.cost_efficiency) }}</span><span>{{ t('usage.logTable.replayEstimatedCost') }} {{ costLabel(replayAttempt.score.estimated_cost, replayAttempt.score.cost?.available, 4) }}</span><span>{{ t('usage.logTable.replayAvailability') }}: {{ replayAttempt.score.availability || t('usage.logTable.replayUnknown') }}{{ replayAttempt.score.reason ? ` · ${replayAttempt.score.reason}` : '' }}</span></div>
                       <div v-if="replayAttempt.target_missing || replayAttempt.provider_missing || replayAttempt.replay_limitation || !replayAttempt.score.metrics_fresh" class="replay-attempt-notes"><span v-if="replayAttempt.target_missing">{{ t('usage.logTable.replayMissingTarget') }}</span><span v-if="replayAttempt.provider_missing">{{ t('usage.logTable.replayMissingProvider') }}</span><span v-if="!replayAttempt.score.metrics_fresh">{{ t('usage.logTable.replayNoSamples') }}</span><span v-if="replayAttempt.replay_limitation">{{ t('usage.logTable.replayLimitation') }}: {{ replayAttempt.replay_limitation }}</span></div>
                     </div>
                   </div>
@@ -441,7 +445,7 @@ const columnCount = computed(() => columns)
         </tr>
       </template>
       <tr v-if="props.logs.length === 0" class="logs-empty-row">
-        <td :colspan="columnCount" style="padding: 56px 20px;">
+        <td :colspan="columns" style="padding: 56px 20px;">
           <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;">
             <div style="width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; color: var(--muted);">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>

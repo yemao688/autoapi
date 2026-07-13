@@ -38,10 +38,6 @@ export function DeleteModelRule(arg1) {
   return window['go']['api']['App']['DeleteModelRule'](arg1);
 }
 
-export function DeletePrice(arg1) {
-  return window['go']['api']['App']['DeletePrice'](arg1);
-}
-
 export function DeleteProvider(arg1) {
   return window['go']['api']['App']['DeleteProvider'](arg1);
 }
@@ -144,10 +140,6 @@ export function ListModelRules() {
 
 export function ListModels(arg1) {
   return window['go']['api']['App']['ListModels'](arg1);
-}
-
-export function ListPrices() {
-  return window['go']['api']['App']['ListPrices']();
 }
 
 export function ListProviders() {
@@ -258,10 +250,6 @@ export function UpdateAPIKey(arg1, arg2) {
   return window['go']['api']['App']['UpdateAPIKey'](arg1, arg2);
 }
 
-export function UpdateModelName(arg1, arg2, arg3) {
-  return window['go']['api']['App']['UpdateModelName'](arg1, arg2, arg3);
-}
-
 export function UpdateModelRule(arg1, arg2) {
   return window['go']['api']['App']['UpdateModelRule'](arg1, arg2);
 }
@@ -270,6 +258,6 @@ export function UpdateProvider(arg1, arg2) {
   return window['go']['api']['App']['UpdateProvider'](arg1, arg2);
 }
 
-export function UpsertPrice(arg1) {
-  return window['go']['api']['App']['UpsertPrice'](arg1);
+export function UpdateProviderModel(arg1) {
+  return window['go']['api']['App']['UpdateProviderModel'](arg1);
 }

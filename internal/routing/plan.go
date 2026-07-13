@@ -81,7 +81,6 @@ type CandidatePlan struct {
 
 func comparableCost(c model.EffectiveCost) bool {
 	return c.Available && c.Currency == "USD" &&
-		c.Confidence != model.CostConfidenceUnknown && c.Confidence != model.CostConfidenceUnavailable &&
 		!math.IsNaN(c.Cost) && !math.IsInf(c.Cost, 0) && c.Cost >= 0
 }
 

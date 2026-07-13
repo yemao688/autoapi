@@ -804,26 +804,6 @@ func (s *Service) AddProviderModels(providerID string, names []string) error {
 }
 
 // ---------------------------------------------------------------------------
-//  Price management
-// ---------------------------------------------------------------------------
-
-// ListPrices returns every stored price record.
-func (s *Service) ListPrices() ([]model.Price, error) {
-	return s.store.ListPrices()
-}
-
-// UpsertPrice creates or replaces a price record.
-func (s *Service) UpsertPrice(in model.PriceInput) (*model.Price, error) {
-	return s.store.UpsertPrice(in)
-}
-
-// DeletePrice removes a price record by ID. Deleting a non-existent ID
-// succeeds without error (idempotent).
-func (s *Service) DeletePrice(id string) error {
-	return s.store.DeletePrice(id)
-}
-
-// ---------------------------------------------------------------------------
 //  Internal helpers
 // ---------------------------------------------------------------------------
 

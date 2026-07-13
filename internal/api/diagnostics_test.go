@@ -14,15 +14,19 @@ type diagnosticsStore struct {
 	rules       []model.ModelRule
 	providers   map[string]*model.Provider
 	providerErr map[string]error
-	prices      map[string]*model.Price
+	models      map[string]*model.Model
 }
 
 func (s *diagnosticsStore) ListModelRules() ([]model.ModelRule, error) { return s.rules, nil }
 func (s *diagnosticsStore) GetProvider(id string) (*model.Provider, error) {
 	return s.providers[id], s.providerErr[id]
 }
-func (s *diagnosticsStore) ResolvePrice(_, modelName, _ string) (*model.Price, error) {
-	return s.prices[modelName], nil
+func (s *diagnosticsStore) GetModel(providerID, modelName string) (*model.Model, error) {
+	m, ok := s.models[providerID+":"+modelName]
+	if !ok {
+		return nil, errors.New("model not found")
+	}
+	return m, nil
 }
 
 type diagnosticsService struct{ BusinessService }
@@ -95,7 +99,7 @@ func TestGetModelRuleShadowComparisonsExplicitlyAssumesCircuitClosedWithoutSnaps
 func TestGetTargetDiagnosticsKeepsDuplicateTargetIDsScopedAndOrdered(t *testing.T) {
 	s := &diagnosticsStore{
 		rules:     []model.ModelRule{{ID: "r1", Name: "one", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "same", ProviderID: "p1", ModelName: "m1", Tier: 1}}}, {ID: "r2", Name: "two", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "same", ProviderID: "p2", ModelName: "m2", Tier: 2}}}},
-		providers: map[string]*model.Provider{"p1": {ID: "p1", Name: "P1"}, "p2": {ID: "p2", Name: "P2"}}, prices: map[string]*model.Price{},
+		providers: map[string]*model.Provider{"p1": {ID: "p1", Name: "P1"}, "p2": {ID: "p2", Name: "P2"}}, models: map[string]*model.Model{},
 	}
 	out, err := diagnosticApp(s, diagnosticsMetrics{snapshots: map[model.TargetMetricKey]metrics.Snapshot{}}).GetTargetDiagnostics()
 	if err != nil || len(out) != 2 {
@@ -112,7 +116,7 @@ func TestGetTargetDiagnosticsKeepsDuplicateTargetIDsScopedAndOrdered(t *testing.
 func TestGetTargetDiagnosticsLocalProviderFailureDoesNotAbortBatch(t *testing.T) {
 	s := &diagnosticsStore{
 		rules:     []model.ModelRule{{ID: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "bad", ProviderID: "missing", ModelName: "m1", Enabled: true}, {ID: "ok", ProviderID: "p", ModelName: "m2", Enabled: true}}}},
-		providers: map[string]*model.Provider{"p": {ID: "p", Name: "good"}}, providerErr: map[string]error{"missing": errors.New("not found")}, prices: map[string]*model.Price{"m2": {UpstreamModel: "m2", BillingMode: model.BillingModeToken, Currency: "USD", Confidence: model.CostConfidenceExact}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "good"}}, providerErr: map[string]error{"missing": errors.New("not found")}, models: map[string]*model.Model{"p:m2": {Name: "m2", RequestPrice: .1}},
 	}
 	out, err := diagnosticApp(s, diagnosticsMetrics{snapshots: map[model.TargetMetricKey]metrics.Snapshot{}}).GetTargetDiagnostics()
 	if err != nil || len(out) != 2 {

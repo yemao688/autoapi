@@ -132,39 +132,6 @@ func TestRequestOutcome(t *testing.T) {
 	}
 }
 
-func TestBillingMode(t *testing.T) {
-	for _, m := range []BillingMode{
-		BillingModeToken, BillingModeRequest, BillingModeQuota, BillingModeCustom, BillingModeUnknown,
-	} {
-		if !m.Valid() {
-			t.Errorf("%q should be valid", m)
-		}
-	}
-	if BillingMode("bogus").Valid() {
-		t.Error("bogus billing mode should be invalid")
-	}
-	if got := BillingMode("bogus").Normalized(); got != BillingModeUnknown {
-		t.Errorf("Normalized(bogus) = %q, want %q", got, BillingModeUnknown)
-	}
-}
-
-func TestCostConfidence(t *testing.T) {
-	for _, c := range []CostConfidence{
-		CostConfidenceExact, CostConfidenceEstimated, CostConfidencePartial,
-		CostConfidenceUnknown, CostConfidenceUnavailable,
-	} {
-		if !c.Valid() {
-			t.Errorf("%q should be valid", c)
-		}
-	}
-	if CostConfidence("bogus").Valid() {
-		t.Error("bogus cost confidence should be invalid")
-	}
-	if got := CostConfidence("bogus").Normalized(); got != CostConfidenceUnknown {
-		t.Errorf("Normalized(bogus) = %q, want %q", got, CostConfidenceUnknown)
-	}
-}
-
 func TestEffectiveCost(t *testing.T) {
 	defaultCost := DefaultEffectiveCost()
 	if defaultCost.IsAvailable() {
@@ -173,11 +140,7 @@ func TestEffectiveCost(t *testing.T) {
 	if defaultCost.Cost != 0 {
 		t.Errorf("default cost should be zero, got %v", defaultCost.Cost)
 	}
-	if defaultCost.Confidence != CostConfidenceUnavailable {
-		t.Errorf("default confidence = %q, want %q", defaultCost.Confidence, CostConfidenceUnavailable)
-	}
-
-	available := EffectiveCost{Cost: 0.001, Currency: "USD", Confidence: CostConfidenceEstimated, Available: true}
+	available := EffectiveCost{Cost: 0.001, Currency: "USD", Available: true}
 	if !available.IsAvailable() {
 		t.Error("expected available cost")
 	}

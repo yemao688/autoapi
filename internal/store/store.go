@@ -82,7 +82,6 @@ func New(_ context.Context, deps StoreDeps) (*Store, error) {
 	slog.Info("store: migrations complete")
 
 	// Best-effort backfill of cost for pre-migration rows.
-	s.backfillCost()
 
 	// Writer
 	slog.Info("store: writer goroutine starting", "buffer", 1024)
@@ -152,42 +151,3 @@ var (
 	ErrConflict  = fmt.Errorf("store: conflict")
 	ErrQueueFull = fmt.Errorf("store: writer queue full")
 )
-
-// ---------------------------------------------------------------------------
-//  Convenience: pricing for cost estimation
-// ---------------------------------------------------------------------------
-
-// modelCost holds per-token pricing for cost aggregation.
-type modelCost struct {
-	InputPerToken  float64
-	OutputPerToken float64
-}
-
-// costTable maps model name → estimated cost per token in USD.
-// Extended as new models appear.
-var costTable = map[string]modelCost{
-	"gpt-4o":            {InputPerToken: 10.0 / 1e6, OutputPerToken: 30.0 / 1e6},
-	"gpt-4o-mini":       {InputPerToken: 0.15 / 1e6, OutputPerToken: 0.60 / 1e6},
-	"gpt-4":             {InputPerToken: 30.0 / 1e6, OutputPerToken: 60.0 / 1e6},
-	"gpt-4-turbo":       {InputPerToken: 10.0 / 1e6, OutputPerToken: 30.0 / 1e6},
-	"gpt-3.5-turbo":     {InputPerToken: 0.50 / 1e6, OutputPerToken: 1.50 / 1e6},
-	"claude-3.5-sonnet": {InputPerToken: 3.0 / 1e6, OutputPerToken: 15.0 / 1e6},
-	"claude-3-opus":     {InputPerToken: 15.0 / 1e6, OutputPerToken: 75.0 / 1e6},
-	"claude-3-haiku":    {InputPerToken: 0.25 / 1e6, OutputPerToken: 1.25 / 1e6},
-	"deepseek-chat":     {InputPerToken: 0.27 / 1e6, OutputPerToken: 1.10 / 1e6},
-	"deepseek-reasoner": {InputPerToken: 0.55 / 1e6, OutputPerToken: 2.19 / 1e6},
-	"moonshot-v1":       {InputPerToken: 0.12 / 1e6, OutputPerToken: 0.12 / 1e6},
-	"glm-4":             {InputPerToken: 0.10 / 1e6, OutputPerToken: 0.10 / 1e6},
-}
-
-func estimateCost(modelName string, inputTokens, outputTokens int64) float64 {
-	// Default fallback pricing (rough average)
-	const defaultInput = 2.0 / 1e6
-	const defaultOutput = 8.0 / 1e6
-
-	c, ok := costTable[modelName]
-	if !ok {
-		c = modelCost{InputPerToken: defaultInput, OutputPerToken: defaultOutput}
-	}
-	return float64(inputTokens)*c.InputPerToken + float64(outputTokens)*c.OutputPerToken
-}

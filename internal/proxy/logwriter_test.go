@@ -47,7 +47,10 @@ func (f *fakeBatchStore) UpdateRequestLogsBatch(logs []model.RequestLog) error {
 	return nil
 }
 func (f *fakeBatchStore) ListModels(providerID string) ([]model.Model, error) { return nil, nil }
-func (f *fakeBatchStore) GetSettings() (*model.Settings, error)               { return &model.Settings{}, nil }
+func (f *fakeBatchStore) GetModel(providerID, name string) (*model.Model, error) {
+	return &model.Model{ProviderID: providerID, Name: name, RequestPrice: 0.1}, nil
+}
+func (f *fakeBatchStore) GetSettings() (*model.Settings, error) { return &model.Settings{}, nil }
 func (f *fakeBatchStore) Dashboard() (*model.DashboardData, error) {
 	return &model.DashboardData{}, nil
 }

@@ -10,6 +10,22 @@ import (
 	"autoapi/internal/model"
 )
 
+func requestCost(chain []model.RequestLogChainEntry) (float64, bool) {
+	var total float64
+	available := true
+	found := false
+	for _, attempt := range chain {
+		if attempt.UpstreamStarted {
+			found = true
+			total += attempt.RequestCost
+			if !attempt.RequestCostAvailable {
+				available = false
+			}
+		}
+	}
+	return total, found && available
+}
+
 // chainJSONFor serialises a Chain slice to the persisted JSON blob. Returns
 // an empty string for nil/empty slices so the column stores a stable
 // sentinel ("") rather than "null" — the scan side uses the same convention
@@ -39,6 +55,13 @@ func chainFromJSON(raw string) []model.RequestLogChainEntry {
 		return nil
 	}
 	return out
+}
+
+func applyChainCostAvailability(l *model.RequestLog) {
+	if len(l.Chain) == 0 {
+		return
+	}
+	_, l.CostAvailable = requestCost(l.Chain)
 }
 
 // QueryLogs filters request_logs by the given parameters with pagination.
@@ -108,6 +131,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 			return nil, 0, fmt.Errorf("store: scan log: %w", err)
 		}
 		l.Chain = chainFromJSON(chainJS)
+		applyChainCostAvailability(&l)
 		logs = append(logs, l)
 	}
 	if err := rows.Err(); err != nil {
@@ -140,14 +164,15 @@ func (s *Store) GetRequestLog(id string) (*model.RequestLog, error) {
 		return nil, fmt.Errorf("store: get log: %w", err)
 	}
 	l.Chain = chainFromJSON(chainJS)
+	applyChainCostAvailability(&l)
 	return &l, nil
 }
 
 // InsertRequestLog appends a single log entry. Used by the proxy (Phase 4)
 // through the Writer.
 func (s *Store) InsertRequestLog(l model.RequestLog) error {
-	if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
-		l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+	if l.Cost == 0 {
+		l.Cost, l.CostAvailable = requestCost(l.Chain)
 	}
 	chainJSON := chainJSONFor(l.Chain)
 	return s.execTx(func(tx *sql.Tx) error {
@@ -195,8 +220,8 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 		}
 		defer stmt.Close()
 		for _, l := range logs {
-			if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
-				l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+			if l.Cost == 0 {
+				l.Cost, l.CostAvailable = requestCost(l.Chain)
 			}
 			chainJSON := chainJSONFor(l.Chain)
 			if _, err := stmt.Exec(
@@ -262,8 +287,8 @@ func (s *Store) ClearLogs() (int, error) {
 // at request start, then this method fills in status_code, output_tokens,
 // cost, latency, chain, etc. when the request finishes.
 func (s *Store) UpdateRequestLog(l model.RequestLog) error {
-	if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
-		l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+	if l.Cost == 0 {
+		l.Cost, l.CostAvailable = requestCost(l.Chain)
 	}
 	chainJSON := chainJSONFor(l.Chain)
 	return s.execTx(func(tx *sql.Tx) error {
@@ -325,8 +350,8 @@ func (s *Store) UpdateRequestLogsBatch(logs []model.RequestLog) error {
 		}
 		defer stmt.Close()
 		for _, l := range logs {
-			if l.Cost == 0 && (l.InputTokens > 0 || l.OutputTokens > 0) {
-				l.Cost = estimateCost(l.Model, int64(l.InputTokens), int64(l.OutputTokens))
+			if l.Cost == 0 {
+				l.Cost, l.CostAvailable = requestCost(l.Chain)
 			}
 			chainJSON := chainJSONFor(l.Chain)
 			if _, err := stmt.Exec(

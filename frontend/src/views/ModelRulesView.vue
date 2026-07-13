@@ -60,11 +60,12 @@ const targetSaving = ref(false)
 const diagnostics = ref<model.TargetShadowScore[]>([])
 const diagnosticsLoading = ref(false)
 const diagnosticsError = ref(false)
-
-// sample_count is added by the backend lane. Keep this narrow compatibility
-// type local until the generated models are regenerated; no fallback aliases or
-// untyped diagnostic objects are used.
-type TargetShadowScoreWithSampleCount = model.TargetShadowScore & { sample_count?: number }
+const diagnosticsRefreshId = ref(0)
+const shadowComparisons = ref<model.ModelRuleShadowComparison[]>([])
+const shadowLoading = ref(false)
+const shadowError = ref(false)
+const shadowRefreshId = ref(0)
+const shadowExpanded = ref<Set<string>>(new Set())
 
 // The view is driven by a single interaction state. Server responses are merged
 // into this list by ID so nested target Sortable instances stay bound to the
@@ -190,6 +191,10 @@ function diagnosticFor(rule: model.ModelRule, target: model.ModelRuleTarget): mo
   return diagnosticsMap.value.get(diagnosticKey(rule.id, target.id))
 }
 
+function targetDiagnostic(rule: model.ModelRule, target: model.ModelRuleTarget) {
+  return diagnosticFor(rule, target)
+}
+
 function diagnosticNumber(value: number | undefined, suffix = ''): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
   return `${value % 1 === 0 ? value : value.toFixed(1)}${suffix}`
@@ -200,7 +205,14 @@ function diagnosticScore(value: number | undefined): string {
 }
 
 function diagnosticSampleCount(diagnostic?: model.TargetShadowScore): number | undefined {
-  return (diagnostic as TargetShadowScoreWithSampleCount | undefined)?.sample_count
+  return diagnostic?.sample_count
+}
+
+function diagnosticCostStatus(diagnostic?: model.TargetShadowScore): string {
+  const costAvailable = diagnostic?.cost?.available
+  if (costAvailable === undefined) return t('modelRules.diagnostics.costUnavailable')
+  if (!costAvailable) return t('modelRules.diagnostics.priceUnknown')
+  return ''
 }
 
 function diagnosticStatus(rule: model.ModelRule, target: model.ModelRuleTarget): string {
@@ -212,23 +224,104 @@ function diagnosticStatus(rule: model.ModelRule, target: model.ModelRuleTarget):
 }
 
 async function loadDiagnostics() {
+  const requestId = ++diagnosticsRefreshId.value
+  const snapshot = ruleSnapshotKey()
   diagnosticsLoading.value = true
   diagnosticsError.value = false
+  diagnostics.value = []
   try {
-    diagnostics.value = await api.getTargetDiagnostics()
+    const result = await api.getTargetDiagnostics()
+    if (requestId === diagnosticsRefreshId.value && snapshot === ruleSnapshotKey()) {
+      diagnostics.value = result
+    }
   } catch {
     // Diagnostics are optional and must never block or replace rules.
-    diagnostics.value = []
-    diagnosticsError.value = true
+    if (requestId === diagnosticsRefreshId.value) diagnosticsError.value = true
   } finally {
-    diagnosticsLoading.value = false
+    if (requestId === diagnosticsRefreshId.value) diagnosticsLoading.value = false
   }
+}
+
+function invalidateDiagnostics() {
+  diagnosticsRefreshId.value++
+  diagnostics.value = []
+  diagnosticsLoading.value = false
+  diagnosticsError.value = true
+}
+
+async function loadShadowComparisons() {
+  const requestId = ++shadowRefreshId.value
+  const snapshot = ruleSnapshotKey()
+  shadowLoading.value = true
+  shadowError.value = false
+  shadowComparisons.value = []
+  try {
+    const comparisons = await api.getModelRuleShadowComparisons()
+    if (requestId === shadowRefreshId.value && snapshot === ruleSnapshotKey()) {
+      shadowComparisons.value = comparisons
+    }
+  } catch {
+    if (requestId === shadowRefreshId.value) shadowError.value = true
+  } finally {
+    if (requestId === shadowRefreshId.value) shadowLoading.value = false
+  }
+}
+
+function invalidateShadowComparisons() {
+  // A failed rules refresh leaves ruleList untouched, so any in-flight or
+  // previously loaded comparison must not be presented as current data for it.
+  shadowRefreshId.value++
+  shadowComparisons.value = []
+  shadowLoading.value = false
+  shadowError.value = true
+}
+
+function ruleSnapshotKey(): string {
+  return JSON.stringify(ruleList.value.map((rule) => ({
+    id: rule.id,
+    enabled: rule.enabled,
+    strategy: rule.strategy,
+    first_byte_timeout_seconds: rule.first_byte_timeout_seconds,
+    targets: rule.targets.map((target) => ({
+      id: target.id,
+      provider_id: target.provider_id,
+      model_name: target.model_name,
+      max_retries: target.max_retries,
+      first_token_timeout_seconds: target.first_token_timeout_seconds,
+      enabled: target.enabled,
+      tier: target.tier,
+    })),
+  })))
 }
 
 async function loadRules() {
   const result = await fetchRules()
+  if (!result) {
+    invalidateDiagnostics()
+    invalidateShadowComparisons()
+    return result
+  }
+
+  // useApi returns null on fetch failure and leaves ruleList unchanged. Only
+  // after a successful authoritative rules response may dependent data refresh.
   void loadDiagnostics()
+  void loadShadowComparisons()
   return result
+}
+
+function shadowFor(rule: model.ModelRule): model.ModelRuleShadowComparison | undefined {
+  return shadowComparisons.value.find((comparison) => comparison.rule_id === rule.id)
+}
+
+function shadowArray<T>(value: T[] | undefined | null): T[] {
+  return Array.isArray(value) ? value : []
+}
+
+function toggleShadow(ruleId: string) {
+  const next = new Set(shadowExpanded.value)
+  if (next.has(ruleId)) next.delete(ruleId)
+  else next.add(ruleId)
+  shadowExpanded.value = next
 }
 
 function openCreate() {
@@ -461,6 +554,7 @@ async function onTargetsReorder(rule: model.ModelRule) {
       await recoverTargetRule(rule)
     } else {
       // The drag has already mutated rule.targets in place; no full reload.
+      void loadShadowComparisons()
       toast.push(t('toast.reorderSaved'), 'success')
     }
   } catch (e: any) {
@@ -512,6 +606,7 @@ async function onRulesReorder() {
       toast.push(t('toast.reorderConflict'), 'error')
       await reconcileRulesOrder()
     } else {
+      void loadShadowComparisons()
       toast.push(t('toast.reorderSaved'), 'success')
     }
   } catch (e: any) {
@@ -599,15 +694,25 @@ function importJSON() {
 }
 
 function exportJSON() {
-  const data = ruleList.value || []
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `Autoapi-model-rules-${new Date().toISOString().slice(0, 10)}.json`
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 0)
-  toast.push(t('toast.exported'), 'success')
+  let url = ''
+  let anchor: HTMLAnchorElement | null = null
+  try {
+    const data = ruleList.value
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    url = URL.createObjectURL(blob)
+    anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `Autoapi-model-rules-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    toast.push(t('toast.exported'), 'success')
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    toast.push(`${t('toast.exportFailed')}: ${message}`, 'error')
+  } finally {
+    anchor?.remove()
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
 }
 
 function closeModal() {
@@ -680,7 +785,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
   <header class="main-header">
     <div class="main-title-group">
       <h1 class="main-title">{{ t('modelRules.title') }}</h1>
-      <span class="main-subtitle">{{ t('modelRules.subtitle', { count: ruleList.length ?? 0 }) }}</span>
+      <span class="main-subtitle">{{ t('modelRules.subtitle', { count: ruleList.length }) }}</span>
     </div>
     <div class="main-actions">
       <button class="btn btn-secondary" @click="importJSON">{{ t('modelRules.import') }}</button>
@@ -696,8 +801,9 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
     <div class="main-content-inner stack-loose">
       <!-- Loading / error -->
       <div v-if="rulesLoading && !rules" class="text-muted" style="padding: 40px 0; text-align: center;">{{ t('modelRules.loading') }}</div>
-      <div v-else-if="rulesError" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('modelRules.loadFailed', { error: rulesError }) }}</div>
+      <div v-else-if="rulesError && ruleList.length === 0" class="text-muted" style="padding: 40px 0; text-align: center; color: var(--negative);">{{ t('modelRules.loadFailed', { error: rulesError }) }}</div>
       <template v-else>
+        <div v-if="rulesError" class="refresh-error-banner" role="status">{{ t('modelRules.loadFailed', { error: rulesError }) }}</div>
         <!-- Rule list with simple drag reorder -->
         <VueDraggable
           v-model="ruleList"
@@ -804,17 +910,17 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                         :title="t('modelRules.targets.providerDisabled')"
                       >{{ t('modelRules.targets.providerDisabled') }}</span>
                       </div>
-                      <div class="target-diagnostics" :class="{ 'target-diagnostics-empty': !diagnosticFor(rule, target) || !diagnosticFor(rule, target)?.metrics_fresh }">
-                        <template v-if="diagnosticFor(rule, target)?.metrics_fresh">
-                          <span class="diag-score">{{ t('modelRules.diagnostics.score') }} {{ diagnosticScore(diagnosticFor(rule, target)?.overall) }}</span>
-                          <span>{{ t('modelRules.diagnostics.reliability') }} {{ diagnosticScore(diagnosticFor(rule, target)?.reliability) }}</span>
-                          <span>{{ t('modelRules.diagnostics.latencyScore') }} {{ diagnosticScore(diagnosticFor(rule, target)?.latency) }}</span>
-                          <span>{{ t('modelRules.diagnostics.ttftScore') }} {{ diagnosticScore(diagnosticFor(rule, target)?.ttft) }}</span>
-                          <span>{{ t('modelRules.diagnostics.capacity') }} {{ diagnosticScore(diagnosticFor(rule, target)?.capacity) }}</span>
-                          <span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ diagnosticScore(diagnosticFor(rule, target)?.cost_efficiency) }}</span>
-                          <span>{{ t('modelRules.diagnostics.estimatedCost') }} {{ diagnosticNumber(diagnosticFor(rule, target)?.estimated_cost, ' USD') }}</span>
-                          <span class="diag-samples">{{ t('modelRules.diagnostics.samples') }} {{ diagnosticNumber(diagnosticSampleCount(diagnosticFor(rule, target))) }} · {{ t('modelRules.diagnostics.confidence') }} {{ diagnosticScore(diagnosticFor(rule, target)?.confidence) }}</span>
-                          <span v-if="diagnosticFor(rule, target)?.cost.available === false" class="diag-note">{{ t('modelRules.diagnostics.priceUnknown') }}</span>
+                      <div class="target-diagnostics" :class="{ 'target-diagnostics-empty': !targetDiagnostic(rule, target) || !targetDiagnostic(rule, target)?.metrics_fresh }">
+                        <template v-if="targetDiagnostic(rule, target)?.metrics_fresh">
+                          <span class="diag-score">{{ t('modelRules.diagnostics.score') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.overall) }}</span>
+                          <span>{{ t('modelRules.diagnostics.reliability') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.reliability) }}</span>
+                          <span>{{ t('modelRules.diagnostics.latencyScore') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.latency) }}</span>
+                          <span>{{ t('modelRules.diagnostics.ttftScore') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.ttft) }}</span>
+                          <span>{{ t('modelRules.diagnostics.capacity') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.capacity) }}</span>
+                          <span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.cost_efficiency) }}</span>
+                          <span>{{ t('modelRules.diagnostics.estimatedCost') }} {{ diagnosticNumber(targetDiagnostic(rule, target)?.estimated_cost, ' USD') }}</span>
+                          <span class="diag-samples">{{ t('modelRules.diagnostics.samples') }} {{ diagnosticNumber(diagnosticSampleCount(targetDiagnostic(rule, target))) }} · {{ t('modelRules.diagnostics.confidence') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.confidence) }}</span>
+                          <span v-if="diagnosticCostStatus(targetDiagnostic(rule, target))" class="diag-note">{{ diagnosticCostStatus(targetDiagnostic(rule, target)) }}</span>
                         </template>
                         <span v-else class="diag-note">{{ diagnosticStatus(rule, target) }}</span>
                       </div>
@@ -856,6 +962,24 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                   </li>
                   <li v-if="!rule.targets.length" class="text-muted" style="font-size: 12px;">{{ t('modelRules.empty') }}</li>
                 </VueDraggable>
+                <section class="shadow-comparison" :class="{ 'shadow-comparison-open': shadowExpanded.has(rule.id) }">
+                  <button class="shadow-comparison-toggle" type="button" :aria-expanded="shadowExpanded.has(rule.id)" @click="toggleShadow(rule.id)">
+                    <span>{{ t('modelRules.shadow.title') }} <span class="shadow-readonly">{{ t('modelRules.shadow.readonly') }}</span></span>
+                    <span v-if="shadowFor(rule)?.changed" class="badge shadow-changed">{{ t('modelRules.shadow.changed') }}</span>
+                    <span class="shadow-chevron">›</span>
+                  </button>
+                  <div v-if="shadowExpanded.has(rule.id)" class="shadow-comparison-body">
+                    <div v-if="shadowLoading" class="text-muted">{{ t('modelRules.shadow.loading') }}</div>
+                    <div v-else-if="shadowError" class="diag-note">{{ t('modelRules.shadow.error') }}</div>
+                    <div v-else-if="!shadowFor(rule)" class="text-muted">{{ t('modelRules.shadow.empty') }}</div>
+                    <template v-else>
+                      <div class="shadow-meta"><span>{{ t('modelRules.shadow.strategy') }}: {{ shadowFor(rule)?.strategy || '—' }}</span><span>{{ t('modelRules.shadow.original') }}: {{ shadowArray(shadowFor(rule)?.original_order).join(' → ') || '—' }}</span><span>{{ t('modelRules.shadow.planned') }}: {{ shadowArray(shadowFor(rule)?.planned_order).join(' → ') || '—' }}</span></div>
+                      <div v-if="shadowArray(shadowFor(rule)?.candidates).length" class="shadow-list"><strong>{{ t('modelRules.shadow.candidates') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.candidates)" :key="candidate.target_id">{{ candidate.target_id }} · T{{ candidate.tier }} · {{ candidate.available ? t('modelRules.shadow.available') : candidate.reason || t('modelRules.shadow.unavailable') }}<em v-if="candidate.circuit_state"> · {{ candidate.circuit_state }}</em></span></div>
+                      <div v-if="shadowArray(shadowFor(rule)?.rejected).length" class="shadow-list"><strong>{{ t('modelRules.shadow.rejected') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.rejected)" :key="candidate.target_id">{{ candidate.target_id }} · {{ candidate.reason || t('modelRules.shadow.unavailable') }}<em v-if="candidate.circuit_state"> · {{ candidate.circuit_state }}</em></span></div>
+                      <div v-if="shadowArray(shadowFor(rule)?.assumptions).length" class="shadow-list"><strong>{{ t('modelRules.shadow.assumptions') }}</strong><span v-for="assumption in shadowArray(shadowFor(rule)?.assumptions)" :key="assumption">{{ assumption }}</span></div>
+                    </template>
+                  </div>
+                </section>
               </div>
             </div>
 
@@ -1113,6 +1237,20 @@ html[data-theme="dark"] .rule-drag-handle:hover {
 .diag-score { color: var(--fg); font-weight: 600; }
 .diag-samples { opacity: 0.8; }
 .diag-note { color: var(--warning); font-family: inherit; }
+.shadow-comparison { margin-top: 12px; border-top: 1px dashed var(--rule-border); }
+.shadow-readonly { font-weight: 400; opacity: 0.8; }
+.shadow-changed { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
+.refresh-error-banner { padding: 9px 12px; border-radius: 6px; color: var(--negative); background: color-mix(in srgb, var(--negative) 10%, transparent); font-size: 12px; }
+.shadow-comparison-toggle { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--muted); padding: 9px 0 5px; font-size: 11px; text-align: left; cursor: pointer; }
+.shadow-comparison-toggle:hover { color: var(--fg); }
+.shadow-comparison-toggle .shadow-chevron { margin-left: auto; font-size: 16px; transition: transform 120ms ease; transform: rotate(90deg); }
+.shadow-comparison-open .shadow-chevron { transform: rotate(-90deg); }
+.shadow-comparison-body { display: flex; flex-direction: column; gap: 8px; padding: 5px 0 3px; color: var(--muted); font-size: 11px; }
+.shadow-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-family: var(--font-mono); font-size: 10.5px; }
+.shadow-list { display: flex; flex-direction: column; gap: 3px; }
+.shadow-list strong { color: var(--fg); font-weight: 600; }
+.shadow-list span { padding-left: 8px; overflow-wrap: anywhere; }
+.shadow-list em { color: var(--warning); font-style: normal; }
 .target-provider {
   font-size: 13px;
   font-weight: 500;

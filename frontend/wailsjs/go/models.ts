@@ -172,6 +172,9 @@ export namespace model {
 	    error: string;
 	    latency_ms: number;
 	    first_token_ms: number;
+	    upstream_started: boolean;
+	    request_cost: number;
+	    request_cost_available: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new RequestLogChainEntry(source);
@@ -189,6 +192,9 @@ export namespace model {
 	        this.error = source["error"];
 	        this.latency_ms = source["latency_ms"];
 	        this.first_token_ms = source["first_token_ms"];
+	        this.upstream_started = source["upstream_started"];
+	        this.request_cost = source["request_cost"];
+	        this.request_cost_available = source["request_cost_available"];
 	    }
 	}
 	export class RequestLog {
@@ -203,6 +209,7 @@ export namespace model {
 	    cache_creation: number;
 	    cache_hit: number;
 	    cost: number;
+	    cost_available: boolean;
 	    latency_ms: number;
 	    first_token_ms: number;
 	    is_stream: boolean;
@@ -233,6 +240,7 @@ export namespace model {
 	        this.cache_creation = source["cache_creation"];
 	        this.cache_hit = source["cache_hit"];
 	        this.cost = source["cost"];
+	        this.cost_available = source["cost_available"];
 	        this.latency_ms = source["latency_ms"];
 	        this.first_token_ms = source["first_token_ms"];
 	        this.is_stream = source["is_stream"];
@@ -416,14 +424,8 @@ export namespace model {
 	    }
 	}
 	export class EffectiveCost {
-	    input_tokens: number;
-	    output_tokens: number;
-	    base_request_count: number;
-	    additional_retry_count: number;
 	    cost: number;
 	    currency: string;
-	    confidence: string;
-	    price_version: string;
 	    available: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -432,14 +434,8 @@ export namespace model {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.input_tokens = source["input_tokens"];
-	        this.output_tokens = source["output_tokens"];
-	        this.base_request_count = source["base_request_count"];
-	        this.additional_retry_count = source["additional_retry_count"];
 	        this.cost = source["cost"];
 	        this.currency = source["currency"];
-	        this.confidence = source["confidence"];
-	        this.price_version = source["price_version"];
 	        this.available = source["available"];
 	    }
 	}
@@ -564,6 +560,7 @@ export namespace model {
 	    context_window: number;
 	    owned_by: string;
 	    active: boolean;
+	    request_price: number;
 	    latency_ms: number;
 	    updated_at: number;
 	    created_at: number;
@@ -580,6 +577,7 @@ export namespace model {
 	        this.context_window = source["context_window"];
 	        this.owned_by = source["owned_by"];
 	        this.active = source["active"];
+	        this.request_price = source["request_price"];
 	        this.latency_ms = source["latency_ms"];
 	        this.updated_at = source["updated_at"];
 	        this.created_at = source["created_at"];
@@ -852,92 +850,6 @@ export namespace model {
 	        this.error = source["error"];
 	    }
 	}
-	export class Price {
-	    id?: string;
-	    provider_id?: string;
-	    upstream_model: string;
-	    endpoint_kind: string;
-	    billing_mode: string;
-	    input_price_per_million: number;
-	    output_price_per_million: number;
-	    cache_read_price_per_million: number;
-	    cache_write_price_per_million: number;
-	    request_price_per_request: number;
-	    currency: string;
-	    source: string;
-	    version: string;
-	    effective_at: number;
-	    expires_at: number;
-	    confidence: string;
-	    updated_at: number;
-	    created_at?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new Price(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.provider_id = source["provider_id"];
-	        this.upstream_model = source["upstream_model"];
-	        this.endpoint_kind = source["endpoint_kind"];
-	        this.billing_mode = source["billing_mode"];
-	        this.input_price_per_million = source["input_price_per_million"];
-	        this.output_price_per_million = source["output_price_per_million"];
-	        this.cache_read_price_per_million = source["cache_read_price_per_million"];
-	        this.cache_write_price_per_million = source["cache_write_price_per_million"];
-	        this.request_price_per_request = source["request_price_per_request"];
-	        this.currency = source["currency"];
-	        this.source = source["source"];
-	        this.version = source["version"];
-	        this.effective_at = source["effective_at"];
-	        this.expires_at = source["expires_at"];
-	        this.confidence = source["confidence"];
-	        this.updated_at = source["updated_at"];
-	        this.created_at = source["created_at"];
-	    }
-	}
-	export class PriceInput {
-	    provider_id?: string;
-	    upstream_model: string;
-	    endpoint_kind: string;
-	    billing_mode: string;
-	    input_price_per_million: number;
-	    output_price_per_million: number;
-	    cache_read_price_per_million: number;
-	    cache_write_price_per_million: number;
-	    request_price_per_request: number;
-	    currency: string;
-	    source: string;
-	    version: string;
-	    effective_at: number;
-	    expires_at: number;
-	    confidence: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PriceInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.provider_id = source["provider_id"];
-	        this.upstream_model = source["upstream_model"];
-	        this.endpoint_kind = source["endpoint_kind"];
-	        this.billing_mode = source["billing_mode"];
-	        this.input_price_per_million = source["input_price_per_million"];
-	        this.output_price_per_million = source["output_price_per_million"];
-	        this.cache_read_price_per_million = source["cache_read_price_per_million"];
-	        this.cache_write_price_per_million = source["cache_write_price_per_million"];
-	        this.request_price_per_request = source["request_price_per_request"];
-	        this.currency = source["currency"];
-	        this.source = source["source"];
-	        this.version = source["version"];
-	        this.effective_at = source["effective_at"];
-	        this.expires_at = source["expires_at"];
-	        this.confidence = source["confidence"];
-	    }
-	}
 	
 	export class ProviderInput {
 	    name: string;
@@ -955,6 +867,24 @@ export namespace model {
 	        this.base_url = source["base_url"];
 	        this.upstream_key = source["upstream_key"];
 	        this.is_custom = source["is_custom"];
+	    }
+	}
+	export class ProviderModelUpdate {
+	    provider_id: string;
+	    old_name: string;
+	    name: string;
+	    request_price: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderModelUpdate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.old_name = source["old_name"];
+	        this.name = source["name"];
+	        this.request_price = source["request_price"];
 	    }
 	}
 	export class ProviderShare {
@@ -1124,7 +1054,6 @@ export namespace model {
 	    cost: EffectiveCost;
 	    availability: string;
 	    reason: string;
-	    price_version: string;
 	    circuit_state?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -1157,7 +1086,6 @@ export namespace model {
 	        this.cost = this.convertValues(source["cost"], EffectiveCost);
 	        this.availability = source["availability"];
 	        this.reason = source["reason"];
-	        this.price_version = source["price_version"];
 	        this.circuit_state = source["circuit_state"];
 	    }
 	
@@ -1187,8 +1115,6 @@ export namespace model {
 	    target_missing: boolean;
 	    provider_missing: boolean;
 	    score: TargetShadowScore;
-	    price_confidence: string;
-	    price_version: string;
 	    replay_limitation?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -1204,8 +1130,6 @@ export namespace model {
 	        this.target_missing = source["target_missing"];
 	        this.provider_missing = source["provider_missing"];
 	        this.score = this.convertValues(source["score"], TargetShadowScore);
-	        this.price_confidence = source["price_confidence"];
-	        this.price_version = source["price_version"];
 	        this.replay_limitation = source["replay_limitation"];
 	    }
 	

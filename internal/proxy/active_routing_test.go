@@ -26,14 +26,12 @@ func (s *planningMetricSpy) CurrentSnapshot(k model.TargetMetricKey) metrics.Sna
 type planningPriceStore struct {
 	*mockStore
 	calls  int
-	kinds  []string
-	prices map[string]*model.Price
+	prices map[string]*model.Model
 	err    error
 }
 
-func (s *planningPriceStore) ResolvePrice(providerID, modelName, endpointKind string) (*model.Price, error) {
+func (s *planningPriceStore) GetModel(providerID, modelName string) (*model.Model, error) {
 	s.calls++
-	s.kinds = append(s.kinds, endpointKind)
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -42,35 +40,40 @@ func (s *planningPriceStore) ResolvePrice(providerID, modelName, endpointKind st
 
 func planningCandidates(strategy routing.Strategy) []candidate {
 	return []candidate{
-		{targetID: "a", provider: &model.Provider{ID: "pa"}, modelName: "ma", tier: 0, strategy: strategy},
-		{targetID: "b", provider: &model.Provider{ID: "pb"}, modelName: "mb", tier: 0, strategy: strategy},
-		{targetID: "c", provider: &model.Provider{ID: "pc"}, modelName: "mc", tier: 1, strategy: strategy},
+		{targetID: "a", provider: &model.Provider{ID: "pa"}, modelName: "ma", tier: 0, strategy: strategy, requestPrice: 10, requestPriceAvailable: true},
+		{targetID: "b", provider: &model.Provider{ID: "pb"}, modelName: "mb", tier: 0, strategy: strategy, requestPrice: 1, requestPriceAvailable: true},
+		{targetID: "c", provider: &model.Provider{ID: "pc"}, modelName: "mc", tier: 1, strategy: strategy, requestPrice: 0, requestPriceAvailable: true},
 	}
 }
 
 func planningRequest() *InboundRequest { return &InboundRequest{Endpoint: "/v1/chat/completions"} }
 
-func TestEndpointKind(t *testing.T) {
-	for _, tc := range []struct {
-		path string
-		kind string
-		ok   bool
-	}{
-		{path: "/v1/chat/completions", kind: "chat", ok: true},
-		{path: "/v1/completions", kind: "chat", ok: true},
-		{path: "/v1/responses", kind: "chat", ok: true},
-		{path: "/v1/embeddings", kind: "embedding", ok: true},
-		{path: "/v1/images/generations", ok: false},
-		{path: "/v1/audio/transcriptions", ok: false},
-		{path: "/v1/files", ok: false},
-		{path: "/v1/unknown", ok: false},
-	} {
-		t.Run(tc.path, func(t *testing.T) {
-			kind, ok := endpointKind(tc.path)
-			if kind != tc.kind || ok != tc.ok {
-				t.Fatalf("endpointKind(%q) = (%q, %v), want (%q, %v)", tc.path, kind, ok, tc.kind, tc.ok)
-			}
-		})
+func TestResolveCandidatesSnapshotsPriorityModelPrices(t *testing.T) {
+	store := &planningPriceStore{mockStore: &mockStore{
+		providers: map[string]*model.Provider{
+			"p-zero":    {ID: "p-zero", Name: "zero", Enabled: true},
+			"p-missing": {ID: "p-missing", Name: "missing", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "requested", Enabled: true, Strategy: string(routing.PriorityFirst), Targets: []model.ModelRuleTarget{
+			{ID: "zero", ProviderID: "p-zero", ModelName: "free", Enabled: true},
+			{ID: "missing", ProviderID: "p-missing", ModelName: "gone", Enabled: true},
+		}}},
+	},
+		prices: map[string]*model.Model{"p-zero:free": {ProviderID: "p-zero", Name: "free", RequestPrice: 0}},
+	}
+	p := &Proxy{store: store, breakers: map[string]*CircuitBreaker{}}
+	candidates, err := p.resolveCandidates(&InboundRequest{Model: "requested", Endpoint: "/v1/chat/completions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || !candidates[0].requestPriceAvailable || candidates[0].requestPrice != 0 {
+		t.Fatalf("zero-price snapshot=%+v", candidates)
+	}
+	if candidates[1].requestPriceAvailable {
+		t.Fatalf("missing model marked available: %+v", candidates[1])
+	}
+	if store.calls != 2 {
+		t.Fatalf("GetModel calls=%d, want 2", store.calls)
 	}
 }
 
@@ -121,72 +124,17 @@ func TestPlanCandidatesScoreWithinTierAndCostFirst(t *testing.T) {
 	if out[0].targetID != "b" || out[1].targetID != "a" || out[2].targetID != "c" {
 		t.Fatalf("score crossed tier or did not rank within tier: %v", ids(out))
 	}
-	prices := &planningPriceStore{mockStore: &mockStore{}, prices: map[string]*model.Price{
-		"pa:ma": {UpstreamModel: "ma", BillingMode: model.BillingModeToken, InputPricePerMillion: 10, Currency: "USD", Confidence: model.CostConfidenceExact},
-		"pb:mb": {UpstreamModel: "mb", BillingMode: model.BillingModeToken, InputPricePerMillion: 1, Currency: "USD", Confidence: model.CostConfidenceExact},
+	prices := &planningPriceStore{mockStore: &mockStore{}, prices: map[string]*model.Model{
+		"pa:ma": {Name: "ma", RequestPrice: 10},
+		"pb:mb": {Name: "mb", RequestPrice: 1},
 	}}
 	p.store = prices
 	out = p.planCandidates(planningRequest(), planningCandidates(routing.CostFirst))
 	if out[0].targetID != "b" || out[1].targetID != "a" || out[2].targetID != "c" {
 		t.Fatalf("cost order/unknown handling wrong: %v", ids(out))
 	}
-	if prices.calls != 3 {
-		t.Fatalf("price resolver calls=%d, want 3", prices.calls)
-	}
-	if len(prices.kinds) != 3 || prices.kinds[0] != "chat" || prices.kinds[1] != "chat" || prices.kinds[2] != "chat" {
-		t.Fatalf("price resolver endpoint kinds=%v, want [chat chat chat]", prices.kinds)
-	}
-}
-
-func TestPlanCandidatesKnownEndpointKindsAndUnknownEndpoints(t *testing.T) {
-	for _, tc := range []struct {
-		name, endpoint, wantKind string
-	}{
-		{name: "chat", endpoint: "/v1/chat/completions", wantKind: "chat"},
-		{name: "embedding", endpoint: "/v1/embeddings", wantKind: "embedding"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			prices := &planningPriceStore{mockStore: &mockStore{}}
-			p := &Proxy{store: prices}
-			p.planCandidates(&InboundRequest{Endpoint: tc.endpoint}, planningCandidates(routing.CostFirst))
-			if prices.calls != 3 || len(prices.kinds) != 3 {
-				t.Fatalf("price resolver calls=%d kinds=%v, want three calls", prices.calls, prices.kinds)
-			}
-			for _, kind := range prices.kinds {
-				if kind != tc.wantKind {
-					t.Fatalf("endpoint kind=%q, want %q", kind, tc.wantKind)
-				}
-			}
-		})
-	}
-
-	for _, endpoint := range []string{"/v1/images/generations", "/v1/audio/transcriptions", "/v1/files"} {
-		t.Run(endpoint, func(t *testing.T) {
-			prices := &planningPriceStore{mockStore: &mockStore{}, prices: map[string]*model.Price{
-				"pb:mb": {UpstreamModel: "mb", BillingMode: model.BillingModeToken, InputPricePerMillion: 1, Currency: "USD", Confidence: model.CostConfidenceExact},
-			}}
-			p := &Proxy{store: prices}
-			cs := planningCandidates(routing.CostFirst)
-			out := p.planCandidates(&InboundRequest{Endpoint: endpoint}, cs)
-			if prices.calls != 0 {
-				t.Fatalf("unknown endpoint called price resolver %d times", prices.calls)
-			}
-			if got := ids(out); len(got) != len(ids(cs)) || got[0] != "a" || got[1] != "b" || got[2] != "c" {
-				t.Fatalf("unknown endpoint changed order: %v", got)
-			}
-		})
-	}
-}
-
-func TestUnknownEndpointCostIsNotFree(t *testing.T) {
-	prices := &planningPriceStore{mockStore: &mockStore{}, prices: map[string]*model.Price{
-		"pa:ma": {UpstreamModel: "ma", BillingMode: model.BillingModeToken, InputPricePerMillion: 10, Currency: "USD", Confidence: model.CostConfidenceExact},
-	}}
-	p := &Proxy{store: prices}
-	cs := planningCandidates(routing.CostFirst)
-	out := p.planCandidates(&InboundRequest{Endpoint: "/v1/images/generations"}, cs)
-	if prices.calls != 0 || ids(out)[0] != "a" {
-		t.Fatalf("unknown endpoint should preserve original order without pricing: calls=%d order=%v", prices.calls, ids(out))
+	if prices.calls != 0 {
+		t.Fatalf("planning performed model reads=%d", prices.calls)
 	}
 }
 
@@ -195,8 +143,11 @@ func TestPlanCandidatesSnapshotsPricesAndFallback(t *testing.T) {
 	prices := &planningPriceStore{mockStore: &mockStore{}, err: errors.New("price unavailable")}
 	p := &Proxy{metricSink: spy, store: prices}
 	cs := planningCandidates(routing.CostFirst)
+	for i := range cs {
+		cs[i].requestPriceAvailable = false
+	}
 	out := p.planCandidates(planningRequest(), cs)
-	if spy.calls != 3 || prices.calls != 3 {
+	if spy.calls != 3 || prices.calls != 0 {
 		t.Fatalf("calls metrics=%d prices=%d", spy.calls, prices.calls)
 	}
 	for i := range cs {
@@ -227,9 +178,9 @@ func TestPlanCandidatesDuplicateTargetIDUsesOriginalIndex(t *testing.T) {
 	}}
 	p := &Proxy{metricSink: spy}
 	cs := []candidate{
-		{targetID: "same", provider: &model.Provider{ID: "p1"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier},
-		{targetID: "same", provider: &model.Provider{ID: "p2"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier},
-		{targetID: "other", provider: &model.Provider{ID: "p3"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier},
+		{targetID: "same", provider: &model.Provider{ID: "p1"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier, requestPriceAvailable: true, requestPrice: 10},
+		{targetID: "same", provider: &model.Provider{ID: "p2"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier, requestPriceAvailable: true, requestPrice: 1},
+		{targetID: "other", provider: &model.Provider{ID: "p3"}, modelName: "m", tier: 0, strategy: routing.ScoreWithinTier, requestPriceAvailable: true, requestPrice: 2},
 	}
 	out := p.planCandidates(planningRequest(), cs)
 	if out[0].provider.ID != "p2" || out[1].provider.ID != "p3" || out[2].provider.ID != "p1" {

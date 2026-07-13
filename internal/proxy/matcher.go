@@ -62,6 +62,8 @@ type candidate struct {
 	targetFirstBodyByteTimeout time.Duration
 	tier                       int
 	strategy                   routing.Strategy
+	requestPrice               float64
+	requestPriceAvailable      bool
 }
 
 // selectCandidates picks the enabled model rule whose Name equals req.Model

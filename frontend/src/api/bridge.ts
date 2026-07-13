@@ -1,6 +1,8 @@
 import * as wails from '../../wailsjs/go/api/App'
 import type { model, api as apiModels } from '../../wailsjs/go/models'
 
+export type ExportFormat = Parameters<typeof wails.ExportData>[0]
+
 // Temporary frontend-only type for the Phase 2 app visibility API.
 // The backend binding already exists and returns the string 'foreground' or
 // 'background'; the frontend exposes it as a typed union for clarity.
@@ -93,9 +95,9 @@ export const api = {
     ensureWails()
     return wails.ClearProviderModels(providerId) as Promise<void>
   },
-  updateModelName: (providerId: string, oldName: string, newName: string): Promise<void> => {
+  updateProviderModel: (input: model.ProviderModelUpdate): Promise<void> => {
     ensureWails()
-    return wails.UpdateModelName(providerId, oldName, newName) as Promise<void>
+    return wails.UpdateProviderModel(input) as Promise<void>
   },
   getProviderKey: (providerId: string): Promise<string> => {
     ensureWails()
@@ -178,20 +180,6 @@ export const api = {
     return wails.DeleteAPIKey(id) as Promise<void>
   },
 
-  // Prices
-  listPrices: (): Promise<model.Price[]> => {
-    ensureWails()
-    return wails.ListPrices() as Promise<model.Price[]>
-  },
-  upsertPrice: (input: model.PriceInput): Promise<model.Price> => {
-    ensureWails()
-    return wails.UpsertPrice(input) as Promise<model.Price>
-  },
-  deletePrice: (id: string): Promise<void> => {
-    ensureWails()
-    return wails.DeletePrice(id) as Promise<void>
-  },
-
   // Usage & Logs
   usageStats: (query?: model.LogQuery): Promise<model.UsageStats> => {
     ensureWails()
@@ -263,9 +251,9 @@ export const api = {
   },
 
   // Export
-  exportData: (format: string): Promise<apiModels.ExportResult> => {
+  exportData: (format: ExportFormat): Promise<apiModels.ExportResult> => {
     ensureWails()
-    return (wails.ExportData as (f: string) => Promise<apiModels.ExportResult>)(format)
+    return wails.ExportData(format)
   },
   openStorageFolder: (): Promise<void> => {
     ensureWails()

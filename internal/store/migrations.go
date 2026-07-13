@@ -426,35 +426,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_prices_key ON prices(COALESCE(provider_id,
 		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "model_rules", "strategy") },
 		SQL:             `ALTER TABLE model_rules ADD COLUMN strategy TEXT NOT NULL DEFAULT 'priority_first';`,
 	},
-}
-
-// backfillCost recomputes cost for historical request_logs rows that have
-// cost=0 but did consume tokens. Runs once after migration 006 on startup.
-// The actual per-model pricing lives in store.go's costTable; this function
-// pulls a copy via estimateCost (closure over the package-level map).
-func (s *Store) backfillCost() {
-	res, err := s.db.Exec(`
-		UPDATE request_logs
-		SET cost = (
-			(input_tokens + output_tokens) * 2.0 / 1000000.0
-		)
-		WHERE cost = 0
-		  AND (input_tokens > 0 OR output_tokens > 0)
-		  AND model NOT IN (
-		      'gpt-4o','gpt-4o-mini','gpt-4','gpt-4-turbo','gpt-3.5-turbo',
-		      'claude-3.5-sonnet','claude-3-opus','claude-3-haiku',
-		      'deepseek-chat','deepseek-reasoner','moonshot-v1','glm-4'
-		  )
-	`)
-	if err != nil {
-		// Non-fatal: best-effort backfill.
-		slog.Error("store: backfillCost failed", "err", err)
-		return
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		slog.Info("store: backfillCost complete", "rows", n)
-	}
+	{
+		ID:              "021_model_request_price",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "models", "request_price") },
+		SQL:             `ALTER TABLE models ADD COLUMN request_price REAL NOT NULL DEFAULT 0.1 CHECK(request_price >= 0 AND request_price = request_price AND request_price < 1.7976931348623157e308);`,
+	},
+	{ID: "022_drop_prices", SQL: `DROP TABLE IF EXISTS prices;`},
+	{
+		ID: "023_model_request_price_constraints",
+		SQL: `
+CREATE TRIGGER IF NOT EXISTS models_request_price_insert_valid
+BEFORE INSERT ON models
+WHEN NEW.request_price IS NULL OR NEW.request_price < 0 OR NEW.request_price != NEW.request_price OR NEW.request_price >= 1.7976931348623157e308
+BEGIN SELECT RAISE(ABORT, 'models.request_price must be finite and non-negative'); END;
+CREATE TRIGGER IF NOT EXISTS models_request_price_update_valid
+BEFORE UPDATE OF request_price ON models
+WHEN NEW.request_price IS NULL OR NEW.request_price < 0 OR NEW.request_price != NEW.request_price OR NEW.request_price >= 1.7976931348623157e308
+BEGIN SELECT RAISE(ABORT, 'models.request_price must be finite and non-negative'); END;
+`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

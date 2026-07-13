@@ -140,6 +140,7 @@ type storeProxy interface {
 	InsertRequestLogsBatch(logs []model.RequestLog) error
 	UpdateRequestLogsBatch(logs []model.RequestLog) error
 	ListModels(providerID string) ([]model.Model, error)
+	GetModel(providerID, name string) (*model.Model, error)
 	GetSettings() (*model.Settings, error)
 	Dashboard() (*model.DashboardData, error)
 	UpdateProviderHealth(id string, status model.ProviderStatus, errorMessage string) error
@@ -613,6 +614,17 @@ func (p *Proxy) writeError(w http.ResponseWriter, status int, typ, message strin
 // completion-time fields. It treats a full log-writer queue as a soft drop
 // and does not fail the request.
 func (p *Proxy) logRequestEntry(log *model.RequestLog) {
+	if log.Cost == 0 {
+		log.CostAvailable = true
+		for _, attempt := range log.Chain {
+			if attempt.UpstreamStarted {
+				log.Cost += attempt.RequestCost
+				if !attempt.RequestCostAvailable {
+					log.CostAvailable = false
+				}
+			}
+		}
+	}
 	if log.Timestamp == 0 {
 		log.Timestamp = time.Now().UnixMilli()
 	}
@@ -623,6 +635,12 @@ func (p *Proxy) logRequestEntry(log *model.RequestLog) {
 	if !p.writer.EnqueueUpdate(*log) {
 		slog.Warn("proxy: request log update dropped: writer queue full", "id", log.ID)
 	}
+}
+
+func markTransportAttempt(e *model.RequestLogChainEntry, c candidate) {
+	e.UpstreamStarted = true
+	e.RequestCost = c.requestPrice
+	e.RequestCostAvailable = c.requestPriceAvailable
 }
 
 // insertPendingLog enqueues a pending log entry (status_code=0) at request
@@ -659,6 +677,15 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	candidates, err := selectCandidates(req, rules, breakers, p.store.GetProvider)
 	if err != nil {
 		return nil, err
+	}
+	// Price snapshots are needed by execution and request-log accounting for
+	// every strategy, including priority_first. Only planCandidates may skip
+	// scoring/reordering for the priority fast path.
+	for i := range candidates {
+		if m, e := p.store.GetModel(candidates[i].provider.ID, candidates[i].modelName); e == nil && m != nil {
+			candidates[i].requestPrice = m.RequestPrice
+			candidates[i].requestPriceAvailable = true
+		}
 	}
 	return p.planCandidates(req, candidates), nil
 }
@@ -1130,15 +1157,18 @@ outer:
 				logEntry.RouteLabel = c.ruleLabel
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-					AttemptOrder: attemptOrder,
-					ProviderID:   c.provider.ID,
-					ProviderName: c.provider.Name,
-					ModelName:    c.modelName,
-					TargetID:     c.targetID,
-					Status:       "success",
-					StatusCode:   effectiveStatus,
-					Error:        "",
-					LatencyMs:    latencyMs,
+					UpstreamStarted:      true,
+					RequestCost:          c.requestPrice,
+					RequestCostAvailable: c.requestPriceAvailable,
+					AttemptOrder:         attemptOrder,
+					ProviderID:           c.provider.ID,
+					ProviderName:         c.provider.Name,
+					ModelName:            c.modelName,
+					TargetID:             c.targetID,
+					Status:               "success",
+					StatusCode:           effectiveStatus,
+					Error:                "",
+					LatencyMs:            latencyMs,
 				})
 				p.breakerFor(c.provider.ID).Record(true)
 				if c.targetID != "" {
@@ -1190,15 +1220,18 @@ outer:
 				logEntry.RouteLabel = c.ruleLabel
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-					AttemptOrder: attemptOrder,
-					ProviderID:   c.provider.ID,
-					ProviderName: c.provider.Name,
-					ModelName:    c.modelName,
-					TargetID:     c.targetID,
-					Status:       "client_abort",
-					StatusCode:   effectiveStatus,
-					Error:        lastErr.Error(),
-					LatencyMs:    latencyMs,
+					UpstreamStarted:      true,
+					RequestCost:          c.requestPrice,
+					RequestCostAvailable: c.requestPriceAvailable,
+					AttemptOrder:         attemptOrder,
+					ProviderID:           c.provider.ID,
+					ProviderName:         c.provider.Name,
+					ModelName:            c.modelName,
+					TargetID:             c.targetID,
+					Status:               "client_abort",
+					StatusCode:           effectiveStatus,
+					Error:                lastErr.Error(),
+					LatencyMs:            latencyMs,
 				})
 				// No breaker record: client errors aren't provider failures.
 				slog.Warn("proxy: client abort",
@@ -1218,15 +1251,18 @@ outer:
 				logEntry.RouteLabel = c.ruleLabel
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-					AttemptOrder: attemptOrder,
-					ProviderID:   c.provider.ID,
-					ProviderName: c.provider.Name,
-					ModelName:    c.modelName,
-					TargetID:     c.targetID,
-					Status:       "non_retryable",
-					StatusCode:   effectiveStatus,
-					Error:        lastErr.Error(),
-					LatencyMs:    latencyMs,
+					UpstreamStarted:      true,
+					RequestCost:          c.requestPrice,
+					RequestCostAvailable: c.requestPriceAvailable,
+					AttemptOrder:         attemptOrder,
+					ProviderID:           c.provider.ID,
+					ProviderName:         c.provider.Name,
+					ModelName:            c.modelName,
+					TargetID:             c.targetID,
+					Status:               "non_retryable",
+					StatusCode:           effectiveStatus,
+					Error:                lastErr.Error(),
+					LatencyMs:            latencyMs,
 				})
 				// Record breaker once on the (final) provider-side non-retryable.
 				slog.Warn("proxy: non-retryable upstream failure",
@@ -1269,15 +1305,18 @@ outer:
 				}
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-					AttemptOrder: attemptOrder,
-					ProviderID:   c.provider.ID,
-					ProviderName: c.provider.Name,
-					ModelName:    c.modelName,
-					TargetID:     c.targetID,
-					Status:       "retryable",
-					StatusCode:   effectiveStatus,
-					Error:        chainErr.Error(),
-					LatencyMs:    latencyMs,
+					UpstreamStarted:      true,
+					RequestCost:          c.requestPrice,
+					RequestCostAvailable: c.requestPriceAvailable,
+					AttemptOrder:         attemptOrder,
+					ProviderID:           c.provider.ID,
+					ProviderName:         c.provider.Name,
+					ModelName:            c.modelName,
+					TargetID:             c.targetID,
+					Status:               "retryable",
+					StatusCode:           effectiveStatus,
+					Error:                chainErr.Error(),
+					LatencyMs:            latencyMs,
 				})
 				continue
 			}
@@ -1861,15 +1900,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		case CategoryClientAbort:
 			attemptOrder++
 			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-				AttemptOrder: attemptOrder,
-				ProviderID:   c.provider.ID,
-				ProviderName: c.provider.Name,
-				ModelName:    c.modelName,
-				TargetID:     c.targetID,
-				Status:       "client_abort",
-				StatusCode:   statusClientClosed,
-				Error:        "client disconnected: " + doErr.Error(),
-				LatencyMs:    latencyMs,
+				UpstreamStarted:      true,
+				RequestCost:          c.requestPrice,
+				RequestCostAvailable: c.requestPriceAvailable,
+				AttemptOrder:         attemptOrder,
+				ProviderID:           c.provider.ID,
+				ProviderName:         c.provider.Name,
+				ModelName:            c.modelName,
+				TargetID:             c.targetID,
+				Status:               "client_abort",
+				StatusCode:           statusClientClosed,
+				Error:                "client disconnected: " + doErr.Error(),
+				LatencyMs:            latencyMs,
 			})
 			return streamAttemptResult{
 				Status:     "client_abort",
@@ -1881,15 +1923,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			p.writeError(w, http.StatusBadGateway, "upstream_error", doErr.Error())
 			attemptOrder++
 			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-				AttemptOrder: attemptOrder,
-				ProviderID:   c.provider.ID,
-				ProviderName: c.provider.Name,
-				ModelName:    c.modelName,
-				TargetID:     c.targetID,
-				Status:       "non_retryable",
-				StatusCode:   http.StatusBadGateway,
-				Error:        doErr.Error(),
-				LatencyMs:    latencyMs,
+				UpstreamStarted:      true,
+				RequestCost:          c.requestPrice,
+				RequestCostAvailable: c.requestPriceAvailable,
+				AttemptOrder:         attemptOrder,
+				ProviderID:           c.provider.ID,
+				ProviderName:         c.provider.Name,
+				ModelName:            c.modelName,
+				TargetID:             c.targetID,
+				Status:               "non_retryable",
+				StatusCode:           http.StatusBadGateway,
+				Error:                doErr.Error(),
+				LatencyMs:            latencyMs,
 			})
 			return streamAttemptResult{
 				Status:     "non_retryable",
@@ -1902,15 +1947,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		default:
 			attemptOrder++
 			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-				AttemptOrder: attemptOrder,
-				ProviderID:   c.provider.ID,
-				ProviderName: c.provider.Name,
-				ModelName:    c.modelName,
-				TargetID:     c.targetID,
-				Status:       "retryable",
-				StatusCode:   0,
-				Error:        doErr.Error(),
-				LatencyMs:    latencyMs,
+				UpstreamStarted:      true,
+				RequestCost:          c.requestPrice,
+				RequestCostAvailable: c.requestPriceAvailable,
+				AttemptOrder:         attemptOrder,
+				ProviderID:           c.provider.ID,
+				ProviderName:         c.provider.Name,
+				ModelName:            c.modelName,
+				TargetID:             c.targetID,
+				Status:               "retryable",
+				StatusCode:           0,
+				Error:                doErr.Error(),
+				LatencyMs:            latencyMs,
 			})
 			return streamAttemptResult{
 				Status:    "retryable",
@@ -1946,15 +1994,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			latencyMs := int(time.Since(attemptStart).Milliseconds())
 			attemptOrder++
 			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-				AttemptOrder: attemptOrder,
-				ProviderID:   c.provider.ID,
-				ProviderName: c.provider.Name,
-				ModelName:    c.modelName,
-				TargetID:     c.targetID,
-				Status:       "retryable",
-				StatusCode:   upstreamStatus,
-				Error:        readErr.Error(),
-				LatencyMs:    latencyMs,
+				UpstreamStarted:      true,
+				RequestCost:          c.requestPrice,
+				RequestCostAvailable: c.requestPriceAvailable,
+				AttemptOrder:         attemptOrder,
+				ProviderID:           c.provider.ID,
+				ProviderName:         c.provider.Name,
+				ModelName:            c.modelName,
+				TargetID:             c.targetID,
+				Status:               "retryable",
+				StatusCode:           upstreamStatus,
+				Error:                readErr.Error(),
+				LatencyMs:            latencyMs,
 			})
 			slog.Debug("proxy: stream non-2xx body read error",
 				"provider", c.provider.Name,
@@ -1995,15 +2046,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		// CategoryRetryable: 5xx (or 408/429 etc.). Record chain
 		// entry and return so the caller can retry or fail over.
 		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-			AttemptOrder: attemptOrder,
-			ProviderID:   c.provider.ID,
-			ProviderName: c.provider.Name,
-			ModelName:    c.modelName,
-			TargetID:     c.targetID,
-			Status:       "retryable",
-			StatusCode:   upstreamStatus,
-			Error:        errStr,
-			LatencyMs:    latencyMs,
+			UpstreamStarted:      true,
+			RequestCost:          c.requestPrice,
+			RequestCostAvailable: c.requestPriceAvailable,
+			AttemptOrder:         attemptOrder,
+			ProviderID:           c.provider.ID,
+			ProviderName:         c.provider.Name,
+			ModelName:            c.modelName,
+			TargetID:             c.targetID,
+			Status:               "retryable",
+			StatusCode:           upstreamStatus,
+			Error:                errStr,
+			LatencyMs:            latencyMs,
 		})
 		slog.Debug("proxy: stream upstream non-2xx",
 			"provider", c.provider.Name,
@@ -2051,7 +2105,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		if category == CategoryNonRetryable {
 			status = model.AttemptOutcomeNonRetryable
 		}
-		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: string(status), Error: initialErr.Error(), LatencyMs: latencyMs})
+		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: string(status), Error: initialErr.Error(), LatencyMs: latencyMs, UpstreamStarted: true, RequestCost: c.requestPrice, RequestCostAvailable: c.requestPriceAvailable})
 		return streamAttemptResult{Status: status, Error: initialErr.Error(), LatencyMs: latencyMs, StatusCode: 0}, attemptOrder
 	}
 
@@ -2130,16 +2184,20 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	logEntry.StatusCode = upstreamStatus
 
 	chainEntry := model.RequestLogChainEntry{
-		AttemptOrder: attemptOrder,
-		ProviderID:   c.provider.ID,
-		ProviderName: c.provider.Name,
-		ModelName:    c.modelName,
-		TargetID:     c.targetID,
-		Status:       "success",
-		StatusCode:   upstreamStatus,
-		LatencyMs:    attemptLatencyMs,
-		FirstTokenMs: int(firstByteTime.Milliseconds()),
+		UpstreamStarted:      true,
+		RequestCost:          c.requestPrice,
+		RequestCostAvailable: c.requestPriceAvailable,
+		AttemptOrder:         attemptOrder,
+		ProviderID:           c.provider.ID,
+		ProviderName:         c.provider.Name,
+		ModelName:            c.modelName,
+		TargetID:             c.targetID,
+		Status:               "success",
+		StatusCode:           upstreamStatus,
+		LatencyMs:            attemptLatencyMs,
+		FirstTokenMs:         int(firstByteTime.Milliseconds()),
 	}
+	markTransportAttempt(&chainEntry, c)
 
 	switch {
 	case writeErr != nil && isClientDisconnect(writeErr):
@@ -2301,15 +2359,18 @@ func (p *Proxy) writeStreamError(w http.ResponseWriter, upstreamStatus int, upst
 	logEntry.RouteID = c.ruleID
 	logEntry.RouteLabel = c.ruleLabel
 	logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
-		AttemptOrder: attemptOrder,
-		ProviderID:   c.provider.ID,
-		ProviderName: c.provider.Name,
-		ModelName:    c.modelName,
-		TargetID:     c.targetID,
-		Status:       status,
-		StatusCode:   upstreamStatus,
-		Error:        errStr,
-		LatencyMs:    latencyMs,
+		UpstreamStarted:      true,
+		RequestCost:          c.requestPrice,
+		RequestCostAvailable: c.requestPriceAvailable,
+		AttemptOrder:         attemptOrder,
+		ProviderID:           c.provider.ID,
+		ProviderName:         c.provider.Name,
+		ModelName:            c.modelName,
+		TargetID:             c.targetID,
+		Status:               status,
+		StatusCode:           upstreamStatus,
+		Error:                errStr,
+		LatencyMs:            latencyMs,
 	})
 }
 

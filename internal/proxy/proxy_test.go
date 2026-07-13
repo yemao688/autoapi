@@ -93,6 +93,9 @@ func (m *mockStore) UpdateRequestLogsBatch(logs []model.RequestLog) error {
 }
 
 func (m *mockStore) ListModels(providerID string) ([]model.Model, error) { return nil, nil }
+func (m *mockStore) GetModel(providerID, name string) (*model.Model, error) {
+	return &model.Model{ProviderID: providerID, Name: name, RequestPrice: 0.1}, nil
+}
 
 func (m *mockStore) GetSettings() (*model.Settings, error) {
 	if m.settings != nil {

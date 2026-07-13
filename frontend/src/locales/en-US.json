@@ -10,8 +10,7 @@
     "modelRules": "Model rules",
     "apiKeys": "API Keys",
     "usage": "Usage",
-    "settings": "Settings",
-    "pricing": "Pricing"
+    "settings": "Settings"
   },
   "settings": {
     "title": "Settings",
@@ -185,7 +184,24 @@
       "loading": "Loading diagnostics…",
       "unavailable": "Diagnostics unavailable",
       "noSamples": "No runtime samples",
-      "priceUnknown": "Price unknown"
+      "priceUnknown": "Price unavailable",
+      "costUnavailable": "Cost unavailable"
+    },
+    "shadow": {
+      "title": "Shadow comparison",
+      "readonly": "(comparison only, read-only)",
+      "changed": "Order changes",
+      "loading": "Loading comparison…",
+      "error": "Comparison unavailable",
+      "empty": "No comparison available",
+      "strategy": "Strategy",
+      "original": "Original order",
+      "planned": "Planned order",
+      "candidates": "Candidates",
+      "rejected": "Unavailable",
+      "assumptions": "Assumptions",
+      "available": "available",
+      "unavailable": "unavailable"
     },
     "stats": {
       "todaySuccessRate": "Today's success rate",
@@ -326,8 +342,15 @@
       "modelsAdded": "Added {count} models",
       "modelAdded": "Added model {name}",
       "modelDeleted": "Deleted model {name}",
-      "modelRenamed": "Renamed to {name}",
-      "editModel": "Rename",
+      "modelUpdated": "Model updated: {name}",
+      "editModel": "Edit model",
+      "editModelHelp": "Set the client-facing name and the USD price for one upstream call.",
+      "modelName": "Model name",
+      "modelNameRequired": "Enter a model name",
+      "price": "Per-call price",
+      "perCall": "per call",
+      "call": "call",
+      "invalidModelPrice": "Enter a finite, non-negative price",
       "deleteModel": "Delete",
       "deleteModelConfirm": "Delete model {name}?",
       "noModelsFetched": "No models found",
@@ -558,7 +581,6 @@
       "replayTarget": "Target",
       "replayScores": "Scores (0–100)",
       "replayEstimatedCost": "Estimated cost",
-      "replayPrice": "Price",
       "replayAvailability": "Availability",
       "replayMissingTarget": "Target is missing",
       "replayMissingProvider": "Provider is missing",
@@ -567,7 +589,6 @@
       "replayNoRule": "No rule was recorded for this request.",
       "replayNoSamples": "No runtime score is available for this attempt.",
       "replayUnknown": "Unknown",
-      "replayPriceUnknown": "Price unavailable",
       "chain": "Chain",
       "attempt": "Attempt {n}",
       "triedTargets": "Tried {n} targets",
@@ -671,6 +692,7 @@
     "imported": "Imported {count} models",
     "importFailed": "Import failed",
     "exported": "Models exported",
+    "exportFailed": "Export failed",
     "invalidJson": "JSON must be an array of models",
     "invalidItem": "Model object is missing the name field",
     "loadFailed": "Load failed",
@@ -681,9 +703,7 @@
     "apiKeyDeleted": "Token deleted",
     "copiedToClipboard": "Copied to clipboard",
     "copyFailed": "Copy failed",
-    "logsPurged": "Purged {count} logs",
-    "priceSaved": "Price saved",
-    "priceDeleted": "Price deleted"
+    "logsPurged": "Purged {count} logs"
   },
   "confirm": {
     "defaultTitle": "Confirm",
@@ -701,9 +721,7 @@
     "deleteApiKeyMessage": "Delete token \"{name}\"? This cannot be undone.",
     "purgeLogsTitle": "Purge old logs",
     "purgeLogsMessage": "Delete request logs older than 90 days? This cannot be undone.",
-    "purgeConfirm": "Purge",
-    "deletePriceTitle": "Delete price",
-    "deletePriceMessage": "Delete price record for \"{model}\"? This cannot be undone."
+    "purgeConfirm": "Purge"
   },
   "theme": {
     "light": "Light",
@@ -719,57 +737,5 @@
     "hoursAgo": "{n} hours ago",
     "daysAgo": "{n} days ago",
     "monthsAgo": "{n} months ago"
-  },
-  "pricing": {
-    "title": "Pricing",
-    "subtitle": "{count} price records",
-    "add": "Add price",
-    "loading": "Loading…",
-    "loadFailed": "Load failed: {error}",
-    "searchPlaceholder": "Search by model, provider or endpoint",
-    "empty": "No price records yet",
-    "globalPrice": "Global (all providers)",
-    "columns": {
-      "provider": "Provider",
-      "upstreamModel": "Upstream model",
-      "endpoint": "Endpoint",
-      "billingMode": "Billing",
-      "inputPrice": "Input price",
-      "outputPrice": "Output price",
-      "effective": "Effective",
-      "expires": "Expires",
-      "actions": "Actions",
-      "status": "Status"
-    },
-    "modal": {
-      "add": "Add price",
-      "edit": "Edit price",
-      "provider": "Provider",
-      "upstreamModel": "Upstream model",
-      "upstreamModelPlaceholder": "e.g. gpt-4o",
-      "endpoint": "Endpoint kind",
-      "endpointPlaceholder": "e.g. chat, embedding",
-      "billingMode": "Billing mode",
-      "inputPrice": "Input ($/M tokens)",
-      "outputPrice": "Output ($/M tokens)",
-      "effective": "Effective at",
-      "expires": "Expires at",
-      "source": "Source",
-      "sourcePlaceholder": "e.g. official, manual",
-      "version": "Version",
-      "versionPlaceholder": "e.g. 2025-07"
-    },
-    "billingModes": {
-      "token": "Token",
-      "request": "Request"
-    },
-    "emptyValue": "—",
-    "pricePerMillion": "${value}/M",
-    "invalidDate": "Enter a valid local date and time",
-    "status": {
-      "active": "Active",
-      "future": "Not effective",
-      "expired": "Expired"
-    }
   }
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func target(id string, tier int) TargetInput {
-	return TargetInput{Target: model.ModelRuleTarget{ID: id, Tier: tier}, Metrics: metrics.Snapshot{Requests: 20, Attempts: 20, Successes: 20}, Cost: model.EffectiveCost{Cost: .01, Available: true, Currency: "USD", Confidence: model.CostConfidenceExact, PriceVersion: "v1"}}
+	return TargetInput{Target: model.ModelRuleTarget{ID: id, Tier: tier}, Metrics: metrics.Snapshot{Requests: 20, Attempts: 20, Successes: 20}, Cost: model.EffectiveCost{Cost: .01, Available: true, Currency: "USD"}}
 }
 
 func TestScoreTargetHealthCapacityAndFailureClasses(t *testing.T) {

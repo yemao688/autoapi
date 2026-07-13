@@ -19,7 +19,6 @@ const navItems = computed(() => [
   { to: '/model-rules', labelKey: 'nav.modelRules', icon: 'modelRules', badge: modelRuleCount.value },
   { to: '/api-keys', labelKey: 'nav.apiKeys', icon: 'key', badge: null as number | null },
   { to: '/usage-stats', labelKey: 'nav.usage', icon: 'chart', badge: null as number | null },
-  { to: '/pricing', labelKey: 'nav.pricing', icon: 'dollar', badge: null as number | null },
 ])
 
 function isActive(to: string): boolean {
@@ -65,4 +64,3 @@ usePolling(refresh, 30000)
     </nav>
   </aside>
 </template>
-

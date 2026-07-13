@@ -53,15 +53,25 @@ type Provider struct {
 
 // Model is a model offered by a provider (lookup table, populated from upstream).
 type Model struct {
-	ID            string `json:"id"`
-	ProviderID    string `json:"provider_id"`
-	Name          string `json:"name"`
-	ContextWindow int    `json:"context_window"` // max tokens, 0 if unknown
-	OwnedBy       string `json:"owned_by"`
-	Active        bool   `json:"active"`
-	LatencyMs     int    `json:"latency_ms"`
-	UpdatedAt     int64  `json:"updated_at"`
-	CreatedAt     int64  `json:"created_at"`
+	ID            string  `json:"id"`
+	ProviderID    string  `json:"provider_id"`
+	Name          string  `json:"name"`
+	ContextWindow int     `json:"context_window"` // max tokens, 0 if unknown
+	OwnedBy       string  `json:"owned_by"`
+	Active        bool    `json:"active"`
+	RequestPrice  float64 `json:"request_price"` // USD per upstream request
+	LatencyMs     int     `json:"latency_ms"`
+	UpdatedAt     int64   `json:"updated_at"`
+	CreatedAt     int64   `json:"created_at"`
+}
+
+// ProviderModelUpdate atomically changes a provider model's public name and
+// per-call price. All model-rule target references are changed with it.
+type ProviderModelUpdate struct {
+	ProviderID   string  `json:"provider_id"`
+	OldName      string  `json:"old_name"`
+	Name         string  `json:"name"`
+	RequestPrice float64 `json:"request_price"`
 }
 
 // ModelTestResult is returned by the per-model latency test.
@@ -176,6 +186,7 @@ type RequestLog struct {
 	CacheCreation int64   `json:"cache_creation"` // prompt-cache creation tokens; 0 until upstream support lands
 	CacheHit      int64   `json:"cache_hit"`      // prompt-cache hit tokens; 0 until upstream support lands
 	Cost          float64 `json:"cost"`           // estimated USD
+	CostAvailable bool    `json:"cost_available"` // true when every charged attempt has a price snapshot
 	LatencyMs     int     `json:"latency_ms"`
 	FirstTokenMs  int     `json:"first_token_ms"` // TTFT for streaming; 0 for non-streaming
 	IsStream      bool    `json:"is_stream"`      // true if the request was streaming
@@ -226,6 +237,11 @@ type RequestLogChainEntry struct {
 	Error        string `json:"error"`
 	LatencyMs    int    `json:"latency_ms"`
 	FirstTokenMs int    `json:"first_token_ms"` // TTFT for this chain entry (streaming); 0 for non-streaming or failed attempts
+	// UpstreamStarted is true only after an upstream transport attempt was made.
+	// RequestCost is the immutable per-call price snapshot for that attempt.
+	UpstreamStarted      bool    `json:"upstream_started"`
+	RequestCost          float64 `json:"request_cost"`
+	RequestCostAvailable bool    `json:"request_cost_available"`
 }
 
 // AttemptOutcome is the categorical completion state of a single attempt.
