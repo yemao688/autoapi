@@ -20,6 +20,7 @@ import (
 
 	"autoapi/internal/metrics"
 	"autoapi/internal/model"
+	"autoapi/internal/routing"
 	"autoapi/internal/store"
 )
 
@@ -3683,6 +3684,40 @@ func TestFailover_AllCandidatesTruncated(t *testing.T) {
 	}
 }
 
+func waitForLastLog(t *testing.T, store *mockStore) model.RequestLog {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if log, ok := store.LastLog(); ok && log.StatusCode != 0 {
+			return log
+		}
+		if time.Now().After(deadline) {
+			log, _ := store.LastLog()
+			t.Fatalf("timed out waiting for log entry; status=%d err=%q", log.StatusCode, log.Error)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func assertErrorEnvelope(t *testing.T, body []byte, wantType, wantMessage string) {
+	t.Helper()
+	var envelope struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("expected JSON error envelope, got %q: %v", string(body), err)
+	}
+	if envelope.Error.Type != wantType {
+		t.Fatalf("error.type = %q, want %q", envelope.Error.Type, wantType)
+	}
+	if envelope.Error.Message != wantMessage {
+		t.Fatalf("error.message = %q, want %q", envelope.Error.Message, wantMessage)
+	}
+}
+
 func waitForLog(t *testing.T, store *mockStore) model.RequestLog {
 	t.Helper()
 	deadline, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -3961,5 +3996,236 @@ func TestLogModelPopulatedOnNoMatch(t *testing.T) {
 	}
 	if log.RouteLabel != "nonexistent-model" {
 		t.Fatalf("expected log.RouteLabel = 'nonexistent-model', got %q", log.RouteLabel)
+	}
+}
+
+func TestChar_ChatRouteRegistered(t *testing.T) {
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"missing","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /v1/chat/completions to be registered, got 404: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected request to reach chat handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	before := p.breakerFor("p0").consecutiveFailures
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), `"id":"c1"`) {
+		t.Fatalf("expected forwarded partial SSE data, got %q", string(body))
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	_ = p.Shutdown()
+	if got := p.breakerFor("p0").consecutiveFailures; got <= before {
+		t.Fatalf("expected breaker consecutiveFailures to increase, before=%d after=%d", before, got)
+	}
+	log := waitForLastLog(t, store)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.OutcomeTruncated) {
+		t.Fatalf("expected one truncated chain entry, got %+v", log.Chain)
+	}
+}
+
+func TestChar_ResponsesRouteRegistered(t *testing.T) {
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"missing","input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /v1/responses to be registered, got 404: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected request to reach responses handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		var gotPath string
+		var gotBody []byte
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","output":[]}`))
+		}))
+		defer srv.Close()
+
+		store := &mockStore{
+			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+			rules:     []model.ModelRule{{ID: "r1", Name: "resp-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "upstream-resp", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+		defer p.Shutdown()
+
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"resp-model","input":"hi"}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if gotPath != "/v1/responses" {
+			t.Fatalf("expected upstream /v1/responses, got %q", gotPath)
+		}
+		if string(gotBody) != `{"input":"hi","model":"upstream-resp"}` {
+			t.Fatalf("unexpected upstream body %q", string(gotBody))
+		}
+		if !strings.Contains(rec.Body.String(), `"id":"resp_1"`) {
+			t.Fatalf("expected passthrough response body, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("preflight reject", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called, got %s", r.URL.Path)
+		}))
+		defer srv.Close()
+
+		store := &mockStore{
+			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: false}},
+			rules:     []model.ModelRule{{ID: "r1", Name: "resp-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "upstream-resp", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+		defer p.Shutdown()
+
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"resp-model","input":"hi"}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+		}
+		assertErrorEnvelope(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"resp-model\" are disabled or have open circuits")
+	})
+}
+
+func TestChar_WriteErrorEnvelopeFormats(t *testing.T) {
+	p := New(&mockStore{}, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	cases := []struct {
+		name    string
+		status  int
+		typ     string
+		message string
+	}{
+		{name: "401", status: http.StatusUnauthorized, typ: "invalid_request_error", message: "Invalid API key"},
+		{name: "400", status: http.StatusBadRequest, typ: "invalid_request_error", message: "Failed to read request body"},
+		{name: "422", status: http.StatusUnprocessableEntity, typ: "invalid_request_error", message: "model is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			p.writeError(rec, tc.status, tc.typ, tc.message)
+			if rec.Code != tc.status {
+				t.Fatalf("status=%d want %d", rec.Code, tc.status)
+			}
+			assertErrorEnvelope(t, rec.Body.Bytes(), tc.typ, tc.message)
+		})
+	}
+}
+
+func TestChar_PriorityFirstFailoverPreservesCandidateOrder(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"p0 failed"}`))
+			return
+		}
+		p1Hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "chatcmpl-p1", "model": "m1", "usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1}})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+		},
+		rules:   []model.ModelRule{{ID: "r1", Name: "x", Enabled: true, Strategy: string(routing.PriorityFirst), Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true}, {ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true}}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if p0Hits != 1 || p1Hits != 1 {
+		t.Fatalf("expected one hit per candidate, got p0=%d p1=%d", p0Hits, p1Hits)
+	}
+	log := waitForLastLog(t, store)
+	if len(log.Chain) != 2 {
+		t.Fatalf("expected two chain entries, got %+v", log.Chain)
+	}
+	if log.Chain[0].AttemptOrder != 1 || log.Chain[0].ProviderID != "p0" {
+		t.Fatalf("first attempt reordered: %+v", log.Chain[0])
+	}
+	if log.Chain[1].AttemptOrder != 2 || log.Chain[1].ProviderID != "p1" {
+		t.Fatalf("second attempt reordered: %+v", log.Chain[1])
 	}
 }

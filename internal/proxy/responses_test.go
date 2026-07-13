@@ -69,3 +69,17 @@ func TestRewriteBodyModelPreservesRawValues(t *testing.T) {
 		t.Fatalf("%s: %v", out, err)
 	}
 }
+
+func TestChar_RewriteBodyModelIdentityPreservesBytes(t *testing.T) {
+	body := []byte("{\n  \"z\": 1,\n  \"model\": \"same\",\n  \"a\": {\"nested\": true}\n}")
+	out, err := rewriteBodyModel(body, "same")
+	if err != nil {
+		t.Fatalf("rewriteBodyModel: %v", err)
+	}
+	if string(out) != string(body) {
+		t.Fatalf("body was re-encoded; got %q want %q", string(out), string(body))
+	}
+	if len(out) > 0 && &out[0] != &body[0] {
+		t.Fatalf("expected identical body bytes to be returned without allocation")
+	}
+}
