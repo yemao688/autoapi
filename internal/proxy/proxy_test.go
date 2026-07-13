@@ -3684,21 +3684,6 @@ func TestFailover_AllCandidatesTruncated(t *testing.T) {
 	}
 }
 
-func waitForLastLog(t *testing.T, store *mockStore) model.RequestLog {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if log, ok := store.LastLog(); ok && log.StatusCode != 0 {
-			return log
-		}
-		if time.Now().After(deadline) {
-			log, _ := store.LastLog()
-			t.Fatalf("timed out waiting for log entry; status=%d err=%q", log.StatusCode, log.Error)
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-}
-
 func assertErrorEnvelope(t *testing.T, body []byte, wantType, wantMessage string) {
 	t.Helper()
 	var envelope struct {
@@ -4015,6 +4000,7 @@ func TestChar_ChatRouteRegistered(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected request to reach chat handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
 	}
+	assertErrorEnvelope(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
 }
 
 func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
@@ -4040,31 +4026,32 @@ func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
 	defer p.Shutdown()
 
 	before := p.breakerFor("p0").consecutiveFailures
-	proxySrv := httptest.NewServer(p.router)
-	defer proxySrv.Close()
-
-	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if !strings.Contains(string(body), `"id":"c1"`) {
-		t.Fatalf("expected forwarded partial SSE data, got %q", string(body))
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"id":"c1"`) {
+		t.Fatalf("expected forwarded partial SSE data, got %q", rec.Body.String())
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	deadline, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	for {
+		if got := p.breakerFor("p0").consecutiveFailures; got > before {
+			break
+		}
+		select {
+		case <-deadline.Done():
+			t.Fatalf("timed out waiting for truncated stream handling before shutdown; consecutiveFailures=%d", p.breakerFor("p0").consecutiveFailures)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	_ = p.Shutdown()
 	if got := p.breakerFor("p0").consecutiveFailures; got <= before {
 		t.Fatalf("expected breaker consecutiveFailures to increase, before=%d after=%d", before, got)
 	}
-	log := waitForLastLog(t, store)
+	log := waitForLog(t, store)
 	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.OutcomeTruncated) {
 		t.Fatalf("expected one truncated chain entry, got %+v", log.Chain)
 	}
@@ -4086,6 +4073,7 @@ func TestChar_ResponsesRouteRegistered(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected request to reach responses handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
 	}
+	assertErrorEnvelope(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
 }
 
 func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
@@ -4218,7 +4206,7 @@ func TestChar_PriorityFirstFailoverPreservesCandidateOrder(t *testing.T) {
 	if p0Hits != 1 || p1Hits != 1 {
 		t.Fatalf("expected one hit per candidate, got p0=%d p1=%d", p0Hits, p1Hits)
 	}
-	log := waitForLastLog(t, store)
+	log := waitForLog(t, store)
 	if len(log.Chain) != 2 {
 		t.Fatalf("expected two chain entries, got %+v", log.Chain)
 	}
