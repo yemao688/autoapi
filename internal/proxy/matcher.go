@@ -41,6 +41,7 @@ type InboundRequest struct {
 	TimeHour        int
 	Endpoint        string
 	Stream          bool
+	Protocol        Protocol
 }
 
 // candidate is one possible provider/model the proxy can forward a request to.
@@ -54,6 +55,8 @@ type InboundRequest struct {
 type candidate struct {
 	provider                   *model.Provider
 	modelName                  string
+	protocol                   Protocol
+	upstreamPath               string
 	ruleID                     string
 	ruleLabel                  string
 	targetID                   string
@@ -120,6 +123,8 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		out = append(out, candidate{
 			provider:                   p,
 			modelName:                  modelNameForTarget(t.ModelName, req.Model),
+			protocol:                   req.Protocol,
+			upstreamPath:               req.Endpoint,
 			ruleID:                     rule.ID,
 			ruleLabel:                  rule.Name,
 			targetID:                   t.ID,

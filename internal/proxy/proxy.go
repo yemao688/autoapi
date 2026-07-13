@@ -775,6 +775,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// outside the candidate loop so the value carries over to the first
 	// attempt on a new target after a failed one.
 	retryAfter := time.Duration(0)
+	adapter := nativeAdapter{}
 
 	// outer is the label on the candidate loop. Used by the global attempt
 	// cap (maxTotalAttempts) to break out of BOTH the candidate and retry
@@ -820,7 +821,7 @@ outer:
 			continue
 		}
 
-		rewrittenBody, err := rewriteBodyModel(body, c.modelName)
+		prep, err := adapter.PrepareAttempt(body, c)
 		if err != nil {
 			lastErr = fmt.Errorf("rewrite body for %s: %w", c.provider.Name, err)
 			slog.Debug("proxy: candidate body rewrite failed", "provider", c.provider.Name, "err", lastErr)
@@ -839,7 +840,8 @@ outer:
 			continue
 		}
 
-		upstreamURL, err := url.Parse(store.JoinProviderURL(c.provider.BaseURL, r.URL.Path))
+		rewrittenBody := prep.Body
+		upstreamURL, err := url.Parse(store.JoinProviderURL(c.provider.BaseURL, prep.Path))
 		if err != nil {
 			lastErr = fmt.Errorf("invalid base URL for %s: %w", c.provider.Name, err)
 			slog.Debug("proxy: candidate URL invalid", "provider", c.provider.Name, "err", lastErr)
@@ -1065,6 +1067,12 @@ outer:
 				req.Header.Set("X-Autoapi-Route", c.ruleID)
 				if req.Header.Get("Content-Type") == "" {
 					req.Header.Set("Content-Type", "application/json")
+				}
+				for name, values := range prep.ExtraHeaders {
+					req.Header.Del(name)
+					for _, value := range values {
+						req.Header.Add(name, value)
+					}
 				}
 			}
 
@@ -1435,6 +1443,7 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	// a failed attempt; the next backoff will honor it instead of the
 	// computed exponential backoff. Reset after consumption.
 	retryAfter := time.Duration(0)
+	adapter := nativeAdapter{}
 
 	// outer is the label on the candidate loop. The global attempt cap
 	// uses a labeled break to exit BOTH loops at once. Plain `break` in
@@ -1478,7 +1487,7 @@ outer:
 			continue
 		}
 
-		rewrittenBody, err := rewriteBodyModel(body, c.modelName)
+		prep, err := adapter.PrepareAttempt(body, c)
 		if err != nil {
 			slog.Debug("proxy: stream candidate body rewrite failed", "provider", c.provider.Name, "err", err)
 			attemptOrder++
@@ -1496,7 +1505,8 @@ outer:
 			continue
 		}
 
-		upstreamURL, err := url.Parse(store.JoinProviderURL(c.provider.BaseURL, r.URL.Path))
+		rewrittenBody := prep.Body
+		upstreamURL, err := url.Parse(store.JoinProviderURL(c.provider.BaseURL, prep.Path))
 		if err != nil {
 			lastErr = fmt.Errorf("invalid base URL for %s: %w", c.provider.Name, err)
 			slog.Debug("proxy: stream candidate URL invalid", "provider", c.provider.Name, "err", err)
@@ -1664,7 +1674,7 @@ outer:
 				break
 			}
 
-			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, attemptOrder, inputEstimate, logEntry)
+			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, prep.ExtraHeaders, attemptOrder, inputEstimate, logEntry)
 			attemptOrder = newOrder
 
 			switch result.Status {
@@ -1800,7 +1810,7 @@ outer:
 //
 // Resource safety: resp.Body.Close() is deferred immediately after a
 // successful Do, so every code path releases the upstream connection.
-func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
+func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, extraHeaders http.Header, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
 	order = attemptOrder
 	emitted := false
 	defer func() {
@@ -1864,6 +1874,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	attemptReq.Header.Del("Transfer-Encoding")
 	if attemptReq.Header.Get("Content-Type") == "" {
 		attemptReq.Header.Set("Content-Type", "application/json")
+	}
+	for name, values := range extraHeaders {
+		attemptReq.Header.Del(name)
+		for _, value := range values {
+			attemptReq.Header.Add(name, value)
+		}
 	}
 	attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 

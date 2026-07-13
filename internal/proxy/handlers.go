@@ -98,7 +98,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = respReq.Model, respReq.Model, respReq.Stream
-	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream}
+	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream, Protocol: ProtocolOpenAIResponses}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
@@ -231,6 +231,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		TimeHour:        time.Now().Hour(),
 		Endpoint:        r.URL.Path,
 		Stream:          chatReq.Stream,
+		Protocol:        ProtocolOpenAIChat,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 
