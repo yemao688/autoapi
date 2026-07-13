@@ -28,6 +28,94 @@ const maxBodySize = 10 << 20        // 10 MiB — embeddings and other small end
 const maxChatBodySize = 50 << 20    // 50 MiB — chat completions (vision/multimodal with base64 images)
 const maxGenericBodySize = 50 << 20 // 50 MiB — generic OpenAI (audio transcription, file uploads, images)
 
+// responsesRequest is deliberately kept as raw JSON. Responses is a native
+// pass-through endpoint; the proxy must not translate it to Chat Completions.
+type responsesRequest struct {
+	Model  string `json:"model"`
+	Stream bool   `json:"stream"`
+}
+
+func validateResponsesRequest(body []byte) (responsesRequest, error) {
+	var req responsesRequest
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return req, err
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return req, err
+	}
+	if req.Model == "" {
+		return req, errors.New("model is required")
+	}
+	for field := range fields {
+		switch field {
+		case "previous_response_id", "conversation":
+			return req, errors.New("stateful Responses fields are not supported: " + field)
+		case "background":
+			var v bool
+			if json.Unmarshal(fields[field], &v) == nil && v {
+				return req, errors.New("background Responses execution is not supported")
+			}
+		case "store":
+			var v bool
+			if json.Unmarshal(fields[field], &v) == nil && v {
+				return req, errors.New("store=true is not supported with failover")
+			}
+		}
+	}
+	return req, nil
+}
+
+func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	logEntry := &model.RequestLog{Timestamp: start.UnixMilli()}
+	enrichLogFromRequest(r, logEntry)
+	defer p.logRequestEntry(logEntry)
+	defer p.emitRequest(logEntry, r.URL.Path)
+
+	apiKeyID, ok, err := p.authenticate(r)
+	if err != nil || !ok {
+		status := http.StatusUnauthorized
+		if err != nil {
+			status = http.StatusInternalServerError
+		}
+		p.writeError(w, status, "invalid_request_error", "Invalid API key")
+		logEntry.StatusCode, logEntry.APIKeyID, logEntry.Error = status, apiKeyID, "authentication failed"
+		return
+	}
+	logEntry.APIKeyID = apiKeyID
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBodySize))
+	if err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		logEntry.StatusCode, logEntry.Error = http.StatusBadRequest, err.Error()
+		return
+	}
+	_ = r.Body.Close()
+	respReq, err := validateResponsesRequest(body)
+	if err != nil {
+		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
+		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+		return
+	}
+	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = respReq.Model, respReq.Model, respReq.Stream
+	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream}
+	p.insertPendingLog(logEntry)
+	candidates, err := p.resolveCandidates(inbound)
+	if err != nil {
+		errType := "service_unavailable"
+		if errors.Is(err, errNoMatch) {
+			errType = "no_matching_rule"
+		}
+		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
+		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
+		return
+	}
+	// forwardWithFailover preserves the original JSON and uses r.URL.Path,
+	// therefore every upstream attempt is exactly POST /v1/responses.
+	p.forwardWithFailover(w, r, body, candidates, respReq.Stream, 0, logEntry)
+	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
+}
+
 // clientIPFromAddr extracts the host portion of an HTTP RemoteAddr value
 // ("host:port" or, in pathological cases, "host"). It returns "" when
 // RemoteAddr is empty or the host cannot be parsed at all — these cases
@@ -449,11 +537,21 @@ func rewriteBodyModel(body []byte, modelName string) ([]byte, error) {
 	if modelName == "" {
 		return body, nil
 	}
-	var m map[string]interface{}
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return body, nil
 	}
-	m["model"] = modelName
+	if raw, ok := m["model"]; ok {
+		var current string
+		if json.Unmarshal(raw, &current) == nil && current == modelName {
+			return body, nil
+		}
+	}
+	encoded, err := json.Marshal(modelName)
+	if err != nil {
+		return body, err
+	}
+	m["model"] = json.RawMessage(encoded)
 	return json.Marshal(m)
 }
 

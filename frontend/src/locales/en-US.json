@@ -330,6 +330,8 @@
       "keyCopied": "Key copied",
       "loadingKey": "Loading key…",
       "customProvider": "Custom upstream",
+      "responsesApi": "Responses API",
+      "responsesApiHelp": "Enable only when this upstream explicitly supports native Responses.",
       "model": "Available models",
       "availableModels": "Available models",
       "manualAdd": "Add manually",

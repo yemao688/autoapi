@@ -86,9 +86,10 @@ func TestProviderCRUD(t *testing.T) {
 
 	// Create
 	p, err := s.CreateProvider(model.ProviderInput{
-		Name:        "Test Provider",
-		BaseURL:     "https://test.example.com",
-		UpstreamKey: "sk-test-abc123",
+		Name:             "Test Provider",
+		BaseURL:          "https://test.example.com",
+		UpstreamKey:      "sk-test-abc123",
+		ResponsesEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -101,6 +102,9 @@ func TestProviderCRUD(t *testing.T) {
 	}
 	if p.Status != model.ProviderStatusUnknown {
 		t.Fatalf("expected status 'unknown', got %q", p.Status)
+	}
+	if !p.ResponsesEnabled {
+		t.Fatal("expected Responses capability enabled after create")
 	}
 	// The store no longer stores the upstream key; key columns should be empty.
 	if len(p.KeyCiphertext) != 0 || p.KeyMasked != "" {
@@ -120,6 +124,9 @@ func TestProviderCRUD(t *testing.T) {
 	if got.ID != p.ID || got.Name != p.Name || got.BaseURL != p.BaseURL {
 		t.Fatalf("GetProvider mismatch: got %+v, want %+v", got, p)
 	}
+	if !got.ResponsesEnabled {
+		t.Fatal("expected Responses capability persisted by Get")
+	}
 	if string(got.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected ciphertext set by helper, got %q", got.KeyCiphertext)
 	}
@@ -129,15 +136,19 @@ func TestProviderCRUD(t *testing.T) {
 
 	// Update provider body; key columns should be preserved.
 	updated, err := s.UpdateProvider(p.ID, model.ProviderInput{
-		Name:        "Updated Provider",
-		BaseURL:     "https://updated.example.com",
-		UpstreamKey: "sk-updated-xyz789",
+		Name:             "Updated Provider",
+		BaseURL:          "https://updated.example.com",
+		UpstreamKey:      "sk-updated-xyz789",
+		ResponsesEnabled: false,
 	})
 	if err != nil {
 		t.Fatalf("UpdateProvider: %v", err)
 	}
 	if updated.Name != "Updated Provider" {
 		t.Fatalf("expected 'Updated Provider', got %q", updated.Name)
+	}
+	if updated.ResponsesEnabled {
+		t.Fatal("expected Responses capability persisted by Update")
 	}
 	if string(updated.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected key columns preserved, got %q", updated.KeyCiphertext)

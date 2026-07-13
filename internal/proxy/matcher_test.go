@@ -41,6 +41,19 @@ func TestSelectCandidates_PreservesTargetOrder(t *testing.T) {
 	}
 }
 
+func TestSelectCandidates_ResponsesRequiresExplicitCapability(t *testing.T) {
+	rules := []model.ModelRule{{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{
+		{ProviderID: "chat", Enabled: true}, {ProviderID: "responses", Enabled: true},
+	}}}
+	lookup := func(id string) (*model.Provider, error) {
+		return &model.Provider{ID: id, Name: id, Enabled: true, ResponsesEnabled: id == "responses"}, nil
+	}
+	candidates, err := selectCandidates(&InboundRequest{Model: "r", Task: "responses"}, rules, nil, lookup)
+	if err != nil || len(candidates) != 1 || candidates[0].provider.ID != "responses" {
+		t.Fatalf("responses capability filtering failed: candidates=%+v err=%v", candidates, err)
+	}
+}
+
 func TestEffectiveAttemptFirstBodyByteDeadline(t *testing.T) {
 	now := time.Unix(100, 0)
 	rule := now.Add(10 * time.Second)

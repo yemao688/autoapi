@@ -494,6 +494,7 @@ func (p *Proxy) setupRouter() chi.Router {
 	r.Use(slogMiddleware)
 
 	r.Post("/v1/chat/completions", p.handleChatCompletions)
+	r.Post("/v1/responses", p.handleResponses)
 	r.Post("/v1/embeddings", p.handleEmbeddings)
 	r.Post("/v1/images/generations", p.handleOpenAI)
 	r.Post("/v1/audio/transcriptions", p.handleOpenAI)
@@ -2238,7 +2239,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		// context.Canceled when the client closes the connection
 		// right after receiving the full response) is NOT a failure
 		// of any kind — treat it as a clean completion.
-		if usageAcc.Done() {
+		if usageAcc.Successful() {
 			p.recordStreamSuccess(c)
 			logEntry.Chain = append(logEntry.Chain, chainEntry)
 			return streamAttemptResult{
@@ -2288,7 +2289,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	default:
 		// Clean EOF. If [DONE] was not seen, this is a mid-stream
 		// failure and the provider misbehaved.
-		if !usageAcc.Done() {
+		if !usageAcc.Successful() {
 			chainEntry.Status = "truncated"
 			p.breakerFor(c.provider.ID).Record(false)
 			if c.targetID != "" {
@@ -2300,7 +2301,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				slog.Error("proxy: update provider health", "err", err)
 			}
 		}
-		if usageAcc.Done() {
+		if usageAcc.Successful() {
 			p.recordStreamSuccess(c)
 		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)

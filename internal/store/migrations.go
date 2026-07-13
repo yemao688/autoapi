@@ -445,6 +445,11 @@ WHEN NEW.request_price IS NULL OR NEW.request_price < 0 OR NEW.request_price != 
 BEGIN SELECT RAISE(ABORT, 'models.request_price must be finite and non-negative'); END;
 `,
 	},
+	{
+		ID:              "024_provider_responses_capability",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "providers", "responses_enabled") },
+		SQL:             `ALTER TABLE providers ADD COLUMN responses_enabled INTEGER NOT NULL DEFAULT 0;`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

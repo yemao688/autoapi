@@ -305,6 +305,7 @@ export namespace model {
 	    last_tested_at: number;
 	    error_message?: string;
 	    is_custom: boolean;
+	    responses_enabled: boolean;
 	    enabled: boolean;
 	    created_at: number;
 	    updated_at: number;
@@ -326,6 +327,7 @@ export namespace model {
 	        this.last_tested_at = source["last_tested_at"];
 	        this.error_message = source["error_message"];
 	        this.is_custom = source["is_custom"];
+	        this.responses_enabled = source["responses_enabled"];
 	        this.enabled = source["enabled"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -856,6 +858,7 @@ export namespace model {
 	    base_url: string;
 	    upstream_key: string;
 	    is_custom: boolean;
+	    responses_enabled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProviderInput(source);
@@ -867,6 +870,7 @@ export namespace model {
 	        this.base_url = source["base_url"];
 	        this.upstream_key = source["upstream_key"];
 	        this.is_custom = source["is_custom"];
+	        this.responses_enabled = source["responses_enabled"];
 	    }
 	}
 	export class ProviderModelUpdate {

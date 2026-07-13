@@ -33,22 +33,23 @@ const (
 // Provider is an upstream LLM gateway (OpenAI / Anthropic / DeepSeek / Moonshot / GLM / custom).
 // It stores its own encrypted upstream credential; API keys are now simple access tokens.
 type Provider struct {
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`
-	BaseURL       string         `json:"base_url"`
-	Status        ProviderStatus `json:"status"`
-	KeyCiphertext []byte         `json:"-"`          // encrypted upstream provider key
-	KeyNonce      []byte         `json:"-"`          // AES-GCM nonce for the key
-	KeyMasked     string         `json:"key_masked"` // display-only, e.g. "sk-****abcd"
-	ModelsCount   int            `json:"models_count"`
-	MonthlyTokens int64          `json:"monthly_tokens"`
-	AvgLatencyMs  int            `json:"avg_latency_ms"`
-	LastTestedAt  int64          `json:"last_tested_at"` // ms; 0 = never
-	ErrorMessage  string         `json:"error_message,omitempty"`
-	IsCustom      bool           `json:"is_custom"` // true for self-hosted / OpenAI-compatible gateways
-	Enabled       bool           `json:"enabled"`
-	CreatedAt     int64          `json:"created_at"`
-	UpdatedAt     int64          `json:"updated_at"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	BaseURL          string         `json:"base_url"`
+	Status           ProviderStatus `json:"status"`
+	KeyCiphertext    []byte         `json:"-"`          // encrypted upstream provider key
+	KeyNonce         []byte         `json:"-"`          // AES-GCM nonce for the key
+	KeyMasked        string         `json:"key_masked"` // display-only, e.g. "sk-****abcd"
+	ModelsCount      int            `json:"models_count"`
+	MonthlyTokens    int64          `json:"monthly_tokens"`
+	AvgLatencyMs     int            `json:"avg_latency_ms"`
+	LastTestedAt     int64          `json:"last_tested_at"` // ms; 0 = never
+	ErrorMessage     string         `json:"error_message,omitempty"`
+	IsCustom         bool           `json:"is_custom"` // true for self-hosted / OpenAI-compatible gateways
+	ResponsesEnabled bool           `json:"responses_enabled"`
+	Enabled          bool           `json:"enabled"`
+	CreatedAt        int64          `json:"created_at"`
+	UpdatedAt        int64          `json:"updated_at"`
 }
 
 // Model is a model offered by a provider (lookup table, populated from upstream).
@@ -499,10 +500,11 @@ type ProviderTestResult struct {
 // ----- Request payloads -----
 
 type ProviderInput struct {
-	Name        string `json:"name"`
-	BaseURL     string `json:"base_url"`
-	UpstreamKey string `json:"upstream_key"` // cleartext provider key; encrypted by App layer before storage
-	IsCustom    bool   `json:"is_custom"`
+	Name             string `json:"name"`
+	BaseURL          string `json:"base_url"`
+	UpstreamKey      string `json:"upstream_key"` // cleartext provider key; encrypted by App layer before storage
+	IsCustom         bool   `json:"is_custom"`
+	ResponsesEnabled bool   `json:"responses_enabled"`
 }
 
 type ModelRuleInput struct {

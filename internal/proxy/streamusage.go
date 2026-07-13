@@ -10,12 +10,13 @@
 // (prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens) and
 // Anthropic (input_tokens, output_tokens, cache_read_input_tokens,
 // cache_creation_input_tokens) usage fields. "Last seen wins" per field, so
-// the final OpenAI event before [DONE] overrides any earlier partials.
+// the final OpenAI event before stream termination overrides any earlier partials.
 package proxy
 
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 // streamUsageJSON is the union of OpenAI and Anthropic usage field
@@ -24,7 +25,11 @@ import (
 // event wraps usage under `message`; message_delta and the final
 // OpenAI event expose usage at the top level.
 type streamUsageJSON struct {
-	Usage   *streamUsageFields `json:"usage"`
+	Usage    *streamUsageFields `json:"usage"`
+	Type     string             `json:"type"`
+	Response *struct {
+		Usage *streamUsageFields `json:"usage"`
+	} `json:"response"`
 	Message *struct {
 		Usage *streamUsageFields `json:"usage"`
 	} `json:"message"`
@@ -42,12 +47,16 @@ type streamUsageFields struct {
 	PromptDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
+	InputDetails *struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
 }
 
 // streamUsageAccumulator is a streaming SSE usage parser. Feed it raw bytes
 // in arrival order; the accumulator holds onto the last-seen value for each
 // usage field across all parsed `data: {...}` lines and reports them via
-// Usage(). Done() returns true once a `data: [DONE]` marker is observed.
+// Usage(). Done() returns true once a [DONE] marker or a Responses terminal
+// event is observed.
 type streamUsageAccumulator struct {
 	// buf holds any partial line carried over from the previous Feed call
 	// (i.e. a line that arrived without a trailing newline yet).
@@ -62,12 +71,13 @@ type streamUsageAccumulator struct {
 	cacheHit      int64
 	cacheCreation int64
 	seenDone      bool
+	terminal      string
 }
 
 // Feed processes the next chunk of SSE bytes. It extracts any complete
 // `data: {...}` lines and updates the accumulated usage state. Any
-// trailing partial line is retained for the next call. Once [DONE] is
-// observed, subsequent calls are no-ops.
+// trailing partial line is retained for the next call. Once a terminal marker
+// is observed, subsequent calls are no-ops.
 func (a *streamUsageAccumulator) Feed(p []byte) {
 	if a.seenDone || len(p) == 0 {
 		return
@@ -138,11 +148,23 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	var usage *streamUsageFields
 	if u.Usage != nil {
 		usage = u.Usage
+	} else if u.Response != nil && u.Response.Usage != nil {
+		usage = u.Response.Usage
 	} else if u.Message != nil && u.Message.Usage != nil {
 		usage = u.Message.Usage
 	}
 	if usage == nil {
+		// Responses streams terminate with response.completed/failed/
+		// incomplete events and do not require an OpenAI [DONE] marker.
+		if isResponsesTerminal(u.Type) {
+			a.terminal = strings.TrimPrefix(u.Type, "response.")
+			a.seenDone = true
+		}
 		return
+	}
+	if isResponsesTerminal(u.Type) {
+		a.terminal = strings.TrimPrefix(u.Type, "response.")
+		a.seenDone = true
 	}
 	// Last non-zero wins per field. OpenAI streams typically send a
 	// single final usage event before [DONE], so this is just "the
@@ -169,6 +191,9 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	if usage.PromptDetails != nil && usage.PromptDetails.CachedTokens > 0 {
 		a.cacheHit = usage.PromptDetails.CachedTokens
 	}
+	if usage.InputDetails != nil && usage.InputDetails.CachedTokens > 0 {
+		a.cacheHit = usage.InputDetails.CachedTokens
+	}
 }
 
 // Usage returns the accumulated input/output/cache tokens. Returns the
@@ -179,10 +204,24 @@ func (a *streamUsageAccumulator) Usage() (input, output int, cacheHit, cacheCrea
 	return a.input, a.output, a.cacheHit, a.cacheCreation
 }
 
-// Done reports whether the [DONE] marker was observed. The stream's caller
-// uses this to distinguish a clean stream end (Done() == true, no breaker
-// penalty) from a mid-stream failure (Done() == false, body closed
-// unexpectedly → breaker Record(false)).
+// Done reports whether the stream observed [DONE] or a Responses terminal
+// event. Successful reports whether that terminal was [DONE] or
+// response.completed; response.failed and response.incomplete are terminal
+// but unsuccessful.
 func (a *streamUsageAccumulator) Done() bool {
 	return a.seenDone
+}
+
+func (a *streamUsageAccumulator) TerminalState() string { return a.terminal }
+func (a *streamUsageAccumulator) Successful() bool {
+	return (a.terminal == "" && a.seenDone) || a.terminal == "completed"
+}
+
+func isResponsesTerminal(typ string) bool {
+	switch typ {
+	case "response.completed", "response.failed", "response.incomplete":
+		return true
+	default:
+		return false
+	}
 }
