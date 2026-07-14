@@ -728,6 +728,41 @@ func TestResponsesClientFallsBackToMessagesProvider(t *testing.T) {
 	}
 }
 
+func TestResponsesClientStreamsFromMessagesProvider(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":2}}}\n\n"+
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n"+
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"+
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n"+
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n"+
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-msg", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"client-model","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/v1/messages" {
+		t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+	}
+	for _, event := range []string{"response.created", "response.output_text.delta", "response.completed"} {
+		if !strings.Contains(rec.Body.String(), event) {
+			t.Fatalf("missing %s in %s", event, rec.Body.String())
+		}
+	}
+}
+
 func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -771,7 +806,7 @@ func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
 	}
 }
 
-func TestProtocolConversionStreamingReachesResponsesUpstream(t *testing.T) {
+func TestMessagesClientToResponsesProviderStreamingRejected(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -791,7 +826,7 @@ func TestProtocolConversionStreamingReachesResponsesUpstream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable || hits != 1 {
+	if rec.Code != http.StatusUnprocessableEntity || hits != 0 {
 		t.Fatalf("status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
 	}
 }

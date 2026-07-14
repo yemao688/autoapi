@@ -34,7 +34,7 @@ type AttemptPreparation struct {
 	UpstreamProtocol    Protocol
 	SuppressBearerAuth  bool
 	ConvertResponse     func([]byte) ([]byte, error) `json:"-"`
-	ConvertStream       StreamConverter              `json:"-"`
+	NewStreamConverter  func() StreamConverter       `json:"-"`
 	// ConversionMode: ConversionModeNative for same-protocol passthrough.
 	ConversionMode ConversionMode
 }

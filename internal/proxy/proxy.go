@@ -2172,6 +2172,9 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 	flusher, _ := ww.(http.Flusher)
 	for k, vv := range resp.Header {
+		if prep.NewStreamConverter != nil {
+			continue
+		}
 		for _, v := range vv {
 			ww.Header().Add(k, v)
 		}
@@ -2189,13 +2192,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	buf := make([]byte, 32*1024)
 	var streamErr error
 	var writeErr error
-	firstByteTime = time.Since(attemptStart)
+	var conversionErr error
+	var converter StreamConverter
+	if prep.NewStreamConverter != nil {
+		converter = prep.NewStreamConverter()
+	}
 	writeConverted := func(input []byte) error {
 		out := input
 		var err error
-		if prep.ConvertStream != nil {
-			out, err = prep.ConvertStream.Write(input)
+		if converter != nil {
+			out, err = converter.Write(input)
 			if err != nil {
+				conversionErr = err
 				return err
 			}
 		}
@@ -2203,8 +2211,16 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			return nil
 		}
 		if !committed {
+			if converter != nil {
+				ww.Header().Set("Content-Type", "text/event-stream")
+				ww.Header().Del("Content-Length")
+				ww.Header().Del("Content-Encoding")
+			}
 			ww.WriteHeader(upstreamStatus)
 			committed = true
+			firstByteTime = time.Since(attemptStart)
+		} else if firstByteTime == 0 {
+			firstByteTime = time.Since(attemptStart)
 		}
 		usageAcc.Feed(out)
 		if _, err = ww.Write(out); err == nil && flusher != nil {
@@ -2218,7 +2234,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		streamErr = initialErr
 	}
 	for {
-		if streamErr != nil {
+		if streamErr != nil || writeErr != nil {
 			break
 		}
 		n, readErr := resp.Body.Read(buf)
@@ -2236,14 +2252,19 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			break
 		}
 	}
-	if streamErr == nil && writeErr == nil && prep.ConvertStream != nil {
-		out, cerr := prep.ConvertStream.Close()
+	if streamErr == nil && writeErr == nil && converter != nil {
+		out, cerr := converter.Close()
 		if cerr != nil {
+			conversionErr = cerr
 			streamErr = cerr
 		} else if len(out) > 0 {
 			if !committed {
+				ww.Header().Set("Content-Type", "text/event-stream")
+				ww.Header().Del("Content-Length")
+				ww.Header().Del("Content-Encoding")
 				ww.WriteHeader(upstreamStatus)
 				committed = true
+				firstByteTime = time.Since(attemptStart)
 			}
 			usageAcc.Feed(out)
 			if _, writeErr = ww.Write(out); writeErr == nil && flusher != nil {
@@ -2251,10 +2272,14 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			}
 		}
 	}
-	if !committed {
+	if !committed && streamErr == nil {
 		// A converter may buffer an incomplete event. Since no client
 		// bytes were committed, the caller may safely fail over.
-		streamErr = io.ErrUnexpectedEOF
+		if conversionErr != nil {
+			streamErr = conversionErr
+		} else {
+			streamErr = io.ErrUnexpectedEOF
+		}
 	}
 
 	// End-of-stream handling.
@@ -2289,8 +2314,20 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		FirstTokenMs:         int(firstByteTime.Milliseconds()),
 	}
 	markTransportAttempt(&chainEntry, c)
+	if !committed {
+		chainEntry.Status = "retryable"
+		chainEntry.Error = streamErr.Error()
+		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: 0, Error: chainEntry.Error, LatencyMs: attemptLatencyMs, StreamErr: streamErr}, attemptOrder
+	}
 
 	switch {
+	case conversionErr != nil:
+		chainEntry.Status = "truncated"
+		chainEntry.Error = conversionErr.Error()
+		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		logEntry.Error = chainEntry.Error
+		return streamAttemptResult{Status: model.AttemptOutcomeTruncated, StatusCode: upstreamStatus, Error: chainEntry.Error, LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()), StreamErr: conversionErr}, attemptOrder
 	case writeErr != nil && isClientDisconnect(writeErr):
 		// Client disconnected mid-stream. Do NOT penalize provider.
 		chainEntry.Status = "client_abort"

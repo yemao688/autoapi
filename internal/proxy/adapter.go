@@ -82,7 +82,6 @@ func (a conversionAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPrep
 		prep.Body = converted
 		prep.Path = "/v1/responses"
 		prep.ConvertResponse = func(body []byte) ([]byte, error) { return responsesToMessagesResponse(body, c.ruleLabel) }
-		prep.ConvertStream = newMessagesToResponsesStreamConverter()
 	case a.from == ProtocolOpenAIResponses && a.to == ProtocolAnthropicMessages:
 		converted, err := responsesToMessagesRequest(body, c.modelName)
 		if err != nil {
@@ -92,6 +91,9 @@ func (a conversionAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPrep
 		prep.Path = "/v1/messages"
 		prep.SuppressBearerAuth = true
 		prep.ConvertResponse = func(body []byte) ([]byte, error) { return messagesToResponsesResponse(body, c.ruleLabel) }
+		// The request is Responses -> Messages, while the streamed response
+		// must be converted in the opposite wire direction.
+		prep.NewStreamConverter = newMessagesToResponsesStreamConverter
 	default:
 		return AttemptPreparation{}, errUnsupportedConversion(a.from, a.to)
 	}

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestMessagesToResponsesStreamTextAndUsage(t *testing.T) {
+func TestResponsesClientMessagesProviderStreamTextAndUsage(t *testing.T) {
 	c := newMessagesToResponsesStreamConverter()
 	input := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7}}}\n\n" +
 		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n" +
@@ -26,7 +26,7 @@ func TestMessagesToResponsesStreamTextAndUsage(t *testing.T) {
 	}
 }
 
-func TestMessagesToResponsesStreamToolAndChunkedLines(t *testing.T) {
+func TestResponsesClientMessagesProviderStreamToolAndChunkedLines(t *testing.T) {
 	c := newMessagesToResponsesStreamConverter()
 	parts := []string{
 		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n",
@@ -61,7 +61,7 @@ data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_
 	}
 }
 
-func TestMessagesToResponsesStreamCloseDoesNotSynthesizeTerminal(t *testing.T) {
+func TestResponsesClientMessagesProviderStreamCloseDoesNotSynthesizeTerminal(t *testing.T) {
 	c := newMessagesToResponsesStreamConverter()
 	out, err := c.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n"))
 	if err != nil || len(out) != 0 {
@@ -70,5 +70,33 @@ func TestMessagesToResponsesStreamCloseDoesNotSynthesizeTerminal(t *testing.T) {
 	out, err = c.Close()
 	if err != nil || strings.Contains(string(out), "response.completed") {
 		t.Fatalf("close synthesized terminal: %q err=%v", out, err)
+	}
+}
+
+func TestMessagesToResponsesStreamSSEFraming(t *testing.T) {
+	c := newMessagesToResponsesStreamConverter()
+	input := "event: message_start\r\ndata: {\"type\":\"message_start\",\r\ndata: \"message\":{}}\r\n\r\n"
+	var out []byte
+	for i := 0; i < len(input); i++ {
+		got, err := c.Write([]byte{input[i]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, got...)
+	}
+	if !strings.Contains(string(out), "response.created") {
+		t.Fatalf("CRLF/multiple data lines were not parsed: %q", out)
+	}
+	c = newMessagesToResponsesStreamConverter()
+	out, err := c.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail, err := c.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out)+len(tail) == 0 || !strings.Contains(string(append(out, tail...)), "response.created") {
+		t.Fatal("EOF tail event was dropped")
 	}
 }

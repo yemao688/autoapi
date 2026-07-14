@@ -64,23 +64,22 @@ func (c *messagesToResponsesStreamConverter) drain(eof bool) ([]byte, error) {
 		}
 		line := bytes.TrimSuffix(c.lines[:n], []byte{'\r'})
 		c.lines = append([]byte(nil), c.lines[n+1:]...)
-		if len(line) == 0 {
-			b, err := c.processEvent()
-			if err != nil {
-				return out, err
-			}
-			out = append(out, b...)
-			continue
+		b, err := c.processLine(line)
+		if err != nil {
+			return out, err
 		}
-		switch {
-		case bytes.HasPrefix(line, []byte("event:")):
-			c.event = strings.TrimSpace(string(line[6:]))
-		case bytes.HasPrefix(line, []byte("data:")):
-			v := bytes.TrimSpace(line[5:])
-			c.data = append(c.data, v...)
-		}
+		out = append(out, b...)
 	}
-	if eof && len(c.data) > 0 {
+	if eof && len(c.lines) > 0 {
+		line := bytes.TrimSuffix(c.lines, []byte{'\r'})
+		c.lines = nil
+		b, err := c.processLine(line)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, b...)
+	}
+	if eof && (len(c.data) > 0 || c.event != "") {
 		b, err := c.processEvent()
 		if err != nil {
 			return out, err
@@ -88,6 +87,30 @@ func (c *messagesToResponsesStreamConverter) drain(eof bool) ([]byte, error) {
 		out = append(out, b...)
 	}
 	return out, nil
+}
+
+func (c *messagesToResponsesStreamConverter) processLine(line []byte) ([]byte, error) {
+	if len(line) == 0 {
+		return c.processEvent()
+	}
+	switch {
+	case bytes.HasPrefix(line, []byte("event:")):
+		value := line[len("event:"):]
+		if len(value) > 0 && value[0] == ' ' {
+			value = value[1:]
+		}
+		c.event = string(value)
+	case bytes.HasPrefix(line, []byte("data:")):
+		value := line[len("data:"):]
+		if len(value) > 0 && value[0] == ' ' {
+			value = value[1:]
+		}
+		if len(c.data) > 0 {
+			c.data = append(c.data, '\n')
+		}
+		c.data = append(c.data, value...)
+	}
+	return nil, nil
 }
 
 func (c *messagesToResponsesStreamConverter) processEvent() ([]byte, error) {
