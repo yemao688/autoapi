@@ -132,11 +132,11 @@ func TestChatToResponsesStreamNoDoneCloseIsIncomplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := c.Close()
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected error for missing terminal event")
 	}
-	if !strings.Contains(string(out), "response.incomplete") {
-		t.Fatalf("close without [DONE] should emit incomplete: %s", out)
+	if strings.Contains(string(out), "response.completed") || strings.Contains(string(out), "response.incomplete") {
+		t.Fatalf("close synthesized terminal after truncated stream: %s", out)
 	}
 }
 
@@ -189,10 +189,7 @@ func TestChatToResponsesStreamErrorDoesNotSynthesizeTerminal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected conversion error")
 	}
-	out, cerr := c.Close()
-	if cerr != nil {
-		t.Fatalf("close error: %v", cerr)
-	}
+	out, _ := c.Close()
 	if strings.Contains(string(out), "response.completed") || strings.Contains(string(out), "response.incomplete") {
 		t.Fatalf("close synthesized terminal after error: %s", out)
 	}
@@ -334,11 +331,11 @@ func TestResponsesToChatStreamNoTerminalCloseOmitsDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := c.Close()
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected error for missing terminal event")
 	}
-	if strings.Contains(string(out), "[DONE]") {
-		t.Fatalf("non-terminal close should not emit [DONE]: %s", out)
+	if strings.Contains(string(out), "[DONE]") || strings.Contains(string(out), "finish_reason") {
+		t.Fatalf("non-terminal close should not emit terminal: %s", out)
 	}
 }
 
@@ -366,10 +363,7 @@ func TestResponsesToChatStreamErrorDoesNotSynthesizeTerminal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected conversion error")
 	}
-	out, cerr := c.Close()
-	if cerr != nil {
-		t.Fatalf("close error: %v", cerr)
-	}
+	out, _ := c.Close()
 	if strings.Contains(string(out), "[DONE]") {
 		t.Fatalf("close synthesized terminal after error: %s", out)
 	}
@@ -408,4 +402,66 @@ func accumulateChatToolArguments(out string) map[int]string {
 		}
 	}
 	return args
+}
+
+func TestResponsesToChatStreamRejectsMultipleMessages(t *testing.T) {
+	c := newResponsesToChatStreamConverter()
+	input := responsesSSE("response.created", `{"type":"response.created","response":{"id":"r","model":"m"}}`) +
+		responsesSSE("response.output_item.added", `{"type":"response.output_item.added","item":{"type":"message","id":"msg1"}}`) +
+		responsesSSE("response.output_text.delta", `{"type":"response.output_text.delta","delta":"hi"}`) +
+		responsesSSE("response.output_item.added", `{"type":"response.output_item.added","item":{"type":"message","id":"msg2"}}`)
+	_, err := c.Write([]byte(input))
+	if err == nil || !strings.Contains(err.Error(), "multiple message") {
+		t.Fatalf("expected multiple message error, got: %v", err)
+	}
+}
+
+func TestResponsesToChatStreamRejectsMessageFunctionCallMix(t *testing.T) {
+	c := newResponsesToChatStreamConverter()
+	input := responsesSSE("response.created", `{"type":"response.created","response":{"id":"r","model":"m"}}`) +
+		responsesSSE("response.output_item.added", `{"type":"response.output_item.added","item":{"type":"message","id":"msg1"}}`) +
+		responsesSSE("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_0","call_id":"call_a","name":"lookup"}}`)
+	_, err := c.Write([]byte(input))
+	if err == nil || !strings.Contains(err.Error(), "cannot be mixed") {
+		t.Fatalf("expected mix error, got: %v", err)
+	}
+}
+
+func TestChatToResponsesStreamToolCallIDConsistency(t *testing.T) {
+	t.Run("id changes for same index", func(t *testing.T) {
+		c := newChatToResponsesStreamConverter()
+		input := chatToolSSE(0, "call_a", "lookup", "") + chatToolSSE(0, "call_b", "", "")
+		_, err := c.Write([]byte(input))
+		if err == nil || !strings.Contains(err.Error(), "tool call id changed") {
+			t.Fatalf("expected id changed error, got: %v", err)
+		}
+	})
+	t.Run("duplicate ids across indices", func(t *testing.T) {
+		c := newChatToResponsesStreamConverter()
+		input := chatToolSSE(0, "call_x", "a", "") + chatToolSSE(1, "call_x", "b", "")
+		_, err := c.Write([]byte(input))
+		if err == nil || !strings.Contains(err.Error(), "duplicate tool call id") {
+			t.Fatalf("expected duplicate id error, got: %v", err)
+		}
+	})
+}
+
+func TestChatToResponsesStreamArgumentsDeltaRequiresFunctionCall(t *testing.T) {
+	c := newChatToResponsesStreamConverter()
+	tc := map[string]any{"index": 0, "function": map[string]any{"arguments": "{}"}}
+	b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{tc}}}}})
+	_, err := c.Write([]byte("data: " + string(b) + "\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "function_call_arguments.delta without function_call") {
+		t.Fatalf("expected error for orphan arguments delta, got: %v", err)
+	}
+}
+
+func TestResponsesToChatStreamFunctionCallRequiresCallID(t *testing.T) {
+	c := newResponsesToChatStreamConverter()
+	input := responsesSSE("response.created", `{"type":"response.created","response":{"id":"r","model":"m"}}`) +
+		responsesSSE("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_0","name":"lookup"}}`)
+	_, err := c.Write([]byte(input))
+	if err == nil || !strings.Contains(err.Error(), "function_call requires call_id") {
+		t.Fatalf("expected call_id required error, got: %v", err)
+	}
 }

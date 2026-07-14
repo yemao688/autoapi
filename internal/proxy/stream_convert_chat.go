@@ -38,6 +38,7 @@ type chatToResponsesStreamConverter struct {
 	terminal         bool
 	closed           bool
 	calls            map[int]*chatToolCallState
+	callIDToIndex    map[string]int
 }
 
 type chatToolCallState struct {
@@ -54,6 +55,7 @@ func newChatToResponsesStreamConverter() StreamConverter {
 		nextItemIndex:    0,
 		messageItemIndex: -1,
 		calls:            map[int]*chatToolCallState{},
+		callIDToIndex:    map[string]int{},
 	}
 }
 
@@ -72,16 +74,17 @@ func (c *chatToResponsesStreamConverter) Close() ([]byte, error) {
 	c.closed = true
 	out, err := c.drain(true)
 	if err != nil {
+		c.err = err
 		return out, err
 	}
 	if c.err != nil {
-		return out, nil
+		return out, c.err
 	}
 	if c.terminal {
 		return out, nil
 	}
-	c.terminal = true
-	return append(out, c.incompleteEvent("max_output_tokens")...), nil
+	c.err = fmt.Errorf("chat stream closed without terminal event")
+	return out, c.err
 }
 
 func (c *chatToResponsesStreamConverter) drain(eof bool) ([]byte, error) {
@@ -335,18 +338,35 @@ func (c *chatToResponsesStreamConverter) validateDelta(raw map[string]json.RawMe
 
 func (c *chatToResponsesStreamConverter) processToolCallDelta(tc chatStreamToolCallDelta) ([]byte, error) {
 	var out []byte
+	if tc.Index < 0 {
+		return nil, fmt.Errorf("invalid Chat stream tool_call index %d", tc.Index)
+	}
 	state := c.calls[tc.Index]
 	if !c.started {
 		c.started = true
 		out = append(out, c.startEvents()...)
 	}
+	if tc.Type != "" && tc.Type != "function" {
+		return nil, fmt.Errorf("unsupported Chat stream tool_call type %q", tc.Type)
+	}
+	if state != nil {
+		if tc.ID != "" && tc.ID != state.id {
+			return nil, fmt.Errorf("tool call id changed for index %d", tc.Index)
+		}
+	}
+	if tc.ID != "" {
+		if existing, ok := c.callIDToIndex[tc.ID]; ok && existing != tc.Index {
+			return nil, fmt.Errorf("duplicate tool call id %q", tc.ID)
+		}
+		c.callIDToIndex[tc.ID] = tc.Index
+	}
 	if state == nil {
+		if tc.Function.Arguments != "" && (tc.ID == "" || tc.Function.Name == "") {
+			return nil, fmt.Errorf("function_call_arguments.delta without function_call")
+		}
 		state = &chatToolCallState{itemIndex: c.nextItemIndex}
 		c.nextItemIndex++
 		c.calls[tc.Index] = state
-	}
-	if tc.Type != "" && tc.Type != "function" {
-		return nil, fmt.Errorf("unsupported Chat stream tool_call type %q", tc.Type)
 	}
 	if !state.emitted && (tc.ID != "" || tc.Function.Name != "") {
 		state.emitted = true
@@ -369,6 +389,9 @@ func (c *chatToResponsesStreamConverter) processToolCallDelta(tc chatStreamToolC
 		})...)
 	}
 	if tc.Function.Arguments != "" {
+		if !state.emitted {
+			return nil, fmt.Errorf("function_call_arguments.delta without function_call")
+		}
 		state.args.WriteString(tc.Function.Arguments)
 		out = append(out, sseEvent("response.function_call_arguments.delta", map[string]any{
 			"output_index": state.itemIndex,
@@ -518,21 +541,23 @@ func (c *chatToResponsesStreamConverter) usageMap() map[string]any {
 // ---------------------------------------------------------------------------
 
 type responsesToChatStreamConverter struct {
-	lines         []byte
-	event         string
-	data          []byte
-	responseID    string
-	model         string
-	inputTokens   int
-	outputTokens  int
-	totalTokens   int
-	inDetails     map[string]any
-	outDetails    map[string]any
-	started       bool
-	messageOpened bool
-	terminal      bool
-	closed        bool
-	calls         map[int]*responsesToolCallState
+	lines            []byte
+	event            string
+	data             []byte
+	err              error
+	responseID       string
+	model            string
+	inputTokens      int
+	outputTokens     int
+	totalTokens      int
+	inDetails        map[string]any
+	outDetails       map[string]any
+	started          bool
+	messageCount     int
+	functionCallSeen bool
+	terminal         bool
+	closed           bool
+	calls            map[int]*responsesToolCallState
 }
 
 type responsesToolCallState struct {
@@ -560,7 +585,19 @@ func (c *responsesToChatStreamConverter) Close() ([]byte, error) {
 		return nil, nil
 	}
 	c.closed = true
-	return c.drain(true)
+	out, err := c.drain(true)
+	if err != nil {
+		c.err = err
+		return out, err
+	}
+	if c.err != nil {
+		return out, c.err
+	}
+	if !c.terminal {
+		c.err = fmt.Errorf("responses stream closed without terminal event")
+		return out, c.err
+	}
+	return out, nil
 }
 
 func (c *responsesToChatStreamConverter) drain(eof bool) ([]byte, error) {
@@ -681,21 +718,28 @@ func (c *responsesToChatStreamConverter) processEvent() ([]byte, error) {
 		kind, _ := item["type"].(string)
 		switch kind {
 		case "message":
-			c.messageOpened = true
+			c.messageCount++
+			if c.messageCount > 1 {
+				return nil, fmt.Errorf("multiple message output items are not supported")
+			}
+			if c.functionCallSeen {
+				return nil, fmt.Errorf("message and function_call output items cannot be mixed")
+			}
 			return nil, nil
 		case "function_call":
+			if c.messageCount > 0 {
+				return nil, fmt.Errorf("message and function_call output items cannot be mixed")
+			}
 			idx := intNumber(v, "output_index")
 			if idx < 0 {
 				idx = len(c.calls)
 			}
 			callID, _ := item["call_id"].(string)
-			if callID == "" {
-				callID, _ = item["id"].(string)
-			}
 			name, _ := item["name"].(string)
 			if callID == "" || name == "" {
 				return nil, fmt.Errorf("function_call requires call_id and name")
 			}
+			c.functionCallSeen = true
 			c.calls[idx] = &responsesToolCallState{id: callID, name: name, itemIndex: idx}
 			return c.chatChunk(map[string]any{"tool_calls": []map[string]any{{
 				"index":    idx,
