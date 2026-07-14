@@ -86,7 +86,7 @@ func requireObjectField(obj map[string]json.RawMessage, key, prefix string) erro
 // ---------- Chat Completions ----------
 
 var knownChatTopLevel = map[string]bool{
-	"model": true, "messages": true, "stream": true, "tools": true, "tool_choice": true,
+	"model": true, "messages": true, "stream": true, "tools": true, "tool_choice": true, "metadata": true,
 	"response_format": true, "temperature": true, "top_p": true, "max_tokens": true,
 	"max_completion_tokens": true, "frequency_penalty": true, "presence_penalty": true,
 	"n": true, "user": true, "stop": true, "seed": true, "logit_bias": true,
@@ -110,6 +110,9 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 			return chatInspectResult{}, &requestParseError{msg: "model must be a string", cause: err}
 		}
 	}
+	if res.Model == "" {
+		return chatInspectResult{}, &requestParseError{msg: "model is required"}
+	}
 	if raw, ok := fields["stream"]; ok {
 		if err := json.Unmarshal(raw, &res.Stream); err != nil {
 			return chatInspectResult{}, &requestParseError{msg: "stream must be a boolean", cause: err}
@@ -129,9 +132,39 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 		if hasArrayItems(raw) {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
 		}
+		if hasNonFunctionTools(raw) {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
+	}
+	if raw, ok := fields["tool_choice"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	if raw, ok := fields["metadata"]; ok && raw != nil && string(raw) != "null" && string(raw) != `{}` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	// Chat audio output/input: explicit audio object or modalities containing audio.
+	if raw, ok := fields["audio"]; ok && raw != nil && string(raw) != "null" {
+		reqs.Features = appendFeature(reqs.Features, model.FeatureAudio)
+	}
+	if raw, ok := fields["modalities"]; ok {
+		var mods []string
+		if err := json.Unmarshal(raw, &mods); err == nil {
+			for _, m := range mods {
+				if m == "audio" || m == "audio_input" {
+					reqs.Features = appendFeature(reqs.Features, model.FeatureAudio)
+				}
+			}
+		}
 	}
 	if raw, ok := fields["response_format"]; ok {
-		if hasStructuredOutput(raw) {
+		structured, err := inspectChatResponseFormat(raw)
+		if err != nil {
+			return chatInspectResult{}, err
+		}
+		if structured {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureStructuredOutput)
 		}
 	}
@@ -236,6 +269,22 @@ func parseChatTools(raw json.RawMessage) error {
 	return nil
 }
 
+func hasNonFunctionTools(raw json.RawMessage) bool {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return false
+	}
+	for _, item := range arr {
+		var t struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(item, &t); err == nil && t.Type != "" && t.Type != "function" {
+			return true
+		}
+	}
+	return false
+}
+
 func hasArrayItems(raw json.RawMessage) bool {
 	var arr []json.RawMessage
 	return json.Unmarshal(raw, &arr) == nil && len(arr) > 0
@@ -267,6 +316,45 @@ func hasStructuredOutput(raw json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+func inspectChatResponseFormat(raw json.RawMessage) (bool, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "json_object" || s == "json_schema" || s == "json" {
+			return true, nil
+		}
+		return false, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return false, &requestParseError{msg: "response_format must be a string or object", cause: err}
+	}
+	if t, ok := obj["type"]; ok {
+		var typ string
+		if err := json.Unmarshal(t, &typ); err != nil {
+			return false, &requestParseError{msg: "response_format.type must be a string", cause: err}
+		}
+		if typ == "json_object" || typ == "json_schema" || typ == "json" {
+			return true, nil
+		}
+	}
+	if t, ok := obj["text"]; ok {
+		var text map[string]json.RawMessage
+		if err := json.Unmarshal(t, &text); err != nil {
+			return false, &requestParseError{msg: "response_format.text must be an object", cause: err}
+		}
+		if f, ok := text["format"]; ok {
+			var ft map[string]json.RawMessage
+			if err := json.Unmarshal(f, &ft); err != nil {
+				return false, &requestParseError{msg: "response_format.text.format must be an object", cause: err}
+			}
+			if _, hasType := ft["type"]; hasType {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 type chatMessage struct {
@@ -419,6 +507,9 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 			return responsesInspectResult{}, &requestParseError{msg: "model must be a string", cause: err}
 		}
 	}
+	if res.Model == "" {
+		return responsesInspectResult{}, &requestParseError{msg: "model is required"}
+	}
 	if raw, ok := fields["stream"]; ok {
 		if err := json.Unmarshal(raw, &res.Stream); err != nil {
 			return responsesInspectResult{}, &requestParseError{msg: "stream must be a boolean", cause: err}
@@ -449,14 +540,49 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 		if hasArrayItems(raw) {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
 		}
+		if hasNonFunctionResponsesTools(raw) {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
 	}
-	if raw, ok := fields["response_format"]; ok && hasStructuredOutput(raw) {
-		reqs.Features = appendFeature(reqs.Features, model.FeatureStructuredOutput)
+	if raw, ok := fields["tool_choice"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	if raw, ok := fields["parallel_tool_calls"]; ok && raw != nil && string(raw) != "null" && string(raw) != `false` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	if raw, ok := fields["truncation"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	// Responses reasoning object (distinct from reasoning_effort string).
+	if raw, ok := fields["reasoning"]; ok && raw != nil && string(raw) != "null" {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return responsesInspectResult{}, &requestParseError{msg: "reasoning must be an object", cause: err}
+		}
+		reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+	}
+	if raw, ok := fields["response_format"]; ok && raw != nil && string(raw) != "null" {
+		if err := validateResponsesResponseFormat(raw); err != nil {
+			return responsesInspectResult{}, err
+		}
+		if hasStructuredOutput(raw) {
+			reqs.Features = appendFeature(reqs.Features, model.FeatureStructuredOutput)
+		}
 	}
 	if raw, ok := fields["text"]; ok {
 		var text map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &text); err == nil {
-			if f, ok := text["format"]; ok && hasStructuredOutput(f) {
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return responsesInspectResult{}, &requestParseError{msg: "text must be an object", cause: err}
+		}
+		if f, ok := text["format"]; ok && f != nil && string(f) != "null" {
+			if err := validateResponsesResponseFormat(f); err != nil {
+				return responsesInspectResult{}, err
+			}
+			if hasStructuredOutput(f) {
 				reqs.Features = appendFeature(reqs.Features, model.FeatureStructuredOutput)
 			}
 		}
@@ -526,6 +652,47 @@ func parseResponsesTools(raw json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func validateResponsesResponseFormat(raw json.RawMessage) error {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "text" || s == "json_object" || s == "json_schema" || s == "json" {
+			return nil
+		}
+		return &requestParseError{msg: "response_format has invalid value " + s}
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return &requestParseError{msg: "response_format must be a string or object", cause: err}
+	}
+	if t, ok := obj["type"]; ok {
+		var typ string
+		if err := json.Unmarshal(t, &typ); err != nil {
+			return &requestParseError{msg: "response_format.type must be a string", cause: err}
+		}
+		if typ == "text" || typ == "json_object" || typ == "json_schema" || typ == "json" {
+			return nil
+		}
+		return &requestParseError{msg: "response_format.type has invalid value " + typ}
+	}
+	return nil
+}
+
+func hasNonFunctionResponsesTools(raw json.RawMessage) bool {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return false
+	}
+	for _, item := range arr {
+		var t struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(item, &t); err == nil && t.Type != "" && t.Type != "function" {
+			return true
+		}
+	}
+	return false
 }
 
 func inspectResponsesInput(raw json.RawMessage, reqs *model.RequestRequirements) error {
@@ -663,6 +830,9 @@ func inspectMessagesRequest(body []byte) (messagesInspectResult, error) {
 			return messagesInspectResult{}, &requestParseError{msg: "model must be a string", cause: err}
 		}
 	}
+	if res.Model == "" {
+		return messagesInspectResult{}, &requestParseError{msg: "model is required"}
+	}
 	if raw, ok := fields["stream"]; ok {
 		if err := json.Unmarshal(raw, &res.Stream); err != nil {
 			return messagesInspectResult{}, &requestParseError{msg: "stream must be a boolean", cause: err}
@@ -677,16 +847,31 @@ func inspectMessagesRequest(body []byte) (messagesInspectResult, error) {
 		if hasArrayItems(raw) {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
 		}
+		if hasNonFunctionMessagesTools(raw) {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
+	}
+	if raw, ok := fields["tool_choice"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	if raw, ok := fields["metadata"]; ok && raw != nil && string(raw) != "null" && string(raw) != `{}` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
 	}
 	if raw, ok := fields["thinking"]; ok {
 		var think map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &think); err == nil {
-			if t, ok := think["type"]; ok {
-				var typ string
-				_ = json.Unmarshal(t, &typ)
-				if typ == "enabled" {
-					reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
-				}
+		if err := json.Unmarshal(raw, &think); err != nil {
+			return messagesInspectResult{}, &requestParseError{msg: "thinking must be an object", cause: err}
+		}
+		if t, ok := think["type"]; ok {
+			var typ string
+			if err := json.Unmarshal(t, &typ); err != nil {
+				return messagesInspectResult{}, &requestParseError{msg: "thinking.type must be a string", cause: err}
+			}
+			if typ == "enabled" {
+				reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
 			}
 		}
 	}
@@ -759,6 +944,25 @@ func parseMessagesTools(raw json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func hasNonFunctionMessagesTools(raw json.RawMessage) bool {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return false
+	}
+	for _, item := range arr {
+		var t struct {
+			Type        string          `json:"type"`
+			InputSchema json.RawMessage `json:"input_schema"`
+		}
+		if err := json.Unmarshal(item, &t); err == nil {
+			if t.Type != "" && t.Type != "function" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func inspectMessagesSystem(raw json.RawMessage, reqs *model.RequestRequirements) error {
@@ -915,7 +1119,7 @@ var knownGeminiTopLevel = map[string]bool{
 
 var knownGeminiPartTypes = map[string]bool{
 	"text": true, "inlineData": true, "fileData": true, "functionCall": true,
-	"functionResponse": true,
+	"functionResponse": true, "thought": true, "thoughtSignature": true,
 }
 
 func inspectGeminiRequest(body []byte) (geminiInspectResult, error) {
@@ -926,11 +1130,34 @@ func inspectGeminiRequest(body []byte) (geminiInspectResult, error) {
 	reqs := &model.RequestRequirements{}
 
 	if raw, ok := fields["tools"]; ok {
-		if err := parseGeminiTools(raw); err != nil {
+		hasFunc, hasNonFunc, err := parseGeminiTools(raw)
+		if err != nil {
 			return geminiInspectResult{}, err
 		}
-		if hasArrayItems(raw) {
+		if hasFunc {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
+		}
+		if hasNonFunc {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
+	}
+	if raw, ok := fields["generationConfig"]; ok && raw != nil && string(raw) != "null" {
+		var cfg map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return geminiInspectResult{}, &requestParseError{msg: "generationConfig must be an object", cause: err}
+		}
+		if hasField(raw, "thinkingConfig") {
+			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+		}
+		if hasField(raw, "responseMimeType") || hasField(raw, "responseSchema") {
+			reqs.Features = appendFeature(reqs.Features, model.FeatureStructuredOutput)
+		}
+	}
+	if raw, ok := fields["toolConfig"]; ok && raw != nil && string(raw) != "null" {
+		var cfg map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return geminiInspectResult{}, &requestParseError{msg: "toolConfig must be an object", cause: err}
 		}
 	}
 	if raw, ok := fields["cachedContent"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
@@ -958,43 +1185,54 @@ func inspectGeminiRequest(body []byte) (geminiInspectResult, error) {
 	return geminiInspectResult{Requirements: *reqs}, nil
 }
 
-func parseGeminiTools(raw json.RawMessage) error {
+func parseGeminiTools(raw json.RawMessage) (hasFunc, hasNonFunc bool, err error) {
 	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return &requestParseError{msg: "tools must be an array", cause: err}
+	if unmarshalErr := json.Unmarshal(raw, &arr); unmarshalErr != nil {
+		return false, false, &requestParseError{msg: "tools must be an array", cause: unmarshalErr}
 	}
 	for i, item := range arr {
 		var t map[string]json.RawMessage
-		if err := json.Unmarshal(item, &t); err != nil {
-			return &requestParseError{msg: fmt.Sprintf("tools[%d] must be an object", i), cause: err}
+		if unmarshalErr := json.Unmarshal(item, &t); unmarshalErr != nil {
+			return false, false, &requestParseError{msg: fmt.Sprintf("tools[%d] must be an object", i), cause: unmarshalErr}
 		}
 		decls, ok := t["functionDeclarations"]
 		if !ok {
-			return &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations is required", i)}
+			hasNonFunc = true
+			continue
 		}
 		var darr []json.RawMessage
-		if err := json.Unmarshal(decls, &darr); err != nil {
-			return &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations must be an array", i), cause: err}
+		if unmarshalErr := json.Unmarshal(decls, &darr); unmarshalErr != nil {
+			return false, false, &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations must be an array", i), cause: unmarshalErr}
 		}
 		if len(darr) == 0 {
-			return &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations must not be empty", i)}
+			return false, false, &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations must not be empty", i)}
 		}
 		for j, d := range darr {
 			var decl map[string]json.RawMessage
-			if err := json.Unmarshal(d, &decl); err != nil {
-				return &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations[%d] must be an object", i, j), cause: err}
+			if unmarshalErr := json.Unmarshal(d, &decl); unmarshalErr != nil {
+				return false, false, &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations[%d] must be an object", i, j), cause: unmarshalErr}
 			}
 			name, ok := decl["name"]
 			if !ok {
-				return &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations[%d].name is required", i, j)}
+				return false, false, &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations[%d].name is required", i, j)}
 			}
 			var nameStr string
-			if err := json.Unmarshal(name, &nameStr); err != nil || nameStr == "" {
-				return &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations[%d].name must be a non-empty string", i, j), cause: err}
+			if unmarshalErr := json.Unmarshal(name, &nameStr); unmarshalErr != nil || nameStr == "" {
+				return false, false, &requestParseError{msg: fmt.Sprintf("tools[%d].functionDeclarations[%d].name must be a non-empty string", i, j), cause: unmarshalErr}
 			}
 		}
+		hasFunc = true
 	}
-	return nil
+	return hasFunc, hasNonFunc, nil
+}
+
+func hasField(raw json.RawMessage, key string) bool {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return false
+	}
+	_, ok := obj[key]
+	return ok
 }
 
 func inspectGeminiContents(raw json.RawMessage, reqs *model.RequestRequirements) error {
@@ -1050,6 +1288,8 @@ func inspectGeminiParts(raw json.RawMessage, reqs *model.RequestRequirements, co
 			}
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
 		case "text":
+		case "thought", "thoughtSignature":
+			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
 		default:
 			if len(part) > 0 {
 				reqs.NativeOnly = true
@@ -1079,18 +1319,21 @@ func inspectGeminiInlineData(raw json.RawMessage, reqs *model.RequestRequirement
 	if err := json.Unmarshal(raw, &inline); err != nil {
 		return &requestParseError{msg: fmt.Sprintf("contents[%d].parts[%d].inlineData must be an object", contentIdx, partIdx), cause: err}
 	}
+	var mt string
 	if mime, ok := inline["mimeType"]; ok {
-		var mt string
 		if err := json.Unmarshal(mime, &mt); err != nil {
 			return &requestParseError{msg: fmt.Sprintf("contents[%d].parts[%d].inlineData.mimeType must be a string", contentIdx, partIdx), cause: err}
 		}
-		if strings.HasPrefix(mt, "audio/") {
-			reqs.Features = appendFeature(reqs.Features, model.FeatureAudio)
-		} else if strings.HasPrefix(mt, "image/") {
-			reqs.Features = appendFeature(reqs.Features, model.FeatureVision)
-		} else {
-			reqs.Features = appendFeature(reqs.Features, model.FeatureDocument)
-		}
+	}
+	if mt == "" {
+		return &requestParseError{msg: fmt.Sprintf("contents[%d].parts[%d].inlineData.mimeType is required", contentIdx, partIdx)}
+	}
+	if strings.HasPrefix(mt, "audio/") {
+		reqs.Features = appendFeature(reqs.Features, model.FeatureAudio)
+	} else if strings.HasPrefix(mt, "image/") {
+		reqs.Features = appendFeature(reqs.Features, model.FeatureVision)
+	} else {
+		reqs.Features = appendFeature(reqs.Features, model.FeatureDocument)
 	}
 	if err := requireField(inline, "data", fmt.Sprintf("contents[%d].parts[%d].inlineData", contentIdx, partIdx)); err != nil {
 		return err
@@ -1106,7 +1349,18 @@ func inspectGeminiFileData(raw json.RawMessage, reqs *model.RequestRequirements,
 	if err := requireField(fd, "fileUri", fmt.Sprintf("contents[%d].parts[%d].fileData", contentIdx, partIdx)); err != nil {
 		return err
 	}
-	reqs.Features = appendFeature(reqs.Features, model.FeatureDocument)
+	var mt string
+	if rawMime, ok := fd["mimeType"]; ok {
+		_ = json.Unmarshal(rawMime, &mt)
+	}
+	switch {
+	case strings.HasPrefix(mt, "audio/"):
+		reqs.Features = appendFeature(reqs.Features, model.FeatureAudio)
+	case strings.HasPrefix(mt, "image/"):
+		reqs.Features = appendFeature(reqs.Features, model.FeatureVision)
+	default:
+		reqs.Features = appendFeature(reqs.Features, model.FeatureDocument)
+	}
 	return nil
 }
 

@@ -26,6 +26,8 @@ export function DeleteModelRule(arg1:string):Promise<void>;
 
 export function DeleteProvider(arg1:string):Promise<void>;
 
+export function DeleteProviderFeatureCapability(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function EnterBackground():Promise<void>;
 
 export function EnterForeground():Promise<void>;

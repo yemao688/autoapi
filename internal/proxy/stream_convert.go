@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -160,7 +159,8 @@ func (c *messagesToResponsesStreamConverter) processEvent() ([]byte, error) {
 		c.itemIndex++
 		c.partIndex = 0
 		c.itemType = kind
-		if kind == "text" {
+		switch kind {
+		case "text":
 			c.text.Reset()
 			out := obj("response.output_item.added", map[string]interface{}{"output_index": c.itemIndex, "item": map[string]interface{}{"type": "message", "id": "msg_" + strconv.Itoa(c.itemIndex), "role": "assistant", "content": []interface{}{}}})
 			out = append(out, obj("response.content_part.added", map[string]interface{}{"output_index": c.itemIndex, "content_index": c.partIndex, "part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}}})...)
@@ -171,35 +171,40 @@ func (c *messagesToResponsesStreamConverter) processEvent() ([]byte, error) {
 				}
 			}
 			return out, nil
-		}
-		if kind == "tool_use" {
+		case "tool_use":
 			c.toolID, _ = block["id"].(string)
 			c.toolName, _ = block["name"].(string)
 			c.toolArgs.Reset()
 			return obj("response.output_item.added", map[string]interface{}{"output_index": c.itemIndex, "item": map[string]interface{}{"type": "function_call", "id": c.toolID, "call_id": c.toolID, "name": c.toolName, "arguments": ""}}), nil
+		default:
+			return nil, fmt.Errorf("unsupported stream content block type: %s", kind)
 		}
 	case "content_block_delta":
 		d := get(v, "delta")
 		kind, _ := d["type"].(string)
-		if kind == "text_delta" {
+		switch kind {
+		case "text_delta":
 			text, _ := d["text"].(string)
 			c.text.WriteString(text)
 			return obj("response.output_text.delta", map[string]interface{}{"output_index": c.itemIndex, "content_index": c.partIndex, "delta": text}), nil
-		}
-		if kind == "input_json_delta" {
+		case "input_json_delta":
 			part, _ := d["partial_json"].(string)
 			c.toolArgs.WriteString(part)
 			return obj("response.function_call_arguments.delta", map[string]interface{}{"output_index": c.itemIndex, "delta": part}), nil
+		default:
+			return nil, fmt.Errorf("unsupported stream content block delta type: %s", kind)
 		}
 	case "content_block_stop":
-		if c.itemType == "text" {
+		switch c.itemType {
+		case "text":
 			out := obj("response.output_text.done", map[string]interface{}{"output_index": c.itemIndex, "content_index": c.partIndex, "text": c.text.String()})
 			out = append(out, obj("response.content_part.done", map[string]interface{}{"output_index": c.itemIndex, "content_index": c.partIndex})...)
 			return append(out, obj("response.output_item.done", map[string]interface{}{"output_index": c.itemIndex})...), nil
-		}
-		if c.itemType == "tool_use" {
+		case "tool_use":
 			out := obj("response.function_call_arguments.done", map[string]interface{}{"output_index": c.itemIndex, "arguments": c.toolArgs.String()})
 			return append(out, obj("response.output_item.done", map[string]interface{}{"output_index": c.itemIndex})...), nil
+		default:
+			return nil, fmt.Errorf("unsupported stream content block stop: %s", c.itemType)
 		}
 	case "message_delta":
 		d := get(v, "delta")
@@ -211,6 +216,11 @@ func (c *messagesToResponsesStreamConverter) processEvent() ([]byte, error) {
 	case "message_stop":
 		c.terminal = true
 		return obj("response.completed", map[string]interface{}{"response": map[string]interface{}{"id": c.responseID, "object": "response", "status": "completed", "usage": map[string]interface{}{"input_tokens": c.inputTokens, "output_tokens": c.outputTokens}, "stop_reason": c.stopReason}}), nil
+	case "ping":
+		// Anthropic keepalive event; it carries no response semantics.
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unsupported stream event type: %s", typ)
 	}
 	return nil, nil
 }
@@ -356,30 +366,41 @@ func (c *responsesToMessagesStreamConverter) processEvent() ([]byte, error) {
 		u := get(response, "usage")
 		c.inputTokens = intNumber(u, "input_tokens")
 		return anthropicEvent("message_start", map[string]interface{}{"message": map[string]interface{}{"id": id, "type": "message", "role": "assistant", "model": model, "content": []interface{}{}, "usage": map[string]interface{}{"input_tokens": c.inputTokens, "output_tokens": 0}}}), nil
+	case "response.in_progress":
+		// Pure transport heartbeat; no Anthropic equivalent.
+		return nil, nil
 	case "response.output_item.added":
 		item := get(v, "item")
 		kind, _ := item["type"].(string)
-		if kind != "message" && kind != "function_call" {
-			slog.Debug("proxy: dropping unsupported Responses output item", "type", kind)
-			return nil, nil
+		switch kind {
+		case "message", "function_call":
+			if c.blockOpen {
+				return nil, nil
+			}
+			c.blockOpen, c.blockStopped = true, false
+			c.blockIndex++
+			c.blockType = kind
+			c.blockID, _ = item["call_id"].(string)
+			if c.blockID == "" {
+				c.blockID, _ = item["id"].(string)
+			}
+			c.blockName, _ = item["name"].(string)
+			c.toolArgs.Reset()
+			block := map[string]interface{}{"type": "text"}
+			if kind == "function_call" {
+				block = map[string]interface{}{"type": "tool_use", "id": c.blockID, "name": c.blockName, "input": map[string]interface{}{}}
+			}
+			return anthropicEvent("content_block_start", map[string]interface{}{"index": c.blockIndex, "content_block": block}), nil
+		default:
+			return nil, fmt.Errorf("unsupported Responses output item type: %s", kind)
 		}
-		if c.blockOpen {
-			return nil, nil
+	case "response.content_part.added":
+		part := get(v, "part")
+		partType, _ := part["type"].(string)
+		if partType != "output_text" && partType != "text" {
+			return nil, fmt.Errorf("unsupported Responses content part type: %s", partType)
 		}
-		c.blockOpen, c.blockStopped = true, false
-		c.blockIndex++
-		c.blockType = kind
-		c.blockID, _ = item["call_id"].(string)
-		if c.blockID == "" {
-			c.blockID, _ = item["id"].(string)
-		}
-		c.blockName, _ = item["name"].(string)
-		c.toolArgs.Reset()
-		block := map[string]interface{}{"type": "text"}
-		if kind == "function_call" {
-			block = map[string]interface{}{"type": "tool_use", "id": c.blockID, "name": c.blockName, "input": map[string]interface{}{}}
-		}
-		return anthropicEvent("content_block_start", map[string]interface{}{"index": c.blockIndex, "content_block": block}), nil
+		return nil, nil
 	case "response.output_text.delta":
 		if c.blockType != "message" || !c.blockOpen {
 			return nil, nil
@@ -434,11 +455,8 @@ func (c *responsesToMessagesStreamConverter) processEvent() ([]byte, error) {
 		}
 		return nil, fmt.Errorf("responses stream failed: %s", message)
 	default:
-		if strings.Contains(typ, "reasoning") || strings.Contains(typ, "refusal") {
-			slog.Debug("proxy: dropping unsupported Responses event", "type", typ)
-		}
+		return nil, fmt.Errorf("unsupported Responses stream event type: %s", typ)
 	}
-	return nil, nil
 }
 
 func (c *responsesToMessagesStreamConverter) finish(response map[string]interface{}, reason string) []byte {

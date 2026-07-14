@@ -45,6 +45,12 @@ func (s *Store) SetModelCapability(providerID, modelName, protocol, feature stri
 	if providerID == "" || modelName == "" || protocol == "" || feature == "" {
 		return fmt.Errorf("store: capability fields are required")
 	}
+	if !providerCapabilityProtocols[protocol] {
+		return fmt.Errorf("store: unsupported protocol %q", protocol)
+	}
+	if feature != "native" && !providerCapabilityFeatures[feature] {
+		return fmt.Errorf("store: unsupported feature %q", feature)
+	}
 	return s.execTx(func(tx *sql.Tx) error {
 		var exists int
 		if err := tx.QueryRow(`SELECT 1 FROM models WHERE provider_id=? AND name=?`, providerID, modelName).Scan(&exists); err == sql.ErrNoRows {
@@ -62,6 +68,12 @@ func (s *Store) DeleteModelCapability(providerID, modelName, protocol, feature s
 	providerID, modelName, protocol, feature = strings.TrimSpace(providerID), strings.TrimSpace(modelName), strings.TrimSpace(protocol), strings.TrimSpace(feature)
 	if providerID == "" || modelName == "" || protocol == "" || feature == "" {
 		return fmt.Errorf("store: capability fields are required")
+	}
+	if !providerCapabilityProtocols[protocol] {
+		return fmt.Errorf("store: unsupported protocol %q", protocol)
+	}
+	if feature != "native" && !providerCapabilityFeatures[feature] {
+		return fmt.Errorf("store: unsupported feature %q", feature)
 	}
 	return s.execTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`DELETE FROM model_capabilities WHERE provider_id=? AND model_name=? AND protocol=? AND feature=?`, providerID, modelName, protocol, feature)

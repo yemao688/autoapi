@@ -116,6 +116,46 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		}
 	}
 
+	// First determine whether there is at least one "basic" conversion
+	// candidate: enabled target, enabled provider, closed breaker, and the
+	// target protocol is supported. Without such a candidate the conversion
+	// path is genuinely unavailable and must surface as a regular 503, even
+	// if the request requires features that cannot be preserved.
+	basicAvailable := false
+	for _, t := range rule.Targets {
+		if !t.Enabled {
+			continue
+		}
+		p, err := getProvider(t.ProviderID)
+		if err != nil || p == nil || !p.Enabled {
+			continue
+		}
+		if isOpen(t.ProviderID, breakers) {
+			continue
+		}
+		modelName := modelNameForTarget(t.ModelName, req.Model)
+		if capabilities.providers == nil {
+			capabilities = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})
+		}
+		if _, exists := capabilities.providers[p.ID]; !exists {
+			capabilities.providers[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p}).providers[p.ID]
+		}
+		if capabilities.supportsModel(p.ID, modelName, to) {
+			basicAvailable = true
+			break
+		}
+	}
+	if !basicAvailable {
+		return nil, fmt.Errorf("no available conversion provider for model %q", req.Model)
+	}
+
+	// Static stream-conversion edge is a conversion limitation, not a feature
+	// capability mismatch. Treat it as unsupported_feature when a basic path
+	// exists.
+	if req.Stream && !supportsStreamConversion(req.Protocol, to) {
+		return nil, fmt.Errorf("%w: streaming not supported for conversion %s->%s", errUnsupportedFeature, req.Protocol, to)
+	}
+
 	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
 	var out []candidate
 	var featureFiltered bool
@@ -124,10 +164,10 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 			continue
 		}
 		p, err := getProvider(t.ProviderID)
-		if err != nil {
-			return nil, fmt.Errorf("matched provider not found")
+		if err != nil || p == nil || !p.Enabled {
+			continue
 		}
-		if !p.Enabled || isOpen(t.ProviderID, breakers) {
+		if isOpen(t.ProviderID, breakers) {
 			continue
 		}
 		modelName := modelNameForTarget(t.ModelName, req.Model)
@@ -140,12 +180,11 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		if !capabilities.supportsModel(p.ID, modelName, to) {
 			continue
 		}
-		// A conversion candidate is enabled, resolvable, provider-enabled,
-		// breaker-closed and supports the target protocol. If it is rejected
-		// only because of an unpreserved feature capability, remember that.
 		if req.Requirements != nil {
 			skip := false
 			for _, f := range req.Requirements.Features {
+				// Preservation is enforced in both observe and enforce mode:
+				// conversion must only use explicitly supported capabilities.
 				supported, _ := capabilities.featureEnabled(p.ID, modelName, to, string(f), true)
 				if !supported {
 					skip = true
@@ -156,9 +195,6 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 			if skip {
 				continue
 			}
-		}
-		if req.Stream && !supportsStreamConversion(req.Protocol, to) {
-			return nil, fmt.Errorf("%w: streaming not supported for conversion %s->%s", errUnsupportedFeature, req.Protocol, to)
 		}
 		out = append(out, candidate{
 			provider:                   p,

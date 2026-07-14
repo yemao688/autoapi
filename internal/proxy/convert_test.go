@@ -182,6 +182,22 @@ func TestProtocolConversionRejections(t *testing.T) {
 			_, err := responsesToMessagesRequest([]byte(`{"model":"m","input":[{"type":"function_call","call_id":"c","arguments":"not-json"}]}`), "u")
 			return err
 		}, "invalid Responses function_call arguments"},
+		{"assistant unknown block", func() error {
+			_, err := messagesToResponsesRequest([]byte(`{"model":"m","messages":[{"role":"assistant","content":[{"type":"custom"}]}]}`), "u")
+			return err
+		}, "unsupported content block type"},
+		{"user unknown block", func() error {
+			_, err := messagesToResponsesRequest([]byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"custom"}]}]}`), "u")
+			return err
+		}, "unsupported content block type"},
+		{"unknown Responses input item", func() error {
+			_, err := responsesToMessagesRequest([]byte(`{"model":"m","input":[{"type":"reasoning"}]}`), "u")
+			return err
+		}, "unsupported Responses input item type"},
+		{"unsupported Responses tool type", func() error {
+			_, err := responsesToMessagesRequest([]byte(`{"model":"m","input":[],"tools":[{"type":"code_interpreter","name":"c"}]}`), "u")
+			return err
+		}, "unsupported Responses tool type"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -197,5 +213,38 @@ func mustUnmarshal(t *testing.T, b []byte, v any) {
 	t.Helper()
 	if err := json.Unmarshal(b, v); err != nil {
 		t.Fatalf("unmarshal %s: %v", b, err)
+	}
+}
+
+func TestResponseConversionRejectsUnsupportedSemantics(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func() error
+		want string
+	}{
+		{"unknown Responses output item", func() error {
+			_, err := responsesToMessagesResponse([]byte(`{"id":"r","status":"completed","output":[{"type":"reasoning","id":"x"}],"usage":{"input_tokens":1,"output_tokens":1}}`), "c")
+			return err
+		}, "unsupported Responses output item type"},
+		{"unknown Responses content block", func() error {
+			_, err := responsesToMessagesResponse([]byte(`{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_image"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`), "c")
+			return err
+		}, "unsupported Responses content block type"},
+		{"thinking Messages content block", func() error {
+			_, err := messagesToResponsesResponse([]byte(`{"id":"m","content":[{"type":"thinking","thinking":"x"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`), "c")
+			return err
+		}, "thinking"},
+		{"unknown Messages content block", func() error {
+			_, err := messagesToResponsesResponse([]byte(`{"id":"m","content":[{"type":"custom"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`), "c")
+			return err
+		}, "unsupported content block type"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.fn()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
 	}
 }

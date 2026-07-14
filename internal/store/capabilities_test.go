@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"strings"
 	"testing"
 
 	"autoapi/internal/model"
@@ -107,5 +109,112 @@ func TestProviderCapabilityFallbackUsesLegacyBoolWithoutRow(t *testing.T) {
 	}
 	if !got.MessagesEnabled {
 		t.Fatal("legacy bool fallback was not preserved")
+	}
+}
+
+func TestSetProviderCapabilityValidatesInputsAndProviderExists(t *testing.T) {
+	s := newTestStore(t)
+	p, err := s.CreateProvider(model.ProviderInput{Name: "Validate", BaseURL: "https://example.com"})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	if err := s.SetProviderCapability("", "anthropic_messages", "native", true); err == nil {
+		t.Fatal("empty provider accepted")
+	}
+	if err := s.SetProviderCapability(p.ID, "unknown_protocol", "native", true); err == nil {
+		t.Fatal("unknown protocol accepted")
+	}
+	if err := s.SetProviderCapability(p.ID, "anthropic_messages", "unknown_feature", true); err == nil {
+		t.Fatal("unknown feature accepted")
+	}
+	if err := s.SetProviderCapability("missing-id", "anthropic_messages", "native", true); err == nil {
+		t.Fatal("missing provider accepted")
+	}
+
+	if err := s.SetProviderCapability(p.ID, "anthropic_messages", "tools", true); err != nil {
+		t.Fatalf("set canonical feature: %v", err)
+	}
+	caps, err := s.GetProviderCapabilities(p.ID)
+	if err != nil {
+		t.Fatalf("GetProviderCapabilities: %v", err)
+	}
+	if len(caps) != 1 || caps[0].Feature != "tools" {
+		t.Fatalf("unexpected caps: %+v", caps)
+	}
+}
+
+func TestDeleteProviderFeatureCapability(t *testing.T) {
+	s := newTestStore(t)
+	p, err := s.CreateProvider(model.ProviderInput{Name: "Delete", BaseURL: "https://example.com"})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	if err := s.SetProviderCapability(p.ID, "anthropic_messages", "tools", true); err != nil {
+		t.Fatalf("SetProviderCapability: %v", err)
+	}
+
+	if err := s.DeleteProviderFeatureCapability("", "anthropic_messages", "tools"); err == nil {
+		t.Fatal("empty provider accepted")
+	}
+	if err := s.DeleteProviderFeatureCapability(p.ID, "unknown_protocol", "tools"); err == nil {
+		t.Fatal("unknown protocol accepted")
+	}
+	if err := s.DeleteProviderFeatureCapability(p.ID, "anthropic_messages", "native"); err == nil {
+		t.Fatal("native delete accepted")
+	}
+	if err := s.DeleteProviderFeatureCapability("missing", "anthropic_messages", "tools"); err == nil {
+		t.Fatal("missing provider accepted")
+	}
+	if err := s.DeleteProviderFeatureCapability(p.ID, "anthropic_messages", "tools"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := s.DeleteProviderFeatureCapability(p.ID, "anthropic_messages", "tools"); err != nil {
+		t.Fatalf("second delete should be idempotent, got %v", err)
+	}
+}
+
+func TestMigration029RebuildsProviderCapabilitiesWithFK(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := applyMigrations(db, migrationsThrough("028_model_capabilities_model_fk")); err != nil {
+		t.Fatalf("apply migrations through 028: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO providers(id,name,base_url,created_at,updated_at) VALUES('p','p','http://p',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_capabilities(provider_id,protocol,feature,enabled,source,updated_at) VALUES
+		('p','anthropic_messages','tools',1,'manual',1),
+		('orphan','anthropic_messages','tools',1,'manual',2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	var sqlText string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='provider_capabilities'`).Scan(&sqlText); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sqlText, "REFERENCES providers") {
+		t.Fatalf("schema missing FK: %s", sqlText)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM provider_capabilities`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("expected 1 row after orphan cleanup, got %d", n)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_capabilities(provider_id,protocol,feature,enabled,source,updated_at) VALUES('missing-provider','anthropic_messages','tools',1,'manual',1)`); err == nil {
+		t.Fatal("missing provider accepted")
+	}
+	if _, err := db.Exec(`DELETE FROM providers WHERE id='p'`); err != nil {
+		t.Fatalf("provider delete failed: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM provider_capabilities`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("provider delete cascade failed: %d", n)
 	}
 }

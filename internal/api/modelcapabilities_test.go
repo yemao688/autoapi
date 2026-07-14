@@ -29,6 +29,11 @@ func (s *modelCapStore) SetProviderCapability(providerID, protocol, feature stri
 	return nil
 }
 
+func (s *modelCapStore) DeleteProviderFeatureCapability(providerID, protocol, feature string) error {
+	s.got = []string{providerID, protocol, feature}
+	return nil
+}
+
 func TestAppModelCapabilityMethodsGuardAndTrim(t *testing.T) {
 	app := &App{}
 	if _, err := app.ListModelCapabilities("p", "m"); !errors.Is(err, errNotImpl) {
@@ -90,5 +95,28 @@ func TestAppSetProviderFeatureCapability(t *testing.T) {
 	}
 	if err := app.SetProviderFeatureCapability("p", "openai", "native", true); err == nil {
 		t.Fatal("native feature accepted")
+	}
+
+	// Delete delegates with trimmed args and rejects empty/native.
+	app = &App{}
+	if err := app.DeleteProviderFeatureCapability("p", "openai", "tools"); !errors.Is(err, errNotImpl) {
+		t.Fatalf("nil store delete err=%v", err)
+	}
+	app = &App{deps: Deps{Store: st}}
+	if err := app.DeleteProviderFeatureCapability(" p ", " openai ", " tools "); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.got; len(got) != 3 || got[0] != "p" || got[1] != "openai" || got[2] != "tools" {
+		t.Fatalf("delete delegate args: %v", got)
+	}
+	for _, in := range []struct{ p, proto, feat string }{
+		{"", "openai", "tools"},
+		{"p", "", "tools"},
+		{"p", "openai", ""},
+		{"p", "openai", "native"},
+	} {
+		if err := app.DeleteProviderFeatureCapability(in.p, in.proto, in.feat); err == nil {
+			t.Fatalf("delete missing fields accepted: %+v", in)
+		}
 	}
 }

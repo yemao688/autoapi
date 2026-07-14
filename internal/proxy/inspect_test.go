@@ -265,3 +265,162 @@ func TestInspectMalformed(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectChatPreservationAndAudio(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		want       []model.Feature
+		nativeOnly bool
+		wantErr    bool
+	}{
+		{"tool_choice marks native", `{"model":"m","messages":[],"tool_choice":"auto"}`, nil, true, false},
+		{"metadata marks native", `{"model":"m","messages":[],"metadata":{"client":"x"}}`, nil, true, false},
+		{"non-function tool marks native", `{"model":"m","messages":[],"tools":[{"type":"code_interpreter"}]}`, nil, true, false},
+		{"audio object", `{"model":"m","messages":[],"audio":{"voice":"alloy","format":"pcm16"}}`, []model.Feature{model.FeatureAudio}, false, false},
+		{"modalities audio", `{"model":"m","messages":[],"modalities":["audio"]}`, []model.Feature{model.FeatureAudio}, false, false},
+		{"response_format wrong shape", `{"model":"m","messages":[],"response_format":["x"]}`, nil, false, true},
+		{"missing model", `{"messages":[]}`, nil, false, true},
+		{"empty model", `{"model":"","messages":[]}`, nil, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := inspectChatRequest([]byte(tc.body))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, f := range tc.want {
+				if !res.Requirements.Has(f) {
+					t.Fatalf("missing feature %q", f)
+				}
+			}
+			if tc.nativeOnly && !res.Requirements.NativeOnly {
+				t.Fatal("expected native only")
+			}
+		})
+	}
+}
+
+func TestInspectMessagesPreservation(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		nativeOnly bool
+		wantErr    bool
+	}{
+		{"tool_choice marks native", `{"model":"m","messages":[],"tool_choice":"auto"}`, true, false},
+		{"metadata marks native", `{"model":"m","messages":[],"metadata":{"client":"x"}}`, true, false},
+		{"system block array non-text", `{"model":"m","system":[{"type":"image","source":{"type":"base64","data":"x","media_type":"image/png"}}],"messages":[]}`, true, false},
+		{"non-function tool marks native", `{"model":"m","messages":[],"tools":[{"name":"x","type":"host"}]}`, true, false},
+		{"thinking wrong shape", `{"model":"m","messages":[],"thinking":"enabled"}`, false, true},
+		{"missing model", `{"messages":[]}`, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := inspectMessagesRequest([]byte(tc.body))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.nativeOnly && !res.Requirements.NativeOnly {
+				t.Fatal("expected native only")
+			}
+		})
+	}
+}
+
+func TestInspectResponsesPreservationAndReasoning(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		want       []model.Feature
+		nativeOnly bool
+		wantErr    bool
+	}{
+		{"tool_choice marks native", `{"model":"m","input":"hi","tool_choice":"auto"}`, nil, true, false},
+		{"parallel_tool_calls marks native", `{"model":"m","input":"hi","parallel_tool_calls":true}`, nil, true, false},
+		{"truncation marks native", `{"model":"m","input":"hi","truncation":"auto"}`, nil, true, false},
+		{"non-function tool marks native", `{"model":"m","input":"hi","tools":[{"type":"host","name":"x"}]}`, nil, true, false},
+		{"reasoning object", `{"model":"m","input":"hi","reasoning":{"effort":"medium"}}`, []model.Feature{model.FeatureReasoning}, false, false},
+		{"reasoning wrong shape", `{"model":"m","input":"hi","reasoning":"medium"}`, nil, false, true},
+		{"response_format wrong shape", `{"model":"m","input":"hi","response_format":["x"]}`, nil, false, true},
+		{"text wrong shape", `{"model":"m","input":"hi","text":"plain"}`, nil, false, true},
+		{"missing model", `{"input":"hi"}`, nil, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := inspectResponsesRequest([]byte(tc.body))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, f := range tc.want {
+				if !res.Requirements.Has(f) {
+					t.Fatalf("missing feature %q", f)
+				}
+			}
+			if tc.nativeOnly && !res.Requirements.NativeOnly {
+				t.Fatal("expected native only")
+			}
+		})
+	}
+}
+
+func TestInspectGeminiCapabilitiesAndShape(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		want       []model.Feature
+		nativeOnly bool
+		wantErr    bool
+	}{
+		{"googleSearch native", `{"contents":[{"parts":[{"text":"hi"}]}],"tools":[{"googleSearch":{}}]}`, nil, true, false},
+		{"codeExecution native", `{"contents":[{"parts":[{"text":"hi"}]}],"tools":[{"codeExecution":{}}]}`, nil, true, false},
+		{"thinkingConfig reasoning", `{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":1000}}}`, []model.Feature{model.FeatureReasoning}, false, false},
+		{"responseMimeType structured", `{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"responseMimeType":"application/json"}}`, []model.Feature{model.FeatureStructuredOutput}, false, false},
+		{"responseSchema structured", `{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"responseSchema":{"type":"object"}}}`, []model.Feature{model.FeatureStructuredOutput}, false, false},
+		{"fileData image", `{"contents":[{"parts":[{"fileData":{"mimeType":"image/png","fileUri":"x"}}]}]}`, []model.Feature{model.FeatureVision}, false, false},
+		{"fileData audio", `{"contents":[{"parts":[{"fileData":{"mimeType":"audio/mp3","fileUri":"x"}}]}]}`, []model.Feature{model.FeatureAudio}, false, false},
+		{"inlineData missing mimeType", `{"contents":[{"parts":[{"inlineData":{"data":"x"}}]}]}`, nil, false, true},
+		{"generationConfig wrong shape", `{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":[]}`, nil, false, true},
+		{"toolConfig wrong shape", `{"contents":[{"parts":[{"text":"hi"}]}],"toolConfig":"x"}`, nil, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := inspectGeminiRequest([]byte(tc.body))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, f := range tc.want {
+				if !res.Requirements.Has(f) {
+					t.Fatalf("missing feature %q", f)
+				}
+			}
+			if tc.nativeOnly && !res.Requirements.NativeOnly {
+				t.Fatal("expected native only")
+			}
+		})
+	}
+}

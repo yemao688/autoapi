@@ -155,6 +155,10 @@ type Proxy struct {
 	defaultPort      int
 	settingsProvider func() (*model.Settings, error)
 
+	// featureEnforcement caches the advanced.feature_capability_enforcement
+	// setting so the request hot path never queries the DB per request.
+	featureEnforcement atomic.Value
+
 	lifecycleMu    sync.Mutex
 	mu             sync.RWMutex
 	listener       net.Listener
@@ -220,6 +224,7 @@ func New(store storeProxy, service upstreamKeyProvider, defaultPort int, setting
 		p.metricSink = registries[0]
 	}
 	p.router = p.setupRouter()
+	p.loadFeatureEnforcement()
 	return p
 }
 
@@ -358,6 +363,7 @@ func (p *Proxy) Restart() error {
 	if err != nil {
 		return err
 	}
+	p.loadFeatureEnforcement()
 
 	p.mu.RLock()
 	if p.listener != nil && listenerMatchesSettings(p.listener, settings.Server) {
@@ -667,11 +673,7 @@ func (p *Proxy) insertPendingLog(log *model.RequestLog) {
 // resolveCandidates selects one or more provider/model candidates using the
 // model-rule matcher, filtering out providers with an open circuit breaker.
 func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
-	settings, err := p.store.GetSettings()
-	if err != nil {
-		return nil, fmt.Errorf("load settings: %w", err)
-	}
-	req.Enforcement = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
+	req.Enforcement = model.NormalizeFeatureCapabilityEnforcement(p.featureEnforcementMode())
 
 	rules := p.loadModelRules()
 	providerIDs := make([]string, 0)
@@ -701,6 +703,7 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 		GetProvidersForIDs([]string) ([]model.Provider, error)
 	})
 	var providerRows []model.Provider
+	var err error
 	if ok {
 		providerRows, err = providerStore.GetProvidersForIDs(providerIDs)
 		if err != nil {
@@ -784,6 +787,30 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 		}
 	}
 	return p.planCandidates(req, candidates), nil
+}
+
+func (p *Proxy) loadFeatureEnforcement() {
+	var mode string
+	if p.settingsProvider != nil {
+		if settings, err := p.settingsProvider(); err == nil && settings != nil {
+			mode = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
+		}
+	} else if p.store != nil {
+		if settings, err := p.store.GetSettings(); err == nil && settings != nil {
+			mode = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
+		}
+	}
+	if mode == "" {
+		mode = model.FeatureCapabilityEnforcementObserve
+	}
+	p.featureEnforcement.Store(mode)
+}
+
+func (p *Proxy) featureEnforcementMode() string {
+	if v := p.featureEnforcement.Load(); v != nil {
+		return v.(string)
+	}
+	return model.FeatureCapabilityEnforcementObserve
 }
 
 // breakerFor returns the circuit breaker for a provider, creating one if needed.

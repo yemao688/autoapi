@@ -74,6 +74,7 @@ type StoreService interface {
 	SetProviderEnabled(id string, enabled bool) error
 	ListProviderCapabilities(providerID string) ([]model.ProviderCapability, error)
 	SetProviderCapability(providerID, protocol, feature string, enabled bool) error
+	DeleteProviderFeatureCapability(providerID, protocol, feature string) error
 	ListModelCapabilities(providerID, modelName string) ([]model.ModelCapability, error)
 	SetModelCapability(providerID, modelName, protocol, feature string, enabled bool) error
 	DeleteModelCapability(providerID, modelName, protocol, feature string) error
@@ -722,6 +723,20 @@ func (a *App) SetProviderFeatureCapability(providerID, protocol, feature string,
 		return fmt.Errorf("use SetProviderCapability to configure the native protocol capability")
 	}
 	return a.deps.Store.SetProviderCapability(providerID, protocol, feature, enabled)
+}
+
+func (a *App) DeleteProviderFeatureCapability(providerID, protocol, feature string) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	providerID, protocol, feature = strings.TrimSpace(providerID), strings.TrimSpace(protocol), strings.TrimSpace(feature)
+	if providerID == "" || protocol == "" || feature == "" {
+		return fmt.Errorf("provider, protocol and feature are required")
+	}
+	if feature == "native" {
+		return fmt.Errorf("use SetProviderCapability to configure the native protocol capability")
+	}
+	return a.deps.Store.DeleteProviderFeatureCapability(providerID, protocol, feature)
 }
 
 func (a *App) TestProvider(id string) (*model.ProviderTestResult, error) {

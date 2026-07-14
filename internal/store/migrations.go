@@ -521,6 +521,33 @@ INNER JOIN models m ON m.provider_id = c.provider_id AND m.name = c.model_name;
 DROP TABLE model_capabilities;
 ALTER TABLE model_capabilities_new RENAME TO model_capabilities;`,
 	},
+	{
+		ID: "029_provider_capabilities_provider_fk",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) {
+			return tableHasFKToParent(tx, "provider_capabilities", "providers", "provider_id", "id", "NO ACTION", "CASCADE")
+		},
+		SQL: `-- Rebuild provider_capabilities with a foreign key to providers(id). Orphan rows whose
+-- provider no longer exists are discarded; Set/Delete also validates provider existence to avoid
+-- creating new orphans before this migration runs.
+CREATE TABLE provider_capabilities_new (
+    provider_id TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    feature TEXT NOT NULL DEFAULT 'native',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(provider_id, protocol, feature),
+    FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+);
+
+INSERT INTO provider_capabilities_new(provider_id, protocol, feature, enabled, source, updated_at)
+SELECT c.provider_id, c.protocol, c.feature, c.enabled, c.source, c.updated_at
+FROM provider_capabilities c
+INNER JOIN providers p ON p.id = c.provider_id;
+
+DROP TABLE provider_capabilities;
+ALTER TABLE provider_capabilities_new RENAME TO provider_capabilities;`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists
@@ -750,6 +777,12 @@ func tableExists(tx *sql.Tx, table string) (bool, error) {
 		return false, fmt.Errorf("store: check table exists: %w", err)
 	}
 	return true, nil
+}
+
+// tableHasFKToParent reports whether the named table has a single-column foreign key
+// to parentTable on (childColumn -> parentColumn) with the specified actions.
+func tableHasFKToParent(tx *sql.Tx, table, parentTable, childColumn, parentColumn, onUpdate, onDelete string) (bool, error) {
+	return tableHasCompositeFK(tx, table, parentTable, map[string]string{childColumn: parentColumn}, onUpdate, onDelete)
 }
 
 // tableHasCompositeFK reports whether the named table has a complete composite

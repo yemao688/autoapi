@@ -46,6 +46,10 @@ export function DeleteProvider(arg1) {
   return window['go']['api']['App']['DeleteProvider'](arg1);
 }
 
+export function DeleteProviderFeatureCapability(arg1, arg2, arg3) {
+  return window['go']['api']['App']['DeleteProviderFeatureCapability'](arg1, arg2, arg3);
+}
+
 export function EnterBackground() {
   return window['go']['api']['App']['EnterBackground']();
 }

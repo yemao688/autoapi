@@ -39,6 +39,7 @@ type mockStore struct {
 	modelCapabilities      []model.ModelCapability
 	bulkModelCapabilityErr error
 	bulkModelRefs          []model.ProviderModelRef
+	getSettingsCalls       int
 
 	mu          sync.Mutex
 	statsDeltas map[string]struct {
@@ -140,6 +141,7 @@ func (m *mockStore) GetModel(providerID, name string) (*model.Model, error) {
 }
 
 func (m *mockStore) GetSettings() (*model.Settings, error) {
+	m.getSettingsCalls++
 	if m.settings != nil {
 		return m.settings, nil
 	}
@@ -4796,6 +4798,27 @@ func TestConversionRejectsBeforeUpstreamAttempt(t *testing.T) {
 	}
 	if upstreamHits != 0 {
 		t.Fatalf("expected no upstream hits, got %d", upstreamHits)
+	}
+}
+
+func TestFeatureEnforcementCachedNoPerRequestSettingsQuery(t *testing.T) {
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true, MessagesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+	}
+	if store.getSettingsCalls != 1 {
+		t.Fatalf("expected one GetSettings call (at construction), got %d", store.getSettingsCalls)
 	}
 }
 

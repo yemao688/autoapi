@@ -222,6 +222,8 @@ func messagesToResponsesInput(raw json.RawMessage) ([]byte, error) {
 					return nil, errors.New("image content blocks are not supported for protocol conversion")
 				case "thinking":
 					return nil, errors.New("thinking content blocks are not supported for protocol conversion")
+				default:
+					return nil, fmt.Errorf("unsupported content block type for protocol conversion: %s", b.Type)
 				}
 			}
 			if len(content) > 0 {
@@ -244,12 +246,16 @@ func messagesToResponsesInput(raw json.RawMessage) ([]byte, error) {
 					return nil, errors.New("image content blocks are not supported for protocol conversion")
 				case "thinking":
 					return nil, errors.New("thinking content blocks are not supported for protocol conversion")
+				default:
+					return nil, fmt.Errorf("unsupported content block type for protocol conversion: %s", b.Type)
 				}
 			}
 			if len(content) > 0 {
 				cb, _ := json.Marshal(content)
 				out = append(out, responseItem{Role: "assistant", Content: cb})
 			}
+		default:
+			return nil, fmt.Errorf("unsupported message role for protocol conversion: %s", msg.Role)
 		}
 	}
 	return json.Marshal(out)
@@ -276,6 +282,9 @@ func responsesInputToMessages(raw json.RawMessage) ([]byte, error) {
 		case "function_call_output":
 			out = append(out, messageItem{Role: "user", Content: mustJSON([]contentBlock{{Type: "tool_result", ToolUseID: item.CallID, Content: wrapToolOutput(item.Output)}})})
 		default:
+			if item.Type != "" && item.Type != "message" {
+				return nil, fmt.Errorf("unsupported Responses input item type: %s", item.Type)
+			}
 			blocks, err := responsesContentToMessagesBlocks(item.Content)
 			if err != nil {
 				return nil, err
@@ -323,8 +332,11 @@ func responsesContentToMessagesBlocks(raw json.RawMessage) ([]contentBlock, erro
 	}
 	out := make([]contentBlock, 0, len(blocks))
 	for _, b := range blocks {
-		if b.Type == "input_text" || b.Type == "output_text" || b.Type == "text" {
+		switch b.Type {
+		case "input_text", "output_text", "text":
 			out = append(out, contentBlock{Type: "text", Text: b.Text})
+		default:
+			return nil, fmt.Errorf("unsupported Responses content block type: %s", b.Type)
 		}
 	}
 	return out, nil
@@ -365,7 +377,7 @@ func responsesToolsToAnthropic(raw json.RawMessage) ([]byte, error) {
 	out := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "function" {
-			continue
+			return nil, fmt.Errorf("unsupported Responses tool type: %s", t.Type)
 		}
 		out = append(out, map[string]any{"name": t.Name, "description": t.Description, "input_schema": t.Parameters})
 	}
@@ -388,6 +400,8 @@ func responsesOutputToMessagesBlocks(items []responseItem) ([]byte, error) {
 				return nil, err
 			}
 			out = append(out, contentBlock{Type: "tool_use", ID: firstNonEmpty(item.CallID, item.ID), Name: item.Name, Input: input})
+		default:
+			return nil, fmt.Errorf("unsupported Responses output item type: %s", item.Type)
 		}
 	}
 	return json.Marshal(out)
@@ -410,6 +424,8 @@ func messagesBlocksToResponsesOutput(blocks []contentBlock) ([]byte, error) {
 			return nil, errors.New("thinking content blocks are not supported for protocol conversion")
 		case "image":
 			return nil, errors.New("image content blocks are not supported for protocol conversion")
+		default:
+			return nil, fmt.Errorf("unsupported content block type for protocol conversion: %s", b.Type)
 		}
 	}
 	if len(text) > 0 {

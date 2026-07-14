@@ -3,9 +3,47 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"autoapi/internal/model"
+)
+
+// Allowed provider capability protocols. Must stay in sync with proxy protocol constants.
+var (
+	providerCapabilityProtocols = map[string]bool{
+		"openai_responses":   true,
+		"anthropic_messages": true,
+		"gemini":             true,
+		"openai_chat":        true,
+		"openai":             true,
+	}
+
+	// providerCapabilityFeatures allows the legacy 'native' capability plus every
+	// canonical feature. Unknown feature strings are rejected to keep the capability
+	// snapshot deterministic.
+	providerCapabilityFeatures = func() map[string]bool {
+		m := map[string]bool{
+			"native": true,
+			"model":  true,
+		}
+		for _, f := range []model.Feature{
+			model.FeatureTools,
+			model.FeatureVision,
+			model.FeatureReasoning,
+			model.FeatureStructuredOutput,
+			model.FeatureStateful,
+			model.FeatureCacheControl,
+			model.FeatureAudio,
+			model.FeatureDocument,
+			model.FeatureStreaming,
+		} {
+			m[string(f)] = true
+		}
+		return m
+	}()
+
+	providerIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 )
 
 func (s *Store) ListProviderCapabilities(providerID string) ([]model.ProviderCapability, error) {
@@ -96,11 +134,30 @@ func (s *Store) listCapabilities(suffix string, args ...any) ([]model.ProviderCa
 }
 
 func (s *Store) SetProviderCapability(providerID, protocol, feature string, enabled bool) error {
+	if providerID == "" {
+		return fmt.Errorf("store: provider_id is required")
+	}
+	if !providerIDPattern.MatchString(providerID) {
+		return fmt.Errorf("store: provider_id contains invalid characters")
+	}
+	if !providerCapabilityProtocols[protocol] {
+		return fmt.Errorf("store: unsupported protocol %q", protocol)
+	}
 	if feature == "" {
 		feature = "native"
 	}
+	if !providerCapabilityFeatures[feature] {
+		return fmt.Errorf("store: unsupported feature %q", feature)
+	}
 	now := nowMs()
 	return s.execTx(func(tx *sql.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM providers WHERE id=?)`, providerID).Scan(&exists); err != nil {
+			return fmt.Errorf("store: check provider exists: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("store: provider %q does not exist", providerID)
+		}
 		_, err := tx.Exec(`
 			INSERT INTO provider_capabilities (provider_id, protocol, feature, enabled, source, updated_at)
 			VALUES (?, ?, ?, ?, 'manual', ?)
@@ -110,11 +167,44 @@ func (s *Store) SetProviderCapability(providerID, protocol, feature string, enab
 			return fmt.Errorf("store: set provider capability: %w", err)
 		}
 		if feature == "native" {
-			if column := legacyCapabilityColumn(protocol); column != "" {
+			column := legacyCapabilityColumn(protocol)
+			if column != "" {
 				if _, err := tx.Exec(`UPDATE providers SET `+column+`=? WHERE id=?`, boolInt(enabled), providerID); err != nil {
 					return err
 				}
 			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) DeleteProviderFeatureCapability(providerID, protocol, feature string) error {
+	if providerID == "" {
+		return fmt.Errorf("store: provider_id is required")
+	}
+	if !providerIDPattern.MatchString(providerID) {
+		return fmt.Errorf("store: provider_id contains invalid characters")
+	}
+	if !providerCapabilityProtocols[protocol] {
+		return fmt.Errorf("store: unsupported protocol %q", protocol)
+	}
+	if feature == "" || feature == "native" {
+		return fmt.Errorf("store: deleting the native capability is not supported through this method")
+	}
+	if !providerCapabilityFeatures[feature] {
+		return fmt.Errorf("store: unsupported feature %q", feature)
+	}
+	return s.execTx(func(tx *sql.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM providers WHERE id=?)`, providerID).Scan(&exists); err != nil {
+			return fmt.Errorf("store: check provider exists: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("store: provider %q does not exist", providerID)
+		}
+		_, err := tx.Exec(`DELETE FROM provider_capabilities WHERE provider_id=? AND protocol=? AND feature=?`, providerID, protocol, feature)
+		if err != nil {
+			return fmt.Errorf("store: delete provider capability: %w", err)
 		}
 		return nil
 	})

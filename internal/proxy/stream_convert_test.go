@@ -62,8 +62,8 @@ func TestResponsesToMessagesStreamTerminalAndUnknown(t *testing.T) {
 	}
 	c = newResponsesToMessagesStreamConverter()
 	out, err = c.Write([]byte("event: response.reasoning.delta\ndata: {\"type\":\"response.reasoning.delta\",\"delta\":\"secret\"}\n\n"))
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported Responses stream event type") {
+		t.Fatalf("reasoning delta was not rejected: out=%s err=%v", out, err)
 	}
 	if strings.Contains(string(out), "text_delta") || strings.Contains(string(out), "secret") {
 		t.Fatalf("reasoning became text: %s", out)
@@ -173,5 +173,94 @@ func TestMessagesToResponsesStreamSSEFraming(t *testing.T) {
 	}
 	if len(out)+len(tail) == 0 || !strings.Contains(string(append(out, tail...)), "response.created") {
 		t.Fatal("EOF tail event was dropped")
+	}
+}
+
+func TestResponsesToMessagesStreamUnknownOutputItem(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	out, err := c.Write([]byte("event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"id\":\"r1\"}}\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported Responses output item type") {
+		t.Fatalf("unknown output item was not rejected: out=%s err=%v", out, err)
+	}
+}
+
+func TestResponsesToMessagesStreamUnknownEventType(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	out, err := c.Write([]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{}}\n\nevent: response.unknown\ndata: {\"type\":\"response.unknown\"}\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported Responses stream event type") {
+		t.Fatalf("unknown event was not rejected: out=%s err=%v", out, err)
+	}
+	if strings.Contains(string(out), "response.unknown") {
+		t.Fatalf("unknown event was forwarded: %s", out)
+	}
+}
+
+func TestResponsesToMessagesStreamContentPartUnsupported(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	_, err := c.Write([]byte("event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"}}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"reasoning\"}}\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported Responses content part type") {
+		t.Fatalf("unsupported content part was not rejected: err=%v", err)
+	}
+}
+
+func TestMessagesToResponsesStreamUnsupportedBlock(t *testing.T) {
+	c := newMessagesToResponsesStreamConverter()
+	out, err := c.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"thinking\"}}\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported stream content block type") {
+		t.Fatalf("unsupported block was not rejected: out=%s err=%v", out, err)
+	}
+}
+
+func TestMessagesToResponsesStreamUnknownDelta(t *testing.T) {
+	c := newMessagesToResponsesStreamConverter()
+	out, err := c.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"x\"}}\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported stream content block delta type") {
+		t.Fatalf("unsupported delta was not rejected: out=%s err=%v", out, err)
+	}
+}
+
+func TestMessagesToResponsesStreamUnknownEvent(t *testing.T) {
+	c := newMessagesToResponsesStreamConverter()
+	out, err := c.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\nevent: custom.event\ndata: {\"type\":\"custom.event\"}\n\n"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported stream event type") {
+		t.Fatalf("unknown event was not rejected: out=%s err=%v", out, err)
+	}
+}
+
+func TestMessagesToResponsesStreamAllowsPing(t *testing.T) {
+	c := newMessagesToResponsesStreamConverter()
+	out, err := c.Write([]byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"))
+	if err != nil || len(out) != 0 {
+		t.Fatalf("ping should be ignored: out=%s err=%v", out, err)
+	}
+}
+
+func TestMessagesToResponsesStreamErrorDoesNotSynthesizeTerminal(t *testing.T) {
+	c := newMessagesToResponsesStreamConverter()
+	_, err := c.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"thinking\"}}\n\n"))
+	if err == nil {
+		t.Fatal("expected conversion error")
+	}
+	out, cerr := c.Close()
+	if cerr != nil {
+		t.Fatalf("close returned error: %v", cerr)
+	}
+	if strings.Contains(string(out), "response.completed") {
+		t.Fatalf("close synthesized terminal after conversion error: %s", out)
+	}
+}
+
+func TestResponsesToMessagesStreamErrorDoesNotSynthesizeTerminal(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	_, err := c.Write([]byte("event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\"}}\n\n"))
+	if err == nil {
+		t.Fatal("expected conversion error")
+	}
+	out, cerr := c.Close()
+	if cerr != nil {
+		t.Fatalf("close returned error: %v", cerr)
+	}
+	if strings.Contains(string(out), "message_stop") {
+		t.Fatalf("close synthesized terminal after conversion error: %s", out)
 	}
 }
