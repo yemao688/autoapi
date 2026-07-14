@@ -323,10 +323,24 @@ func responsesInputToChat(raw, instructions json.RawMessage) ([]map[string]any, 
 	}
 	seenCalls := map[string]bool{}
 	results := map[string]bool{}
+	activeCalls := make([]map[string]any, 0)
+	hadCallGroup := false
+	outputsStarted := false
+	flushCalls := func() {
+		if len(activeCalls) > 0 {
+			calls := append([]map[string]any(nil), activeCalls...)
+			out = append(out, map[string]any{"role": "assistant", "tool_calls": calls})
+			hadCallGroup = true
+			activeCalls = activeCalls[:0]
+		}
+	}
 	for _, item := range items {
 		var typ string
 		_ = json.Unmarshal(item["type"], &typ)
 		if typ == "function_call" {
+			if outputsStarted {
+				return nil, fmt.Errorf("function_call after function_call_output is not supported")
+			}
 			var callID, name, args string
 			if json.Unmarshal(item["call_id"], &callID) != nil || callID == "" || json.Unmarshal(item["name"], &name) != nil || name == "" || json.Unmarshal(item["arguments"], &args) != nil {
 				return nil, fmt.Errorf("function_call requires call_id, name and arguments")
@@ -338,10 +352,20 @@ func responsesInputToChat(raw, instructions json.RawMessage) ([]map[string]any, 
 				return nil, fmt.Errorf("duplicate function call id %q", callID)
 			}
 			seenCalls[callID] = true
-			out = append(out, map[string]any{"role": "assistant", "tool_calls": []map[string]any{{"id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": args}}}})
+			activeCalls = append(activeCalls, map[string]any{"id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": args}})
 			continue
 		}
 		if typ == "function_call_output" {
+			if !hadCallGroup && len(activeCalls) == 0 {
+				return nil, fmt.Errorf("function_call_output has no preceding function_call group")
+			}
+			flushCalls()
+			outputsStarted = true
+			// After flushing, activeCalls must be empty; if any calls remain
+			// (shouldn't because flushCalls empties them), that's an error.
+			if len(activeCalls) > 0 {
+				return nil, fmt.Errorf("function_call_output interleaved with pending function_call group")
+			}
 			var callID string
 			if json.Unmarshal(item["call_id"], &callID) != nil || callID == "" || !seenCalls[callID] || results[callID] {
 				return nil, fmt.Errorf("function_call_output has invalid or duplicate call_id")
@@ -357,6 +381,16 @@ func responsesInputToChat(raw, instructions json.RawMessage) ([]map[string]any, 
 		if typ != "" && typ != "message" {
 			return nil, fmt.Errorf("unsupported Responses input item type %q", typ)
 		}
+		if outputsStarted {
+			return nil, fmt.Errorf("message interleaved after function_call_output")
+		}
+		if len(activeCalls) > 0 {
+			return nil, fmt.Errorf("message interleaved with pending function_call group")
+		}
+		if hadCallGroup {
+			return nil, fmt.Errorf("message after function_call group is not supported")
+		}
+		flushCalls()
 		var role string
 		if json.Unmarshal(item["role"], &role) != nil || role == "" {
 			return nil, fmt.Errorf("Responses message role is required")
@@ -374,6 +408,7 @@ func responsesInputToChat(raw, instructions json.RawMessage) ([]map[string]any, 
 		}
 		out = append(out, map[string]any{"role": role, "content": text})
 	}
+	flushCalls()
 	return out, nil
 }
 
@@ -433,6 +468,9 @@ func chatToResponsesResponse(body []byte, clientModel string) ([]byte, error) {
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
 	}
+	if err := validateChatResponseWire(body); err != nil {
+		return nil, err
+	}
 	if len(resp.Choices) != 1 {
 		return nil, fmt.Errorf("Chat response choices must contain exactly one choice")
 	}
@@ -482,7 +520,7 @@ func chatToResponsesResponse(body []byte, clientModel string) ([]byte, error) {
 		}
 	}
 	seen := map[string]bool{}
-	for _, call := range choice.Message.ToolCalls {
+	for callIndex, call := range choice.Message.ToolCalls {
 		if call.Type != "function" || call.ID == "" || call.Function.Name == "" || seen[call.ID] {
 			return nil, fmt.Errorf("invalid Chat function call")
 		}
@@ -490,7 +528,7 @@ func chatToResponsesResponse(body []byte, clientModel string) ([]byte, error) {
 			return nil, err
 		}
 		seen[call.ID] = true
-		output = append(output, map[string]any{"type": "function_call", "id": call.ID, "call_id": call.ID, "name": call.Function.Name, "arguments": call.Function.Arguments})
+		output = append(output, map[string]any{"type": "function_call", "id": fmt.Sprintf("fc_%d", callIndex), "call_id": call.ID, "name": call.Function.Name, "arguments": call.Function.Arguments})
 	}
 	status := "completed"
 	var incompleteDetails any
@@ -546,6 +584,9 @@ func responsesToChatResponse(body []byte, clientModel string) ([]byte, error) {
 		Usage json.RawMessage `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	if err := validateResponsesOutputWire(body); err != nil {
 		return nil, err
 	}
 	if resp.Status != "completed" && resp.Status != "incomplete" {
@@ -604,6 +645,9 @@ func responsesToChatResponse(body []byte, clientModel string) ([]byte, error) {
 	}
 	if resp.Status == "incomplete" {
 		finish = "length"
+		if resp.IncompleteDetails.Reason == "content_filter" {
+			finish = "content_filter"
+		}
 	}
 	usage, err := responsesUsageToChat(resp.Usage)
 	if err != nil {
@@ -731,4 +775,117 @@ func responsesUsageToChat(raw json.RawMessage) (map[string]any, error) {
 		result["completion_tokens_details"] = outDetails
 	}
 	return result, nil
+}
+
+func validateChatResponseWire(raw []byte) error {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil {
+		return fmt.Errorf("invalid Chat response")
+	}
+	var choices []json.RawMessage
+	if json.Unmarshal(envelope["choices"], &choices) != nil {
+		return fmt.Errorf("Chat choices must be an array")
+	}
+	for _, rawChoice := range choices {
+		var choice map[string]json.RawMessage
+		if json.Unmarshal(rawChoice, &choice) != nil {
+			return fmt.Errorf("Chat choice must be an object")
+		}
+		if err := rejectWireKeys(choice, "index", "message", "finish_reason"); err != nil {
+			return err
+		}
+		var message map[string]json.RawMessage
+		if json.Unmarshal(choice["message"], &message) != nil {
+			return fmt.Errorf("Chat message must be an object")
+		}
+		if err := rejectWireKeys(message, "role", "content", "tool_calls"); err != nil {
+			return err
+		}
+		if calls, ok := message["tool_calls"]; ok {
+			var list []json.RawMessage
+			if json.Unmarshal(calls, &list) != nil {
+				return fmt.Errorf("tool_calls must be an array")
+			}
+			for _, rawCall := range list {
+				var call map[string]json.RawMessage
+				if json.Unmarshal(rawCall, &call) != nil {
+					return fmt.Errorf("tool call must be an object")
+				}
+				if err := rejectWireKeys(call, "id", "type", "function"); err != nil {
+					return err
+				}
+				var fn map[string]json.RawMessage
+				if json.Unmarshal(call["function"], &fn) != nil {
+					return fmt.Errorf("function must be an object")
+				}
+				if err := rejectWireKeys(fn, "name", "arguments"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateResponsesOutputWire(raw []byte) error {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil {
+		return fmt.Errorf("invalid Responses response")
+	}
+	var output []json.RawMessage
+	if json.Unmarshal(envelope["output"], &output) != nil {
+		return fmt.Errorf("Responses output must be an array")
+	}
+	for _, rawItem := range output {
+		var item map[string]json.RawMessage
+		if json.Unmarshal(rawItem, &item) != nil {
+			return fmt.Errorf("Responses output item must be an object")
+		}
+		var typ string
+		_ = json.Unmarshal(item["type"], &typ)
+		switch typ {
+		case "message":
+			if err := rejectWireKeys(item, "type", "role", "content", "id", "status"); err != nil {
+				return err
+			}
+			var content []json.RawMessage
+			if json.Unmarshal(item["content"], &content) != nil {
+				return fmt.Errorf("Responses message content must be an array")
+			}
+			for _, rawBlock := range content {
+				var block map[string]json.RawMessage
+				if json.Unmarshal(rawBlock, &block) != nil {
+					return fmt.Errorf("Responses content block must be an object")
+				}
+				if err := rejectWireKeys(block, "type", "text", "annotations", "logprobs", "refusal"); err != nil {
+					return err
+				}
+				for _, key := range []string{"annotations", "logprobs", "refusal"} {
+					if nonEmptyJSON(block[key]) {
+						return fmt.Errorf("unsupported Responses content metadata %q", key)
+					}
+				}
+			}
+		case "function_call":
+			if err := rejectWireKeys(item, "type", "id", "call_id", "name", "arguments", "status"); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported Responses output item type %q", typ)
+		}
+	}
+	return nil
+}
+
+func rejectWireKeys(obj map[string]json.RawMessage, allowed ...string) error {
+	set := map[string]bool{}
+	for _, key := range allowed {
+		set[key] = true
+	}
+	for key := range obj {
+		if !set[key] {
+			return fmt.Errorf("unsupported response field %q", key)
+		}
+	}
+	return nil
 }

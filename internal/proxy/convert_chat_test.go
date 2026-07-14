@@ -85,6 +85,63 @@ func TestResponsesFunctionCallRequiresCallIDAndToolOutputString(t *testing.T) {
 	}
 }
 
+func TestResponsesMultipleFunctionCallsGroupIntoOneAssistantMessage(t *testing.T) {
+	out, err := responsesToChatRequest([]byte(`{"model":"m","input":[{"type":"function_call","call_id":"a","name":"one","arguments":"{}"},{"type":"function_call","call_id":"b","name":"two","arguments":"{}"},{"type":"function_call_output","call_id":"a","output":"ra"},{"type":"function_call_output","call_id":"b","output":"rb"}]}`), "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	msgs := got["messages"].([]any)
+	if len(msgs) != 3 || msgs[0].(map[string]any)["role"] != "assistant" || len(msgs[0].(map[string]any)["tool_calls"].([]any)) != 2 || msgs[1].(map[string]any)["tool_call_id"] != "a" || msgs[2].(map[string]any)["tool_call_id"] != "b" {
+		t.Fatalf("messages=%#v", msgs)
+	}
+	for _, input := range []string{
+		`{"model":"m","input":[{"type":"function_call_output","call_id":"a","output":"x"}]}`,
+		`{"model":"m","input":[{"type":"function_call","call_id":"a","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"a","output":"x"},{"type":"function_call","call_id":"b","name":"g","arguments":"{}"}]}`,
+		`{"model":"m","input":[{"type":"function_call","call_id":"a","name":"f","arguments":"{}"},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},{"type":"function_call","call_id":"b","name":"g","arguments":"{}"},{"type":"function_call_output","call_id":"a","output":"x"}]}`,
+		`{"model":"m","input":[{"type":"function_call","call_id":"a","name":"f","arguments":"{}"},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},{"type":"function_call_output","call_id":"a","output":"x"}]}`,
+		`{"model":"m","input":[{"type":"function_call","call_id":"a","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"a","output":"x"},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`,
+		`{"model":"m","input":[{"type":"function_call","call_id":"a","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"a","output":"x"},{"type":"function_call","call_id":"b","name":"g","arguments":"{}"},{"type":"function_call_output","call_id":"b","output":"y"}]}`,
+	} {
+		if _, err := responsesToChatRequest([]byte(input), "u"); err == nil {
+			t.Fatalf("invalid grouping accepted: %s", input)
+		}
+	}
+}
+
+func TestResponsesFunctionCallIDUniqueAndNotEqualToCallID(t *testing.T) {
+	body := []byte(`{"id":"c","choices":[{"index":0,"message":{"role":"assistant","content":"done","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}},{"id":"call_2","type":"function","function":{"name":"g","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+	out, err := chatToResponsesResponse(body, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, item := range got["output"].([]any) {
+		m := item.(map[string]any)
+		if m["type"] != "function_call" {
+			continue
+		}
+		id, callID := m["id"].(string), m["call_id"].(string)
+		if id == callID {
+			t.Fatalf("function_call id must not equal call_id: %s", id)
+		}
+		if ids[id] {
+			t.Fatalf("duplicate function_call item id: %s", id)
+		}
+		ids[id] = true
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 function_call items, got %d", len(ids))
+	}
+}
+
 func TestChatResponseToResponsesStatusUsageAndTools(t *testing.T) {
 	body := []byte(`{"id":"chat_1","choices":[{"index":0,"message":{"role":"assistant","content":"done","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`)
 	out, err := chatToResponsesResponse(body, "client")
@@ -114,6 +171,23 @@ func TestChatContentFilterMapsToResponsesIncomplete(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"status":"incomplete"`) || !strings.Contains(string(out), `"reason":"content_filter"`) {
 		t.Fatalf("output=%s", out)
+	}
+}
+
+func TestResponsesContentFilterMapsToChatContentFilter(t *testing.T) {
+	out, err := responsesToChatResponse([]byte(`{"id":"r","status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[]}`), "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"finish_reason":"content_filter"`) {
+		t.Fatalf("output=%s", out)
+	}
+	max, err := responsesToChatResponse([]byte(`{"id":"r","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}`), "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(max), `"finish_reason":"length"`) {
+		t.Fatalf("output=%s", max)
 	}
 }
 
