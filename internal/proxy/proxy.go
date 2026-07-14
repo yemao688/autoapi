@@ -762,10 +762,8 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	candidates, err := selectCandidates(req, rules, breakers, lookup, capabilities)
 	if err != nil {
-		// Conversion fallback is only defined between Anthropic Messages and
-		// OpenAI Responses. For all other inbound protocols the native error
-		// is authoritative.
-		if req.Protocol != ProtocolAnthropicMessages && req.Protocol != ProtocolOpenAIResponses {
+		// Conversion fallback is defined by the static conversion-edge registry.
+		if req.Protocol != ProtocolAnthropicMessages && req.Protocol != ProtocolOpenAIResponses && req.Protocol != ProtocolOpenAIChat {
 			return nil, err
 		}
 		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, lookup, capabilities)
@@ -882,6 +880,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
+	lastFailureWasConversion := false
 	// lastCandidate tracks the most recently iterated candidate so the
 	// all-candidates-exhausted branch below can populate log provider fields
 	// when no candidate produced a successful response.
@@ -910,6 +909,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// client-abort paths are unaffected.
 outer:
 	for _, c := range candidates {
+		lastFailureWasConversion = false
 		var adapter ProtocolAdapter = nativeAdapter{}
 		if c.convertTo != "" {
 			adapter = conversionAdapter{from: c.protocol, to: c.convertTo}
@@ -1286,6 +1286,7 @@ outer:
 					out, err := prep.ConvertResponse(buf.body.Bytes())
 					if err != nil {
 						lastErr = fmt.Errorf("convert response from %s: %w", c.provider.Name, err)
+						lastFailureWasConversion = true
 						attemptOrder++
 						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
 							UpstreamStarted:      true,
@@ -1310,15 +1311,7 @@ outer:
 						if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
 							slog.Error("proxy: update provider health", "err", err)
 						}
-						p.writeError(w, http.StatusBadGateway, "upstream_error", lastErr.Error())
-						logEntry.StatusCode = http.StatusBadGateway
-						logEntry.Error = lastErr.Error()
-						logEntry.ProviderID = c.provider.ID
-						logEntry.ProviderName = c.provider.Name
-						logEntry.Model = c.modelName
-						logEntry.RouteID = c.ruleID
-						logEntry.RouteLabel = c.ruleLabel
-						return
+						continue outer
 					}
 					buf.body = bytes.NewBuffer(out)
 					buf.header.Del("Content-Length")
@@ -1525,7 +1518,7 @@ outer:
 		lastErr = fmt.Errorf("no available provider: all circuits open")
 	}
 	status := http.StatusBadGateway
-	if lastStatus >= 500 {
+	if !lastFailureWasConversion && lastStatus >= 500 {
 		status = http.StatusServiceUnavailable
 	}
 	p.writeError(w, status, "upstream_error", lastErr.Error())

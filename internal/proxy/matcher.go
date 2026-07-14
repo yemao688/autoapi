@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,6 +80,46 @@ type candidate struct {
 	convertTo                  Protocol
 }
 
+type conversionEdge struct {
+	From           Protocol
+	To             Protocol
+	UpstreamPath   string
+	Priority       int
+	SupportsStream bool
+	Preserves      func(*InboundRequest) bool
+}
+
+var conversionEdges = []conversionEdge{
+	{From: ProtocolAnthropicMessages, To: ProtocolOpenAIResponses, UpstreamPath: "/v1/responses", Priority: 10, SupportsStream: true, Preserves: preservesTextTools},
+	{From: ProtocolOpenAIResponses, To: ProtocolAnthropicMessages, UpstreamPath: "/v1/messages", Priority: 10, SupportsStream: true, Preserves: preservesTextTools},
+	{From: ProtocolOpenAIChat, To: ProtocolOpenAIResponses, UpstreamPath: "/v1/responses", Priority: 10, SupportsStream: false, Preserves: preservesTextTools},
+	{From: ProtocolOpenAIResponses, To: ProtocolOpenAIChat, UpstreamPath: "/v1/chat/completions", Priority: 20, SupportsStream: false, Preserves: preservesTextTools},
+}
+
+func preservesTextTools(req *InboundRequest) bool {
+	if req.Requirements == nil {
+		return true
+	}
+	if req.Requirements.NativeOnly || req.Requirements.UnknownSemantic {
+		return false
+	}
+	for _, feature := range req.Requirements.Features {
+		if feature != model.FeatureTools && feature != model.FeatureStreaming {
+			return false
+		}
+	}
+	return true
+}
+
+func edgeFor(from, to Protocol) (conversionEdge, bool) {
+	for _, edge := range conversionEdges {
+		if edge.From == from && edge.To == to {
+			return edge, true
+		}
+	}
+	return conversionEdge{}, false
+}
+
 func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error), snapshots ...capabilitySnapshot) ([]candidate, error) {
 	capabilities := capabilitySnapshot{}
 	if len(snapshots) > 0 {
@@ -89,23 +130,20 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		return nil, fmt.Errorf("%w: %s", errNoMatch, req.Model)
 	}
 
-	var to Protocol
-	var upstreamPath string
-	switch req.Protocol {
-	case ProtocolAnthropicMessages:
-		to, upstreamPath = ProtocolOpenAIResponses, "/v1/responses"
-	case ProtocolOpenAIResponses:
-		to, upstreamPath = ProtocolAnthropicMessages, "/v1/messages"
-	default:
+	var edges []conversionEdge
+	for _, edge := range conversionEdges {
+		if edge.From == req.Protocol {
+			edges = append(edges, edge)
+		}
+	}
+	if len(edges) == 0 {
 		return nil, fmt.Errorf("no conversion fallback for protocol %q", req.Protocol)
 	}
-
-	// First determine whether there is at least one "basic" conversion
-	// candidate: enabled target, enabled provider, closed breaker, and the
-	// target protocol is supported. Without such a candidate the conversion
-	// path is genuinely unavailable and must surface as a regular 503, even
-	// if the request requires features that cannot be preserved.
+	sort.SliceStable(edges, func(i, j int) bool { return edges[i].Priority < edges[j].Priority })
+	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
+	var out []candidate
 	basicAvailable := false
+	var rejected bool
 	for _, t := range rule.Targets {
 		if !t.Enabled {
 			continue
@@ -124,98 +162,58 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		if _, exists := capabilities.providers[p.ID]; !exists {
 			capabilities.providers[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p}).providers[p.ID]
 		}
-		if capabilities.supportsModel(p.ID, modelName, to) {
+		for _, edge := range edges {
+			if !capabilities.supportsModel(p.ID, modelName, edge.To) {
+				continue
+			}
 			basicAvailable = true
+			if req.Stream && !edge.SupportsStream {
+				rejected = true
+				continue
+			}
+			if !edge.Preserves(req) {
+				rejected = true
+				continue
+			}
+			featureOK := true
+			if req.Requirements != nil {
+				for _, feature := range req.Requirements.Features {
+					if feature == model.FeatureStreaming && !edge.SupportsStream {
+						featureOK = false
+						break
+					}
+					supported, _ := capabilities.featureEnabled(p.ID, modelName, edge.To, string(feature), true)
+					if !supported {
+						featureOK = false
+						break
+					}
+				}
+			}
+			if !featureOK {
+				rejected = true
+				continue
+			}
+			out = append(out, candidate{
+				provider:                   p,
+				modelName:                  modelName,
+				protocol:                   req.Protocol,
+				upstreamPath:               edge.UpstreamPath,
+				ruleID:                     rule.ID,
+				ruleLabel:                  rule.Name,
+				targetID:                   t.ID,
+				maxRetries:                 t.MaxRetries,
+				firstByteBudget:            firstByteBudget,
+				targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds),
+				tier:                       t.Tier,
+				strategy:                   routing.Strategy(rule.Strategy),
+				convertTo:                  edge.To,
+			})
 			break
 		}
 	}
-	if !basicAvailable {
-		return nil, fmt.Errorf("no available conversion provider for model %q", req.Model)
-	}
-
-	// Messages<->Responses conversion is restricted to text/system/tools/tool
-	// results and the supported streaming edge. Do this only after confirming a
-	// basic conversion path exists: otherwise the request is ordinary routing
-	// unavailability (503), not a preservation failure (422).
-	if req.Requirements != nil {
-		for _, f := range req.Requirements.Features {
-			switch f {
-			case model.FeatureTools, model.FeatureStreaming:
-				continue
-			}
-			return nil, fmt.Errorf("%w: conversion cannot preserve feature %q", errUnsupportedFeature, f)
-		}
-		if req.Requirements.NativeOnly || req.Requirements.UnknownSemantic {
-			return nil, fmt.Errorf("%w: request contains native-only semantics", errUnsupportedFeature)
-		}
-	}
-
-	// Static stream-conversion edge is a conversion limitation, not a feature
-	// capability mismatch. Treat it as unsupported_feature when a basic path
-	// exists.
-	if req.Stream && !supportsStreamConversion(req.Protocol, to) {
-		return nil, fmt.Errorf("%w: streaming not supported for conversion %s->%s", errUnsupportedFeature, req.Protocol, to)
-	}
-
-	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
-	var out []candidate
-	var featureFiltered bool
-	for _, t := range rule.Targets {
-		if !t.Enabled {
-			continue
-		}
-		p, err := getProvider(t.ProviderID)
-		if err != nil || p == nil || !p.Enabled {
-			continue
-		}
-		if isOpen(t.ProviderID, breakers) {
-			continue
-		}
-		modelName := modelNameForTarget(t.ModelName, req.Model)
-		if capabilities.providers == nil {
-			capabilities = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})
-		}
-		if _, exists := capabilities.providers[p.ID]; !exists {
-			capabilities.providers[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p}).providers[p.ID]
-		}
-		if !capabilities.supportsModel(p.ID, modelName, to) {
-			continue
-		}
-		if req.Requirements != nil {
-			skip := false
-			for _, f := range req.Requirements.Features {
-				// Preservation is enforced in both observe and enforce mode:
-				// conversion must only use explicitly supported capabilities.
-				supported, _ := capabilities.featureEnabled(p.ID, modelName, to, string(f), true)
-				if !supported {
-					skip = true
-					featureFiltered = true
-					break
-				}
-			}
-			if skip {
-				continue
-			}
-		}
-		out = append(out, candidate{
-			provider:                   p,
-			modelName:                  modelName,
-			protocol:                   req.Protocol,
-			upstreamPath:               upstreamPath,
-			ruleID:                     rule.ID,
-			ruleLabel:                  rule.Name,
-			targetID:                   t.ID,
-			maxRetries:                 t.MaxRetries,
-			firstByteBudget:            firstByteBudget,
-			targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds),
-			tier:                       t.Tier,
-			strategy:                   routing.Strategy(rule.Strategy),
-			convertTo:                  to,
-		})
-	}
 	if len(out) == 0 {
-		if featureFiltered {
-			return nil, fmt.Errorf("%w: no conversion provider satisfies required features %v for model %q", errUnsupportedFeature, req.Requirements.Features, req.Model)
+		if basicAvailable && rejected {
+			return nil, fmt.Errorf("%w: no conversion provider satisfies request for model %q", errUnsupportedFeature, req.Model)
 		}
 		return nil, fmt.Errorf("no available conversion provider for model %q", req.Model)
 	}

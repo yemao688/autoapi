@@ -124,6 +124,11 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 		}
 	}
 	reqs := &model.RequestRequirements{}
+	if _, hasMaxCompletion := fields["max_completion_tokens"]; hasMaxCompletion {
+		if _, hasMaxTokens := fields["max_tokens"]; hasMaxTokens {
+			return chatInspectResult{}, &requestParseError{msg: "max_completion_tokens and max_tokens cannot both be set"}
+		}
+	}
 
 	if raw, ok := fields["tools"]; ok {
 		if err := parseChatTools(raw); err != nil {
@@ -133,6 +138,10 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
 		}
 		if hasNonFunctionTools(raw) {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
+		if hasUnknownChatFunctionToolFields(raw) {
 			reqs.NativeOnly = true
 			reqs.UnknownSemantic = true
 		}
@@ -170,9 +179,15 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 	}
 	if raw, ok := fields["reasoning_effort"]; ok {
 		var s string
-		if json.Unmarshal(raw, &s) == nil && s != "" {
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return chatInspectResult{}, &requestParseError{msg: "reasoning_effort must be a string", cause: err}
+		}
+		if s != "" {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
 		}
+	}
+	if err := markChatNonConvertibleFields(fields, reqs); err != nil {
+		return chatInspectResult{}, err
 	}
 
 	msgs, err := parseChatMessages(fields["messages"])
@@ -180,6 +195,10 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 		return chatInspectResult{}, err
 	}
 	for _, m := range msgs {
+		if m.Role != "system" && m.Role != "developer" && m.Role != "user" && m.Role != "assistant" && m.Role != "tool" {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
 		if m.Role == "tool" || len(m.ToolCalls) > 0 {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
 		}
@@ -220,6 +239,64 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 
 	res.Requirements = *reqs
 	return res, nil
+}
+
+func markChatNonConvertibleFields(fields map[string]json.RawMessage, reqs *model.RequestRequirements) error {
+	mark := func(key string) {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	if raw, ok := fields["n"]; ok {
+		var n int
+		if err := json.Unmarshal(raw, &n); err != nil {
+			return &requestParseError{msg: "n must be an integer", cause: err}
+		}
+		if n != 1 {
+			mark("n")
+		}
+	}
+	if raw, ok := fields["stop"]; ok && meaningfulJSON(raw) {
+		mark("stop")
+	}
+	if raw, ok := fields["seed"]; ok && raw != nil && string(raw) != "null" {
+		mark("seed")
+	}
+	for _, key := range []string{"user", "service_tier", "logit_bias", "logprobs", "top_logprobs"} {
+		if raw, ok := fields[key]; ok && meaningfulJSON(raw) {
+			mark(key)
+		}
+	}
+	if raw, ok := fields["task"]; ok && meaningfulJSON(raw) {
+		mark("task")
+	}
+	for _, key := range []string{"frequency_penalty", "presence_penalty"} {
+		if raw, ok := fields[key]; ok {
+			var n float64
+			if err := json.Unmarshal(raw, &n); err != nil {
+				return &requestParseError{msg: key + " must be a number", cause: err}
+			}
+			if n != 0 {
+				mark(key)
+			}
+		}
+	}
+	if raw, ok := fields["parallel_tool_calls"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(raw, &enabled); err != nil {
+			return &requestParseError{msg: "parallel_tool_calls must be a boolean", cause: err}
+		}
+		if enabled {
+			mark("parallel_tool_calls")
+		}
+	}
+	return nil
+}
+
+func meaningfulJSON(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` || string(raw) == `false` || string(raw) == `0` || string(raw) == `[]` || string(raw) == `{}` {
+		return false
+	}
+	return true
 }
 
 func parseChatTools(raw json.RawMessage) error {
@@ -280,6 +357,25 @@ func hasNonFunctionTools(raw json.RawMessage) bool {
 		}
 		if err := json.Unmarshal(item, &t); err == nil && t.Type != "" && t.Type != "function" {
 			return true
+		}
+	}
+	return false
+}
+
+func hasUnknownChatFunctionToolFields(raw json.RawMessage) bool {
+	var tools []map[string]json.RawMessage
+	if json.Unmarshal(raw, &tools) != nil {
+		return false
+	}
+	for _, tool := range tools {
+		var fn map[string]json.RawMessage
+		if json.Unmarshal(tool["function"], &fn) != nil {
+			continue
+		}
+		for key := range fn {
+			if key != "name" && key != "description" && key != "parameters" && key != "strict" {
+				return true
+			}
 		}
 	}
 	return false
@@ -544,6 +640,10 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 			reqs.NativeOnly = true
 			reqs.UnknownSemantic = true
 		}
+		if hasUnknownResponsesFunctionToolFields(raw) {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
 	}
 	if raw, ok := fields["tool_choice"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
 		reqs.NativeOnly = true
@@ -554,6 +654,10 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 		reqs.UnknownSemantic = true
 	}
 	if raw, ok := fields["truncation"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
+		reqs.NativeOnly = true
+		reqs.UnknownSemantic = true
+	}
+	if raw, ok := fields["metadata"]; ok && meaningfulJSON(raw) {
 		reqs.NativeOnly = true
 		reqs.UnknownSemantic = true
 	}
@@ -589,7 +693,10 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 	}
 	if raw, ok := fields["reasoning_effort"]; ok {
 		var s string
-		if json.Unmarshal(raw, &s) == nil && s != "" {
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return responsesInspectResult{}, &requestParseError{msg: "reasoning_effort must be a string", cause: err}
+		}
+		if s != "" {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
 		}
 	}
@@ -690,6 +797,25 @@ func hasNonFunctionResponsesTools(raw json.RawMessage) bool {
 		}
 		if err := json.Unmarshal(item, &t); err == nil && t.Type != "" && t.Type != "function" {
 			return true
+		}
+	}
+	return false
+}
+
+func hasUnknownResponsesFunctionToolFields(raw json.RawMessage) bool {
+	var tools []map[string]json.RawMessage
+	if json.Unmarshal(raw, &tools) != nil {
+		return false
+	}
+	for _, tool := range tools {
+		var typ string
+		if json.Unmarshal(tool["type"], &typ) != nil || typ != "function" {
+			continue
+		}
+		for key := range tool {
+			if key != "type" && key != "name" && key != "description" && key != "parameters" && key != "strict" {
+				return true
+			}
 		}
 	}
 	return false

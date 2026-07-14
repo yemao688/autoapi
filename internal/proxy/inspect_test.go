@@ -368,6 +368,33 @@ func TestInspectChatPreservationAndAudio(t *testing.T) {
 	}
 }
 
+func TestInspectChatConversionBoundaryDefaults(t *testing.T) {
+	for name, body := range map[string]string{
+		"n zero":        `{"model":"m","n":0,"messages":[]}`,
+		"logprobs true": `{"model":"m","logprobs":true,"messages":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := inspectChatRequest([]byte(body))
+			if err != nil || !res.Requirements.NativeOnly {
+				t.Fatalf("err=%v requirements=%+v", err, res.Requirements)
+			}
+		})
+	}
+	for name, body := range map[string]string{
+		"n one":             `{"model":"m","n":1,"messages":[]}`,
+		"logprobs false":    `{"model":"m","logprobs":false,"messages":[]}`,
+		"top logprobs zero": `{"model":"m","top_logprobs":0,"messages":[]}`,
+		"empty stop":        `{"model":"m","stop":"","messages":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := inspectChatRequest([]byte(body))
+			if err != nil || res.Requirements.NativeOnly {
+				t.Fatalf("err=%v requirements=%+v", err, res.Requirements)
+			}
+		})
+	}
+}
+
 func TestInspectMessagesPreservation(t *testing.T) {
 	cases := []struct {
 		name       string

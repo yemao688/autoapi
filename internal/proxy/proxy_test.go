@@ -937,6 +937,301 @@ func TestResponsesClientFallsBackToMessagesProvider(t *testing.T) {
 	}
 }
 
+func TestChatResponsesNonStreamingConversionE2E(t *testing.T) {
+	t.Run("Chat to Responses", func(t *testing.T) {
+		var gotPath string
+		var gotBody map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"r1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`)
+		}))
+		defer srv.Close()
+		st := &mockStore{
+			providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+			rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+			apiKeys:      []model.ApiKey{{ID: "key1"}},
+			capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
+		}
+		p := New(st, &mockService{}, 0, nil)
+		defer p.Shutdown()
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || gotPath != "/v1/responses" {
+			t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+		}
+		if gotBody["model"] != "upstream" || gotBody["input"] == nil {
+			t.Fatalf("unexpected converted request: %#v", gotBody)
+		}
+		if !strings.Contains(rec.Body.String(), `"choices"`) || !strings.Contains(rec.Body.String(), `"prompt_tokens":2`) {
+			t.Fatalf("unexpected Chat response: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("Responses to Chat", func(t *testing.T) {
+		var gotPath string
+		var gotBody map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)
+		}))
+		defer srv.Close()
+		st := &mockStore{
+			providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+			rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+			apiKeys:      []model.ApiKey{{ID: "key1"}},
+			capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}},
+		}
+		p := New(st, &mockService{}, 0, nil)
+		defer p.Shutdown()
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","input":"hi"}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || gotPath != "/v1/chat/completions" {
+			t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+		}
+		if gotBody["model"] != "upstream" || gotBody["messages"] == nil {
+			t.Fatalf("unexpected converted request: %#v", gotBody)
+		}
+		if !strings.Contains(rec.Body.String(), `"status":"completed"`) || !strings.Contains(rec.Body.String(), `"input_tokens":2`) {
+			t.Fatalf("unexpected Responses response: %s", rec.Body.String())
+		}
+	})
+}
+
+func TestChatToResponsesNonStreamingE2E(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"r1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/v1/responses" {
+		t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+	}
+	if gotBody["model"] != "upstream" || gotBody["input"] == nil || gotBody["stream"] != nil {
+		t.Fatalf("converted request=%#v", gotBody)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["model"] != "m" || response["choices"] == nil {
+		t.Fatalf("response=%#v", response)
+	}
+	if response["usage"].(map[string]any)["prompt_tokens"] != float64(2) || response["choices"].([]any)[0].(map[string]any)["finish_reason"] != "stop" {
+		t.Fatalf("usage=%#v", response["usage"])
+	}
+}
+
+func TestResponsesToChatNonStreamingE2E(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/v1/chat/completions" {
+		t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+	}
+	if gotBody["model"] != "upstream" || gotBody["messages"] == nil || gotBody["stream"] != nil {
+		t.Fatalf("converted request=%#v", gotBody)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["model"] != "m" || response["status"] != "completed" {
+		t.Fatalf("response=%#v", response)
+	}
+	if response["usage"].(map[string]any)["input_tokens"] != float64(2) {
+		t.Fatalf("usage=%#v", response["usage"])
+	}
+}
+
+func TestChatResponseConversionErrorFailsOverToNextCandidate(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"bad","status":"completed","output":[{"type":"unknown"}]}`)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"good","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
+	}))
+	defer good.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "bad", BaseURL: bad.URL, Enabled: true, ResponsesEnabled: true},
+			"p1": {ID: "p1", Name: "good", BaseURL: good.URL, Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "u0", Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "u1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{
+			{ProviderID: "p0", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+			{ProviderID: "p1", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"model":"m"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) < 2 || log.Chain[0].Status != "conversion_error" || log.Chain[1].Status != string(model.OutcomeSuccess) {
+		t.Fatalf("chain=%+v", log.Chain)
+	}
+	if st.statsDeltas["t0"].fail == 0 || st.statsDeltas["t1"].hit == 0 || st.providers["p0"].Status != model.ProviderStatusError {
+		t.Fatalf("failure accounting stats=%+v providers=%+v", st.statsDeltas, st.providers)
+	}
+}
+
+func TestAllChatResponseConversionErrorsReturn502(t *testing.T) {
+	servers := make([]*httptest.Server, 2)
+	providers := make(map[string]*model.Provider)
+	targets := make([]model.ModelRuleTarget, 2)
+	capabilities := make([]model.ProviderCapability, 0, 2)
+	for i := range servers {
+		id := fmt.Sprintf("p%d", i)
+		targetID := fmt.Sprintf("t%d", i)
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"bad","status":"completed","output":[{"type":"unknown"}]}`)
+		}))
+		providers[id] = &model.Provider{ID: id, Name: id, BaseURL: servers[i].URL, Enabled: true, ResponsesEnabled: true}
+		targets[i] = model.ModelRuleTarget{ID: targetID, ProviderID: id, ModelName: id, Enabled: true}
+		capabilities = append(capabilities, model.ProviderCapability{ProviderID: id, Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"})
+	}
+	defer func() {
+		for _, server := range servers {
+			server.Close()
+		}
+	}()
+	st := &mockStore{providers: providers, rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: targets}}, apiKeys: []model.ApiKey{{ID: "key1"}}, capabilities: capabilities}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"upstream_error"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != "conversion_error" || log.Chain[1].Status != "conversion_error" {
+		t.Fatalf("chain=%+v", log.Chain)
+	}
+}
+
+func TestChatStreamResponsesOnlyPreflightBeforeKeyAndHTTP(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer srv.Close()
+	store := &mockStore{
+		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}},
+		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
+	}
+	keys := &countingKeyService{inner: &mockService{}}
+	p := New(store, keys, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity || keys.keyResolveCalls != 0 || hits != 0 {
+		t.Fatalf("status=%d keyCalls=%d hits=%d body=%s", rec.Code, keys.keyResolveCalls, hits, rec.Body.String())
+	}
+}
+
+func TestResponsesStreamSkipsChatOnlyTargetForMessagesTarget(t *testing.T) {
+	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("Chat-only target should not receive Responses stream")
+	}))
+	defer chatSrv.Close()
+	messagesSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n"+
+			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n"+
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n"+
+			"event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n"+
+			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"+
+			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer messagesSrv.Close()
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"chat":     {ID: "chat", Name: "Chat", BaseURL: chatSrv.URL, Enabled: true},
+			"messages": {ID: "messages", Name: "Messages", BaseURL: messagesSrv.URL, Enabled: true, MessagesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "chat", Enabled: true},
+			{ID: "t1", ProviderID: "messages", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{
+			{ProviderID: "chat", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: true, Source: "manual"},
+			{ProviderID: "messages", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "response.output_text.delta") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestResponsesClientStreamsFromMessagesProvider(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -4778,9 +5073,10 @@ func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
 		defer srv.Close()
 
 		store := &mockStore{
-			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: false}},
-			rules:     []model.ModelRule{{ID: "r1", Name: "resp-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "upstream-resp", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			providers:    map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: false}},
+			rules:        []model.ModelRule{{ID: "r1", Name: "resp-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "upstream-resp", Enabled: true}}}},
+			apiKeys:      []model.ApiKey{{ID: "key1"}},
+			capabilities: []model.ProviderCapability{{ProviderID: "p0", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()

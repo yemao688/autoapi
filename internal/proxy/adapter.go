@@ -74,6 +74,22 @@ func (a conversionAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPrep
 		ConversionMode:   ConversionModeConvert,
 	}
 	switch {
+	case a.from == ProtocolOpenAIChat && a.to == ProtocolOpenAIResponses:
+		converted, err := chatToResponsesRequest(body, c.modelName)
+		if err != nil {
+			return AttemptPreparation{}, err
+		}
+		prep.Body = converted
+		prep.Path = "/v1/responses"
+		prep.ConvertResponse = func(body []byte) ([]byte, error) { return responsesToChatResponse(body, c.ruleLabel) }
+	case a.from == ProtocolOpenAIResponses && a.to == ProtocolOpenAIChat:
+		converted, err := responsesToChatRequest(body, c.modelName)
+		if err != nil {
+			return AttemptPreparation{}, err
+		}
+		prep.Body = converted
+		prep.Path = "/v1/chat/completions"
+		prep.ConvertResponse = func(body []byte) ([]byte, error) { return chatToResponsesResponse(body, c.ruleLabel) }
 	case a.from == ProtocolAnthropicMessages && a.to == ProtocolOpenAIResponses:
 		converted, err := messagesToResponsesRequest(body, c.modelName)
 		if err != nil {
