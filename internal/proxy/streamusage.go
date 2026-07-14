@@ -27,6 +27,7 @@ import (
 type streamUsageJSON struct {
 	Usage    *streamUsageFields `json:"usage"`
 	Type     string             `json:"type"`
+	Error    *streamUsageError  `json:"error"`
 	Response *struct {
 		Usage *streamUsageFields `json:"usage"`
 	} `json:"response"`
@@ -50,6 +51,28 @@ type streamUsageFields struct {
 	InputDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"input_tokens_details"`
+	PromptTokenCount     int `json:"promptTokenCount"`
+	CandidatesTokenCount int `json:"candidatesTokenCount"`
+	TotalTokenCount      int `json:"totalTokenCount"`
+}
+
+type streamUsageError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Status  string `json:"status"`
+}
+
+type geminiStreamCandidate struct {
+	Candidates []struct {
+		Content struct {
+			Role  string `json:"role"`
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	UsageMetadata *streamUsageFields `json:"usageMetadata"`
 }
 
 // streamUsageAccumulator is a streaming SSE usage parser. Feed it raw bytes
@@ -151,6 +174,12 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	if err := json.Unmarshal(data, &u); err != nil {
 		return
 	}
+	// If the data looks like Gemini, attach usage from Gemini's usageMetadata.
+	if u.Usage == nil && u.Response == nil && u.Message == nil {
+		if geminiUsage := geminiUsageFromData(data, &u); geminiUsage != nil {
+			u.Usage = geminiUsage
+		}
+	}
 	if a.lastEvent == "message_stop" || u.Type == "message_stop" {
 		a.terminal = "message_stop"
 		a.seenDone = true
@@ -177,6 +206,16 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	}
 	if isResponsesTerminal(u.Type) {
 		a.terminal = strings.TrimPrefix(u.Type, "response.")
+		a.seenDone = true
+	}
+	// Gemini streaming: no [DONE]; finishReason in any data event is terminal.
+	if hasGeminiFinishReason(data) {
+		a.terminal = "completed"
+		a.seenDone = true
+	}
+	// A terminal error from Gemini also marks the stream done (unsuccessful).
+	if u.Error != nil {
+		a.terminal = "error"
 		a.seenDone = true
 	}
 	// Last non-zero wins per field. OpenAI streams typically send a
@@ -207,6 +246,21 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	if usage.InputDetails != nil && usage.InputDetails.CachedTokens > 0 {
 		a.cacheHit = usage.InputDetails.CachedTokens
 	}
+	if usage.PromptTokenCount > 0 {
+		a.input = usage.PromptTokenCount
+	}
+	if usage.CandidatesTokenCount > 0 {
+		a.output = usage.CandidatesTokenCount
+	}
+	if usage.TotalTokenCount > 0 {
+		if a.input == 0 || a.output == 0 {
+			// totalTokenCount alone cannot be split reliably; fall
+			// back to treating it as output if no prompt count seen.
+			if a.input == 0 && a.output == 0 {
+				a.output = usage.TotalTokenCount
+			}
+		}
+	}
 }
 
 // Usage returns the accumulated input/output/cache tokens. Returns the
@@ -232,9 +286,39 @@ func (a *streamUsageAccumulator) Successful() bool {
 
 func isResponsesTerminal(typ string) bool {
 	switch typ {
-	case "response.completed", "response.failed", "response.incomplete":
+	case "response.completed", "response.failed", "response.incomplete", "completed":
 		return true
 	default:
 		return false
 	}
+}
+
+func hasGeminiFinishReason(data []byte) bool {
+	if !bytes.Contains(data, []byte(`"candidates"`)) {
+		return false
+	}
+	var g geminiStreamCandidate
+	if err := json.Unmarshal(data, &g); err != nil {
+		return false
+	}
+	for _, c := range g.Candidates {
+		if c.FinishReason != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func geminiUsageFromData(data []byte, u *streamUsageJSON) *streamUsageFields {
+	if !bytes.Contains(data, []byte(`"usageMetadata"`)) {
+		return nil
+	}
+	var g geminiStreamCandidate
+	if err := json.Unmarshal(data, &g); err != nil {
+		return nil
+	}
+	if g.UsageMetadata == nil {
+		return nil
+	}
+	return g.UsageMetadata
 }

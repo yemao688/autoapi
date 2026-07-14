@@ -179,6 +179,9 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		if req.Task == "messages" && !p.MessagesEnabled {
 			continue
 		}
+		if req.Task == "gemini" && !p.GeminiEnabled {
+			continue
+		}
 		if isOpen(t.ProviderID, breakers) {
 			continue
 		}

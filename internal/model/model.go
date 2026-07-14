@@ -48,6 +48,7 @@ type Provider struct {
 	IsCustom         bool           `json:"is_custom"` // true for self-hosted / OpenAI-compatible gateways
 	ResponsesEnabled bool           `json:"responses_enabled"`
 	MessagesEnabled  bool           `json:"messages_enabled"`
+	GeminiEnabled    bool           `json:"gemini_enabled"`
 	Enabled          bool           `json:"enabled"`
 	CreatedAt        int64          `json:"created_at"`
 	UpdatedAt        int64          `json:"updated_at"`
@@ -516,6 +517,7 @@ type ProviderInput struct {
 	IsCustom         bool   `json:"is_custom"`
 	ResponsesEnabled bool   `json:"responses_enabled"`
 	MessagesEnabled  bool   `json:"messages_enabled"`
+	GeminiEnabled    bool   `json:"gemini_enabled"`
 }
 
 type ModelRuleInput struct {

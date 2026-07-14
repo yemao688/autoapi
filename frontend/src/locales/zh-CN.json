@@ -334,6 +334,8 @@
       "responsesApiHelp": "仅当上游明确支持原生 Responses 时启用。",
       "messagesApi": "Messages API",
       "messagesApiHelp": "仅当上游明确支持原生 Anthropic Messages 时启用。",
+      "geminiApi": "Gemini API",
+      "geminiApiHelp": "仅当上游明确支持原生 Gemini 生成式接口时启用。",
       "model": "可用模型",
       "availableModels": "可用模型",
       "manualAdd": "手动输入模型",

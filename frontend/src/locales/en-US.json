@@ -334,6 +334,8 @@
       "responsesApiHelp": "Enable only when this upstream explicitly supports native Responses.",
       "messagesApi": "Messages API",
       "messagesApiHelp": "Enable only when this upstream explicitly supports native Anthropic Messages.",
+      "geminiApi": "Gemini API",
+      "geminiApiHelp": "Enable only when this upstream explicitly supports native Gemini generative endpoints.",
       "model": "Available models",
       "availableModels": "Available models",
       "manualAdd": "Add manually",

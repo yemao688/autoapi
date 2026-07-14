@@ -91,6 +91,7 @@ func TestProviderCRUD(t *testing.T) {
 		UpstreamKey:      "sk-test-abc123",
 		ResponsesEnabled: true,
 		MessagesEnabled:  true,
+		GeminiEnabled:    true,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -109,6 +110,9 @@ func TestProviderCRUD(t *testing.T) {
 	}
 	if !p.MessagesEnabled {
 		t.Fatal("expected Messages capability enabled after create")
+	}
+	if !p.GeminiEnabled {
+		t.Fatal("expected Gemini capability enabled after create")
 	}
 	// The store no longer stores the upstream key; key columns should be empty.
 	if len(p.KeyCiphertext) != 0 || p.KeyMasked != "" {
@@ -134,6 +138,9 @@ func TestProviderCRUD(t *testing.T) {
 	if !got.MessagesEnabled {
 		t.Fatal("expected Messages capability persisted by Get")
 	}
+	if !got.GeminiEnabled {
+		t.Fatal("expected Gemini capability persisted by Get")
+	}
 	if string(got.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected ciphertext set by helper, got %q", got.KeyCiphertext)
 	}
@@ -148,6 +155,7 @@ func TestProviderCRUD(t *testing.T) {
 		UpstreamKey:      "sk-updated-xyz789",
 		ResponsesEnabled: false,
 		MessagesEnabled:  false,
+		GeminiEnabled:    false,
 	})
 	if err != nil {
 		t.Fatalf("UpdateProvider: %v", err)
@@ -160,6 +168,9 @@ func TestProviderCRUD(t *testing.T) {
 	}
 	if updated.MessagesEnabled {
 		t.Fatal("expected Messages capability persisted by Update")
+	}
+	if updated.GeminiEnabled {
+		t.Fatal("expected Gemini capability persisted by Update")
 	}
 	if string(updated.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected key columns preserved, got %q", updated.KeyCiphertext)

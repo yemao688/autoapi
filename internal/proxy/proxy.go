@@ -496,6 +496,7 @@ func (p *Proxy) setupRouter() chi.Router {
 	r.Post("/v1/chat/completions", p.handleChatCompletions)
 	r.Post("/v1/responses", p.handleResponses)
 	r.Post("/v1/messages", p.handleMessages)
+	r.Post("/v1beta/models/{modelAction}", p.handleGemini)
 	r.Post("/v1/embeddings", p.handleEmbeddings)
 	r.Post("/v1/images/generations", p.handleOpenAI)
 	r.Post("/v1/audio/transcriptions", p.handleOpenAI)
@@ -866,6 +867,7 @@ outer:
 			})
 			continue
 		}
+		applyUpstreamQuery(upstreamURL, r.URL.RawQuery, prep.UpstreamQueryParams, upstreamKey)
 
 		// Per-target retry loop: retry only on CategoryRetryable, up to
 		// maxRetries additional attempts. The circuit breaker is recorded
@@ -1067,7 +1069,7 @@ outer:
 				req.URL.Host = upstreamURL.Host
 				req.URL.Path = upstreamURL.Path
 				req.URL.RawPath = upstreamURL.RawPath
-				req.URL.RawQuery = r.URL.RawQuery
+				req.URL.RawQuery = upstreamURL.RawQuery
 				req.Host = upstreamURL.Host
 				applyUpstreamAuth(req.Header, prep, upstreamKey)
 				req.Header.Set("X-Autoapi-Route", c.ruleID)
@@ -1569,6 +1571,7 @@ outer:
 			})
 			continue
 		}
+		applyUpstreamQuery(upstreamURL, r.URL.RawQuery, prep.UpstreamQueryParams, upstreamKey)
 
 		// Per-target retry loop. Each iteration is a fresh streamAttempt
 		// call (one upstream HTTP attempt) against the same upstreamURL
@@ -2446,6 +2449,32 @@ func cloneURL(u *url.URL) *url.URL {
 	return &c
 }
 
+func applyUpstreamQuery(u *url.URL, inboundRawQuery string, extra url.Values, upstreamKey string) {
+	if u == nil {
+		return
+	}
+	q := u.Query()
+	if inboundRawQuery != "" {
+		if inbound, err := url.ParseQuery(inboundRawQuery); err == nil {
+			for name, values := range inbound {
+				for _, value := range values {
+					q.Add(name, value)
+				}
+			}
+		}
+	}
+	for name, values := range extra {
+		q.Del(name)
+		for _, value := range values {
+			if value == geminiUpstreamKeyPlaceholder {
+				value = upstreamKey
+			}
+			q.Add(name, value)
+		}
+	}
+	u.RawQuery = q.Encode()
+}
+
 func applyExtraHeaders(h http.Header, extra http.Header) {
 	for name, values := range extra {
 		h.Del(name)
@@ -2457,7 +2486,11 @@ func applyExtraHeaders(h http.Header, extra http.Header) {
 
 func applyUpstreamAuth(h http.Header, prep AttemptPreparation, upstreamKey string) {
 	h.Del("Authorization")
+	h.Del("X-Api-Key")
 	if prep.SuppressBearerAuth {
+		if prep.UpstreamProtocol == ProtocolGemini {
+			return
+		}
 		h.Set("X-Api-Key", upstreamKey)
 		if h.Get("anthropic-version") == "" {
 			h.Set("anthropic-version", AnthropicDefaultVersion)

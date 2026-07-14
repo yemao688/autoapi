@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -4424,6 +4425,172 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		}
 		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"claude\" are disabled or have open circuits")
 	})
+}
+
+func TestChar_GeminiRouteRegistered(t *testing.T) {
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1beta/models/gemini-pro:generateContent", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /v1beta/models/{model}:generateContent to be registered, got 404: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected request to reach Gemini handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: gemini-pro")
+}
+
+func TestChar_GeminiE2EAndPreflightReject(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		var gotPath string
+		var gotQuery url.Values
+		var gotAuthorization string
+		var gotAPIKey string
+		var gotBody []byte
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotQuery = r.URL.Query()
+			gotAuthorization = r.Header.Get("Authorization")
+			gotAPIKey = r.Header.Get("X-Api-Key")
+			gotBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`))
+		}))
+		defer srv.Close()
+
+		store := &mockStore{
+			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, GeminiEnabled: true}},
+			rules:     []model.ModelRule{{ID: "r1", Name: "gemini-pro", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "gemini-1.5-pro", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+		defer p.Shutdown()
+
+		req := httptest.NewRequest("POST", "/v1beta/models/gemini-pro:generateContent", strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if gotPath != "/v1beta/models/gemini-1.5-pro:generateContent" {
+			t.Fatalf("expected upstream model path, got %q", gotPath)
+		}
+		if gotQuery.Get("key") != "secret" {
+			t.Fatalf("expected upstream key in query, got %q", gotQuery.Get("key"))
+		}
+		if gotAuthorization != "" || gotAPIKey != "" {
+			t.Fatalf("Authorization=%q X-Api-Key=%q, want none", gotAuthorization, gotAPIKey)
+		}
+		if len(gotBody) == 0 {
+			t.Fatal("expected body forwarded")
+		}
+	})
+
+	t.Run("preflight reject", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called, got %s", r.URL.Path)
+		}))
+		defer srv.Close()
+
+		store := &mockStore{
+			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, GeminiEnabled: false}},
+			rules:     []model.ModelRule{{ID: "r1", Name: "gemini-pro", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "gemini-1.5-pro", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+		defer p.Shutdown()
+
+		req := httptest.NewRequest("POST", "/v1beta/models/gemini-pro:generateContent", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+		}
+		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"gemini-pro\" are disabled or have open circuits")
+	})
+}
+
+func TestChar_GeminiStreamingSSETerminal(t *testing.T) {
+	var mu sync.Mutex
+	var gotPath string
+	var gotQuery url.Values
+	var gotAuthorization string
+	var gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query()
+		gotAuthorization = r.Header.Get("Authorization")
+		gotAPIKey = r.Header.Get("X-Api-Key")
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[]}}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":1}}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, GeminiEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "gemini-pro", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "gemini-1.5-pro", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1beta/models/gemini-pro:streamGenerateContent", strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotPath != "/v1beta/models/gemini-1.5-pro:streamGenerateContent" {
+		t.Fatalf("expected upstream stream path, got %q", gotPath)
+	}
+	if gotQuery.Get("alt") != "sse" {
+		t.Fatalf("expected alt=sse in query, got %q", gotQuery.Get("alt"))
+	}
+	if gotQuery.Get("key") != "secret" {
+		t.Fatalf("expected upstream key in query, got %q", gotQuery.Get("key"))
+	}
+	if gotAuthorization != "" || gotAPIKey != "" {
+		t.Fatalf("Authorization=%q X-Api-Key=%q, want none", gotAuthorization, gotAPIKey)
+	}
+	if !strings.Contains(rec.Body.String(), `"finishReason":"STOP"`) {
+		t.Fatalf("expected stream body to contain finishReason, got %s", rec.Body.String())
+	}
+	log := waitForLog(t, store)
+	if log.StatusCode != http.StatusOK {
+		t.Fatalf("expected log status 200, got %d", log.StatusCode)
+	}
+	if log.InputTokens != 3 || log.OutputTokens != 1 {
+		t.Fatalf("expected input=3 output=1, got input=%d output=%d", log.InputTokens, log.OutputTokens)
+	}
+	if len(log.Chain) != 1 || log.Chain[0].Status != "success" {
+		t.Fatalf("expected one success chain entry, got %+v", log.Chain)
+	}
 }
 
 func TestChar_MessagesStreamingE2E(t *testing.T) {

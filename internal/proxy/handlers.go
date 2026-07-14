@@ -21,6 +21,7 @@ import (
 
 	"autoapi/internal/model"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
@@ -190,6 +191,77 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	p.forwardWithFailover(w, r, body, candidates, msgReq.Stream, 0, logEntry)
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
+}
+
+func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	logEntry := &model.RequestLog{Timestamp: start.UnixMilli()}
+	enrichLogFromRequest(r, logEntry)
+	defer p.logRequestEntry(logEntry)
+	defer p.emitRequest(logEntry, r.URL.Path)
+
+	apiKeyID, ok, err := p.authenticate(r)
+	if err != nil || !ok {
+		status := http.StatusUnauthorized
+		if err != nil {
+			status = http.StatusInternalServerError
+		}
+		p.writeError(w, status, "invalid_request_error", "Invalid API key")
+		logEntry.StatusCode, logEntry.APIKeyID, logEntry.Error = status, apiKeyID, "authentication failed"
+		return
+	}
+	logEntry.APIKeyID = apiKeyID
+
+	modelName, action, err := parseGeminiModelAction(chi.URLParam(r, "modelAction"))
+	if err != nil {
+		p.writeError(w, http.StatusNotFound, "invalid_request_error", err.Error())
+		logEntry.StatusCode, logEntry.Error = http.StatusNotFound, err.Error()
+		return
+	}
+	stream := action == "streamGenerateContent"
+	if stream {
+		q := r.URL.Query()
+		q.Set("alt", "sse")
+		r.URL.RawQuery = q.Encode()
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBodySize))
+	if err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		logEntry.StatusCode, logEntry.Error = http.StatusBadRequest, err.Error()
+		return
+	}
+	_ = r.Body.Close()
+
+	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = modelName, modelName, stream
+	inbound := &InboundRequest{Model: modelName, Header: extractHeaders(r.Header), Task: "gemini", TimeHour: time.Now().Hour(), Endpoint: r.URL.Path, Stream: stream, Protocol: ProtocolGemini}
+	p.insertPendingLog(logEntry)
+	candidates, err := p.resolveCandidates(inbound)
+	if err != nil {
+		errType := "service_unavailable"
+		if errors.Is(err, errNoMatch) {
+			errType = "no_matching_rule"
+		}
+		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
+		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
+		return
+	}
+	p.forwardWithFailover(w, r, body, candidates, stream, len(body)/16, logEntry)
+	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
+}
+
+func parseGeminiModelAction(modelAction string) (modelName, action string, err error) {
+	colon := strings.LastIndex(modelAction, ":")
+	if colon <= 0 || colon == len(modelAction)-1 {
+		return "", "", errors.New("Invalid Gemini model action")
+	}
+	modelName, action = modelAction[:colon], modelAction[colon+1:]
+	switch action {
+	case "generateContent", "streamGenerateContent":
+		return modelName, action, nil
+	default:
+		return "", "", errors.New("Invalid Gemini model action")
+	}
 }
 
 func hasConversionCandidate(candidates []candidate) bool {

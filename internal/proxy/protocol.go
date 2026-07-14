@@ -1,6 +1,7 @@
 package proxy
 
 import "net/http"
+import "net/url"
 
 type Protocol string
 
@@ -9,6 +10,7 @@ const (
 	ProtocolOpenAIChat        Protocol = "openai_chat"
 	ProtocolOpenAIResponses   Protocol = "openai_responses"
 	ProtocolAnthropicMessages Protocol = "anthropic_messages"
+	ProtocolGemini            Protocol = "gemini"
 	ProtocolUnknown           Protocol = ""
 )
 
@@ -24,13 +26,14 @@ const (
 // AttemptPreparation carries per-attempt protocol decisions that replace
 // the current hardcoded "use r.URL.Path and rewriteBodyModel" logic.
 type AttemptPreparation struct {
-	Body               []byte
-	Path               string
-	ExtraHeaders       http.Header
-	InboundProtocol    Protocol
-	UpstreamProtocol   Protocol
-	SuppressBearerAuth bool
-	ConvertResponse    func([]byte) ([]byte, error) `json:"-"`
+	Body                []byte
+	Path                string
+	ExtraHeaders        http.Header
+	UpstreamQueryParams url.Values
+	InboundProtocol     Protocol
+	UpstreamProtocol    Protocol
+	SuppressBearerAuth  bool
+	ConvertResponse     func([]byte) ([]byte, error) `json:"-"`
 	// ConversionMode: ConversionModeNative for same-protocol passthrough.
 	ConversionMode ConversionMode
 }

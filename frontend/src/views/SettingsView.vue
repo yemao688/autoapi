@@ -753,6 +753,14 @@ watch(activeTheme, (t) => {
                   <button class="copy-btn" :title="t('settings.server.copyEndpoint')" @click="handleCopyBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
                 </div>
                 <div class="row-between" style="padding: 2px 0;">
+                  <span><span style="color: var(--muted);">POST</span> <span style="color: var(--accent);">/v1beta/models/{model}:generateContent</span></span>
+                  <button class="copy-btn" :title="t('settings.server.copyEndpoint')" @click="handleCopyBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                </div>
+                <div class="row-between" style="padding: 2px 0;">
+                  <span><span style="color: var(--muted);">POST</span> <span style="color: var(--accent);">/v1beta/models/{model}:streamGenerateContent</span></span>
+                  <button class="copy-btn" :title="t('settings.server.copyEndpoint')" @click="handleCopyBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                </div>
+                <div class="row-between" style="padding: 2px 0;">
                   <span><span style="color: var(--muted);">POST</span> <span style="color: var(--accent);">/v1/embeddings</span></span>
                   <button class="copy-btn" :title="t('settings.server.copyEndpoint')" @click="handleCopyBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
                 </div>

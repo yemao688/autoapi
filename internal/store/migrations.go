@@ -469,6 +469,11 @@ CREATE TABLE IF NOT EXISTS provider_capabilities (
 			return err
 		},
 	},
+	{
+		ID:              "026_provider_gemini_capability",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "providers", "gemini_enabled") },
+		SQL:             `ALTER TABLE providers ADD COLUMN gemini_enabled INTEGER NOT NULL DEFAULT 0;`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

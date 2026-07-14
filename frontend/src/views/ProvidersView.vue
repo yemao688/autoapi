@@ -83,6 +83,7 @@ const form = ref<model.ProviderInput>({
   is_custom: false,
   responses_enabled: false,
   messages_enabled: false,
+  gemini_enabled: false,
 })
 
 const filteredProviders = computed(() => {
@@ -498,7 +499,7 @@ function openAdd(isCustom: boolean) {
   resetModalState()
   modalMode.value = 'add'
   editingId.value = ''
-  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false, messages_enabled: false }
+  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false, messages_enabled: false, gemini_enabled: false }
   modalOpen.value = true
 }
 
@@ -514,6 +515,7 @@ function openEdit(provider: model.Provider) {
     is_custom: provider.is_custom,
     responses_enabled: provider.responses_enabled,
     messages_enabled: provider.messages_enabled,
+    gemini_enabled: provider.gemini_enabled,
   }
   loadingKey.value = true
   models.value = []
@@ -567,6 +569,7 @@ async function saveProvider() {
       is_custom: form.value.is_custom,
       responses_enabled: form.value.responses_enabled,
       messages_enabled: form.value.messages_enabled,
+      gemini_enabled: form.value.gemini_enabled,
     }
     if (modalMode.value === 'edit' && !keyDirty.value) {
       payload.upstream_key = ''
@@ -896,6 +899,7 @@ onMounted(() => {
           <div class="field-help">{{ t('providers.modal.responsesApiHelp') }}</div>
         </div>
 
+
         <div class="field">
           <div class="row-between" style="margin-bottom: 0;">
             <label class="field-label">{{ t('providers.modal.messagesApi') }}</label>
@@ -905,6 +909,17 @@ onMounted(() => {
             </label>
           </div>
           <div class="field-help">{{ t('providers.modal.messagesApiHelp') }}</div>
+        </div>
+
+        <div class="field">
+          <div class="row-between" style="margin-bottom: 0;">
+            <label class="field-label">{{ t('providers.modal.geminiApi') }}</label>
+            <label class="toggle">
+              <input v-model="form.gemini_enabled" type="checkbox">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="field-help">{{ t('providers.modal.geminiApiHelp') }}</div>
         </div>
 
         <div v-if="modalMode === 'edit'" class="field">
