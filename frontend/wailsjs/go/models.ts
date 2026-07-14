@@ -306,6 +306,7 @@ export namespace model {
 	    error_message?: string;
 	    is_custom: boolean;
 	    responses_enabled: boolean;
+	    messages_enabled: boolean;
 	    enabled: boolean;
 	    created_at: number;
 	    updated_at: number;
@@ -328,6 +329,7 @@ export namespace model {
 	        this.error_message = source["error_message"];
 	        this.is_custom = source["is_custom"];
 	        this.responses_enabled = source["responses_enabled"];
+	        this.messages_enabled = source["messages_enabled"];
 	        this.enabled = source["enabled"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -853,12 +855,35 @@ export namespace model {
 	    }
 	}
 	
+	export class ProviderCapability {
+	    provider_id: string;
+	    protocol: string;
+	    feature: string;
+	    enabled: boolean;
+	    source: string;
+	    updated_at: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.protocol = source["protocol"];
+	        this.feature = source["feature"];
+	        this.enabled = source["enabled"];
+	        this.source = source["source"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class ProviderInput {
 	    name: string;
 	    base_url: string;
 	    upstream_key: string;
 	    is_custom: boolean;
 	    responses_enabled: boolean;
+	    messages_enabled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProviderInput(source);
@@ -871,6 +896,7 @@ export namespace model {
 	        this.upstream_key = source["upstream_key"];
 	        this.is_custom = source["is_custom"];
 	        this.responses_enabled = source["responses_enabled"];
+	        this.messages_enabled = source["messages_enabled"];
 	    }
 	}
 	export class ProviderModelUpdate {

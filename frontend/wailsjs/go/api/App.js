@@ -142,6 +142,10 @@ export function ListModels(arg1) {
   return window['go']['api']['App']['ListModels'](arg1);
 }
 
+export function ListProviderCapabilities(arg1) {
+  return window['go']['api']['App']['ListProviderCapabilities'](arg1);
+}
+
 export function ListProviders() {
   return window['go']['api']['App']['ListProviders']();
 }
@@ -204,6 +208,10 @@ export function SetInitialVisibility(arg1) {
 
 export function SetModelsActive(arg1, arg2, arg3) {
   return window['go']['api']['App']['SetModelsActive'](arg1, arg2, arg3);
+}
+
+export function SetProviderCapability(arg1, arg2, arg3) {
+  return window['go']['api']['App']['SetProviderCapability'](arg1, arg2, arg3);
 }
 
 export function SetProviderEnabled(arg1, arg2) {

@@ -35,6 +35,11 @@ type responsesRequest struct {
 	Stream bool   `json:"stream"`
 }
 
+type messagesRequest struct {
+	Model  string `json:"model"`
+	Stream bool   `json:"stream"`
+}
+
 func validateResponsesRequest(body []byte) (responsesRequest, error) {
 	var req responsesRequest
 	var fields map[string]json.RawMessage
@@ -62,6 +67,17 @@ func validateResponsesRequest(body []byte) (responsesRequest, error) {
 				return req, errors.New("store=true is not supported with failover")
 			}
 		}
+	}
+	return req, nil
+}
+
+func validateMessagesRequest(body []byte) (messagesRequest, error) {
+	var req messagesRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return req, err
+	}
+	if req.Model == "" {
+		return req, errors.New("model is required")
 	}
 	return req, nil
 }
@@ -113,6 +129,54 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	// forwardWithFailover preserves the original JSON and uses r.URL.Path,
 	// therefore every upstream attempt is exactly POST /v1/responses.
 	p.forwardWithFailover(w, r, body, candidates, respReq.Stream, 0, logEntry)
+	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
+}
+
+func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	logEntry := &model.RequestLog{Timestamp: start.UnixMilli()}
+	enrichLogFromRequest(r, logEntry)
+	defer p.logRequestEntry(logEntry)
+	defer p.emitRequest(logEntry, r.URL.Path)
+
+	apiKeyID, ok, err := p.authenticate(r)
+	if err != nil || !ok {
+		status := http.StatusUnauthorized
+		if err != nil {
+			status = http.StatusInternalServerError
+		}
+		p.writeError(w, status, "invalid_request_error", "Invalid API key")
+		logEntry.StatusCode, logEntry.APIKeyID, logEntry.Error = status, apiKeyID, "authentication failed"
+		return
+	}
+	logEntry.APIKeyID = apiKeyID
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBodySize))
+	if err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		logEntry.StatusCode, logEntry.Error = http.StatusBadRequest, err.Error()
+		return
+	}
+	_ = r.Body.Close()
+	msgReq, err := validateMessagesRequest(body)
+	if err != nil {
+		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
+		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+		return
+	}
+	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = msgReq.Model, msgReq.Model, msgReq.Stream
+	inbound := &InboundRequest{Model: msgReq.Model, Header: extractHeaders(r.Header), Task: "messages", TimeHour: time.Now().Hour(), Endpoint: "/v1/messages", Stream: msgReq.Stream, Protocol: ProtocolAnthropicMessages}
+	p.insertPendingLog(logEntry)
+	candidates, err := p.resolveCandidates(inbound)
+	if err != nil {
+		errType := "service_unavailable"
+		if errors.Is(err, errNoMatch) {
+			errType = "no_matching_rule"
+		}
+		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
+		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
+		return
+	}
+	p.forwardWithFailover(w, r, body, candidates, msgReq.Stream, 0, logEntry)
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 

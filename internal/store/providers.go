@@ -16,7 +16,7 @@ func (s *Store) ListProviders() ([]model.Provider, error) {
 		SELECT id, name, base_url, status,
 		       key_ciphertext, key_nonce, key_masked,
 		       models_count, monthly_tokens, avg_latency_ms,
-		       last_tested_at, error_message, is_custom, responses_enabled, enabled,
+		       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, enabled,
 		       created_at, updated_at
 		FROM providers ORDER BY name ASC`)
 	if err != nil {
@@ -31,7 +31,7 @@ func (s *Store) ListProviders() ([]model.Provider, error) {
 			&p.ID, &p.Name, &p.BaseURL, &p.Status,
 			&p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked,
 			&p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs,
-			&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.Enabled,
+			&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.Enabled,
 			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan provider: %w", err)
@@ -50,7 +50,7 @@ func (s *Store) GetProvider(id string) (*model.Provider, error) {
 		SELECT id, name, base_url, status,
 		       key_ciphertext, key_nonce, key_masked,
 		       models_count, monthly_tokens, avg_latency_ms,
-		       last_tested_at, error_message, is_custom, responses_enabled, enabled,
+		       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, enabled,
 		       created_at, updated_at
 		FROM providers WHERE id = ?`, id)
 
@@ -59,7 +59,7 @@ func (s *Store) GetProvider(id string) (*model.Provider, error) {
 		&p.ID, &p.Name, &p.BaseURL, &p.Status,
 		&p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked,
 		&p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs,
-		&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.Enabled,
+		&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.Enabled,
 		&p.CreatedAt, &p.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -84,6 +84,7 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 		Status:           model.ProviderStatusUnknown,
 		IsCustom:         in.IsCustom,
 		ResponsesEnabled: in.ResponsesEnabled,
+		MessagesEnabled:  in.MessagesEnabled,
 		Enabled:          true,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -94,15 +95,15 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 			INSERT INTO providers (id, name, base_url, status,
 			                       key_ciphertext, key_nonce, key_masked,
 			                       models_count, monthly_tokens, avg_latency_ms,
-			                       last_tested_at, error_message, is_custom, responses_enabled, enabled,
+			                       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, enabled,
 			                       created_at, updated_at)
 			VALUES (?, ?, ?, ?,
 			        NULL, NULL, '',
 			        0, 0, 0,
-			        0, '', ?, ?, 1,
+			        0, '', ?, ?, ?, 1,
 			        ?, ?)`,
 			p.ID, p.Name, p.BaseURL, p.Status,
-			boolInt(p.IsCustom), boolInt(p.ResponsesEnabled), p.CreatedAt, p.UpdatedAt)
+			boolInt(p.IsCustom), boolInt(p.ResponsesEnabled), boolInt(p.MessagesEnabled), p.CreatedAt, p.UpdatedAt)
 		return err
 	}); err != nil {
 		return nil, fmt.Errorf("store: create provider: %w", err)
@@ -119,9 +120,9 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 
 	if err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
-			UPDATE providers SET name=?, base_url=?, is_custom=?, responses_enabled=?, updated_at=?
+			UPDATE providers SET name=?, base_url=?, is_custom=?, responses_enabled=?, messages_enabled=?, updated_at=?
 			WHERE id=?`,
-			in.Name, in.BaseURL, boolInt(in.IsCustom), boolInt(in.ResponsesEnabled), now, id)
+			in.Name, in.BaseURL, boolInt(in.IsCustom), boolInt(in.ResponsesEnabled), boolInt(in.MessagesEnabled), now, id)
 		if err != nil {
 			return err
 		}

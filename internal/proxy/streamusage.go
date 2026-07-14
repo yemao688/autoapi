@@ -72,6 +72,7 @@ type streamUsageAccumulator struct {
 	cacheCreation int64
 	seenDone      bool
 	terminal      string
+	lastEvent     string
 }
 
 // Feed processes the next chunk of SSE bytes. It extracts any complete
@@ -126,7 +127,15 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	if line[0] == ':' {
 		return
 	}
-	// We only care about data: lines; ignore event:, id:, retry:, etc.
+	if bytes.HasPrefix(line, []byte("event:")) {
+		a.lastEvent = string(bytes.TrimSpace(line[len("event:"):]))
+		if a.lastEvent == "message_stop" {
+			a.terminal = "message_stop"
+			a.seenDone = true
+		}
+		return
+	}
+	// We only care about data: lines; ignore id:, retry:, etc.
 	if !bytes.HasPrefix(line, []byte("data:")) {
 		return
 	}
@@ -141,6 +150,10 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	var u streamUsageJSON
 	if err := json.Unmarshal(data, &u); err != nil {
 		return
+	}
+	if a.lastEvent == "message_stop" || u.Type == "message_stop" {
+		a.terminal = "message_stop"
+		a.seenDone = true
 	}
 	// Anthropic message_start nests usage under "message"; OpenAI
 	// and Anthropic message_delta expose usage at the top level.
@@ -214,7 +227,7 @@ func (a *streamUsageAccumulator) Done() bool {
 
 func (a *streamUsageAccumulator) TerminalState() string { return a.terminal }
 func (a *streamUsageAccumulator) Successful() bool {
-	return (a.terminal == "" && a.seenDone) || a.terminal == "completed"
+	return (a.terminal == "" && a.seenDone) || a.terminal == "completed" || a.terminal == "message_stop"
 }
 
 func isResponsesTerminal(typ string) bool {

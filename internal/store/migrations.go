@@ -450,6 +450,25 @@ BEGIN SELECT RAISE(ABORT, 'models.request_price must be finite and non-negative'
 		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "providers", "responses_enabled") },
 		SQL:             `ALTER TABLE providers ADD COLUMN responses_enabled INTEGER NOT NULL DEFAULT 0;`,
 	},
+	{
+		ID:              "025_provider_capabilities",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableExists(tx, "provider_capabilities") },
+		SQL: `
+ALTER TABLE providers ADD COLUMN messages_enabled INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS provider_capabilities (
+    provider_id TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    feature TEXT NOT NULL DEFAULT 'native',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (provider_id, protocol, feature)
+);`,
+		Hook: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO provider_capabilities (provider_id, protocol, feature, enabled, source, updated_at) SELECT id, 'openai_responses', 'native', 1, 'manual', ? FROM providers WHERE responses_enabled = 1 ON CONFLICT DO NOTHING`, nowMs())
+			return err
+		},
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists
@@ -667,6 +686,18 @@ func tableHasColumn(tx *sql.Tx, table, column string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func tableExists(tx *sql.Tx, table string) (bool, error) {
+	var name string
+	err := tx.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: check table exists: %w", err)
+	}
+	return true, nil
 }
 
 // migrate applies all pending migrations in a single transaction.

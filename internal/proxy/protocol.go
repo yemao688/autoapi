@@ -5,11 +5,14 @@ import "net/http"
 type Protocol string
 
 const (
-	ProtocolOpenAI          Protocol = "openai"
-	ProtocolOpenAIChat      Protocol = "openai_chat"
-	ProtocolOpenAIResponses Protocol = "openai_responses"
-	ProtocolUnknown         Protocol = ""
+	ProtocolOpenAI            Protocol = "openai"
+	ProtocolOpenAIChat        Protocol = "openai_chat"
+	ProtocolOpenAIResponses   Protocol = "openai_responses"
+	ProtocolAnthropicMessages Protocol = "anthropic_messages"
+	ProtocolUnknown           Protocol = ""
 )
+
+const AnthropicDefaultVersion = "2023-06-01"
 
 type ConversionMode string
 
@@ -20,11 +23,12 @@ const (
 // AttemptPreparation carries per-attempt protocol decisions that replace
 // the current hardcoded "use r.URL.Path and rewriteBodyModel" logic.
 type AttemptPreparation struct {
-	Body             []byte
-	Path             string
-	ExtraHeaders     http.Header
-	InboundProtocol  Protocol
-	UpstreamProtocol Protocol
+	Body               []byte
+	Path               string
+	ExtraHeaders       http.Header
+	InboundProtocol    Protocol
+	UpstreamProtocol   Protocol
+	SuppressBearerAuth bool
 	// ConversionMode: ConversionModeNative for same-protocol passthrough.
 	ConversionMode ConversionMode
 }

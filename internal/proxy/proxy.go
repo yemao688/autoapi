@@ -495,6 +495,7 @@ func (p *Proxy) setupRouter() chi.Router {
 
 	r.Post("/v1/chat/completions", p.handleChatCompletions)
 	r.Post("/v1/responses", p.handleResponses)
+	r.Post("/v1/messages", p.handleMessages)
 	r.Post("/v1/embeddings", p.handleEmbeddings)
 	r.Post("/v1/images/generations", p.handleOpenAI)
 	r.Post("/v1/audio/transcriptions", p.handleOpenAI)
@@ -1063,7 +1064,14 @@ outer:
 				req.URL.RawQuery = r.URL.RawQuery
 				req.Host = upstreamURL.Host
 				req.Header.Del("Authorization")
-				req.Header.Set("Authorization", "Bearer "+upstreamKey)
+				if prep.SuppressBearerAuth {
+					req.Header.Set("X-Api-Key", upstreamKey)
+					if req.Header.Get("anthropic-version") == "" {
+						req.Header.Set("anthropic-version", AnthropicDefaultVersion)
+					}
+				} else {
+					req.Header.Set("Authorization", "Bearer "+upstreamKey)
+				}
 				req.Header.Set("X-Autoapi-Route", c.ruleID)
 				if req.Header.Get("Content-Type") == "" {
 					req.Header.Set("Content-Type", "application/json")
@@ -1669,7 +1677,7 @@ outer:
 				break
 			}
 
-			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, prep.ExtraHeaders, attemptOrder, inputEstimate, logEntry)
+			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, prep, attemptOrder, inputEstimate, logEntry)
 			attemptOrder = newOrder
 
 			switch result.Status {
@@ -1805,7 +1813,7 @@ outer:
 //
 // Resource safety: resp.Body.Close() is deferred immediately after a
 // successful Do, so every code path releases the upstream connection.
-func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, extraHeaders http.Header, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
+func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, prep AttemptPreparation, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
 	order = attemptOrder
 	emitted := false
 	defer func() {
@@ -1864,13 +1872,20 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	attemptReq.ContentLength = int64(len(rewrittenBody))
 	attemptReq.Header = r.Header.Clone()
 	attemptReq.Header.Del("Authorization")
-	attemptReq.Header.Set("Authorization", "Bearer "+upstreamKey)
+	if prep.SuppressBearerAuth {
+		attemptReq.Header.Set("X-Api-Key", upstreamKey)
+		if attemptReq.Header.Get("anthropic-version") == "" {
+			attemptReq.Header.Set("anthropic-version", AnthropicDefaultVersion)
+		}
+	} else {
+		attemptReq.Header.Set("Authorization", "Bearer "+upstreamKey)
+	}
 	attemptReq.Header.Set("X-Autoapi-Route", c.ruleID)
 	attemptReq.Header.Del("Transfer-Encoding")
 	if attemptReq.Header.Get("Content-Type") == "" {
 		attemptReq.Header.Set("Content-Type", "application/json")
 	}
-	applyExtraHeaders(attemptReq.Header, extraHeaders)
+	applyExtraHeaders(attemptReq.Header, prep.ExtraHeaders)
 	attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 
 	// Per-attempt transport with the candidate-specific first-byte

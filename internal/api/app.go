@@ -72,6 +72,8 @@ type StoreService interface {
 	UpdateProvider(id string, in model.ProviderInput) (*model.Provider, error)
 	DeleteProvider(id string) error
 	SetProviderEnabled(id string, enabled bool) error
+	ListProviderCapabilities(providerID string) ([]model.ProviderCapability, error)
+	SetProviderCapability(providerID, protocol, feature string, enabled bool) error
 
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
@@ -660,6 +662,20 @@ func (a *App) SetProviderEnabled(id string, enabled bool) error {
 	}
 	slog.Info("app: provider enabled updated", "id", id, "enabled", enabled)
 	return nil
+}
+
+func (a *App) ListProviderCapabilities(providerID string) ([]model.ProviderCapability, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Store.ListProviderCapabilities(providerID)
+}
+
+func (a *App) SetProviderCapability(providerID, protocol string, enabled bool) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	return a.deps.Store.SetProviderCapability(providerID, protocol, "native", enabled)
 }
 
 func (a *App) TestProvider(id string) (*model.ProviderTestResult, error) {

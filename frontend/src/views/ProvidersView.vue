@@ -82,6 +82,7 @@ const form = ref<model.ProviderInput>({
   upstream_key: '',
   is_custom: false,
   responses_enabled: false,
+  messages_enabled: false,
 })
 
 const filteredProviders = computed(() => {
@@ -497,7 +498,7 @@ function openAdd(isCustom: boolean) {
   resetModalState()
   modalMode.value = 'add'
   editingId.value = ''
-  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false }
+  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false, messages_enabled: false }
   modalOpen.value = true
 }
 
@@ -512,6 +513,7 @@ function openEdit(provider: model.Provider) {
     upstream_key: '',
     is_custom: provider.is_custom,
     responses_enabled: provider.responses_enabled,
+    messages_enabled: provider.messages_enabled,
   }
   loadingKey.value = true
   models.value = []
@@ -564,6 +566,7 @@ async function saveProvider() {
       upstream_key: form.value.upstream_key,
       is_custom: form.value.is_custom,
       responses_enabled: form.value.responses_enabled,
+      messages_enabled: form.value.messages_enabled,
     }
     if (modalMode.value === 'edit' && !keyDirty.value) {
       payload.upstream_key = ''
@@ -891,6 +894,17 @@ onMounted(() => {
             </label>
           </div>
           <div class="field-help">{{ t('providers.modal.responsesApiHelp') }}</div>
+        </div>
+
+        <div class="field">
+          <div class="row-between" style="margin-bottom: 0;">
+            <label class="field-label">{{ t('providers.modal.messagesApi') }}</label>
+            <label class="toggle">
+              <input v-model="form.messages_enabled" type="checkbox">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="field-help">{{ t('providers.modal.messagesApiHelp') }}</div>
         </div>
 
         <div v-if="modalMode === 'edit'" class="field">

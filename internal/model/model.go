@@ -47,9 +47,19 @@ type Provider struct {
 	ErrorMessage     string         `json:"error_message,omitempty"`
 	IsCustom         bool           `json:"is_custom"` // true for self-hosted / OpenAI-compatible gateways
 	ResponsesEnabled bool           `json:"responses_enabled"`
+	MessagesEnabled  bool           `json:"messages_enabled"`
 	Enabled          bool           `json:"enabled"`
 	CreatedAt        int64          `json:"created_at"`
 	UpdatedAt        int64          `json:"updated_at"`
+}
+
+type ProviderCapability struct {
+	ProviderID string `json:"provider_id"`
+	Protocol   string `json:"protocol"`
+	Feature    string `json:"feature"`
+	Enabled    bool   `json:"enabled"`
+	Source     string `json:"source"`
+	UpdatedAt  int64  `json:"updated_at"`
 }
 
 // Model is a model offered by a provider (lookup table, populated from upstream).
@@ -505,6 +515,7 @@ type ProviderInput struct {
 	UpstreamKey      string `json:"upstream_key"` // cleartext provider key; encrypted by App layer before storage
 	IsCustom         bool   `json:"is_custom"`
 	ResponsesEnabled bool   `json:"responses_enabled"`
+	MessagesEnabled  bool   `json:"messages_enabled"`
 }
 
 type ModelRuleInput struct {

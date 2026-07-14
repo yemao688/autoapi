@@ -332,6 +332,8 @@
       "customProvider": "Custom upstream",
       "responsesApi": "Responses API",
       "responsesApiHelp": "Enable only when this upstream explicitly supports native Responses.",
+      "messagesApi": "Messages API",
+      "messagesApiHelp": "Enable only when this upstream explicitly supports native Anthropic Messages.",
       "model": "Available models",
       "availableModels": "Available models",
       "manualAdd": "Add manually",

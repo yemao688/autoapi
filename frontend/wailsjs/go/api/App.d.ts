@@ -74,6 +74,8 @@ export function ListModelRules():Promise<Array<model.ModelRule>>;
 
 export function ListModels(arg1:string):Promise<Array<model.Model>>;
 
+export function ListProviderCapabilities(arg1:string):Promise<Array<model.ProviderCapability>>;
+
 export function ListProviders():Promise<Array<model.Provider>>;
 
 export function NavigateTo(arg1:string):Promise<void>;
@@ -105,6 +107,8 @@ export function SetAppInfo(arg1:model.AppInfo):Promise<void>;
 export function SetInitialVisibility(arg1:boolean):Promise<void>;
 
 export function SetModelsActive(arg1:string,arg2:Array<string>,arg3:boolean):Promise<void>;
+
+export function SetProviderCapability(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function SetProviderEnabled(arg1:string,arg2:boolean):Promise<void>;
 

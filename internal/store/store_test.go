@@ -90,6 +90,7 @@ func TestProviderCRUD(t *testing.T) {
 		BaseURL:          "https://test.example.com",
 		UpstreamKey:      "sk-test-abc123",
 		ResponsesEnabled: true,
+		MessagesEnabled:  true,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -105,6 +106,9 @@ func TestProviderCRUD(t *testing.T) {
 	}
 	if !p.ResponsesEnabled {
 		t.Fatal("expected Responses capability enabled after create")
+	}
+	if !p.MessagesEnabled {
+		t.Fatal("expected Messages capability enabled after create")
 	}
 	// The store no longer stores the upstream key; key columns should be empty.
 	if len(p.KeyCiphertext) != 0 || p.KeyMasked != "" {
@@ -127,6 +131,9 @@ func TestProviderCRUD(t *testing.T) {
 	if !got.ResponsesEnabled {
 		t.Fatal("expected Responses capability persisted by Get")
 	}
+	if !got.MessagesEnabled {
+		t.Fatal("expected Messages capability persisted by Get")
+	}
 	if string(got.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected ciphertext set by helper, got %q", got.KeyCiphertext)
 	}
@@ -140,6 +147,7 @@ func TestProviderCRUD(t *testing.T) {
 		BaseURL:          "https://updated.example.com",
 		UpstreamKey:      "sk-updated-xyz789",
 		ResponsesEnabled: false,
+		MessagesEnabled:  false,
 	})
 	if err != nil {
 		t.Fatalf("UpdateProvider: %v", err)
@@ -149,6 +157,9 @@ func TestProviderCRUD(t *testing.T) {
 	}
 	if updated.ResponsesEnabled {
 		t.Fatal("expected Responses capability persisted by Update")
+	}
+	if updated.MessagesEnabled {
+		t.Fatal("expected Messages capability persisted by Update")
 	}
 	if string(updated.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected key columns preserved, got %q", updated.KeyCiphertext)

@@ -117,6 +117,9 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		if req.Task == "responses" && !p.ResponsesEnabled {
 			continue
 		}
+		if req.Task == "messages" && !p.MessagesEnabled {
+			continue
+		}
 		if isOpen(t.ProviderID, breakers) {
 			continue
 		}

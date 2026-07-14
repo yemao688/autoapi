@@ -59,6 +59,23 @@ func TestNativeAdapterPrepareAttemptWithUnknownProtocol(t *testing.T) {
 	}
 }
 
+func TestNativeAdapterPrepareAttemptAnthropicMessagesSuppressesBearer(t *testing.T) {
+	prep, err := (nativeAdapter{}).PrepareAttempt([]byte(`{"model":"requested","messages":[]}`), candidate{
+		modelName:    "claude-upstream",
+		protocol:     ProtocolAnthropicMessages,
+		upstreamPath: "/v1/messages",
+	})
+	if err != nil {
+		t.Fatalf("PrepareAttempt: %v", err)
+	}
+	if !prep.SuppressBearerAuth {
+		t.Fatal("expected SuppressBearerAuth for Anthropic Messages")
+	}
+	if prep.ExtraHeaders != nil {
+		t.Fatalf("ExtraHeaders = %v, want nil so client anthropic-version is preserved", prep.ExtraHeaders)
+	}
+}
+
 func TestNativeAdapterPrepareAttemptEmptyModelAndInvalidJSON(t *testing.T) {
 	t.Run("empty modelName", func(t *testing.T) {
 		body := []byte(`{"model":"requested"}`)

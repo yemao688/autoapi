@@ -14,11 +14,15 @@ func (nativeAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPreparatio
 	if err != nil {
 		return AttemptPreparation{}, err
 	}
-	return AttemptPreparation{
+	prep := AttemptPreparation{
 		Body:             rewrittenBody,
 		Path:             c.upstreamPath,
 		InboundProtocol:  c.protocol,
 		UpstreamProtocol: c.protocol,
 		ConversionMode:   ConversionModeNative,
-	}, nil
+	}
+	if c.protocol == ProtocolAnthropicMessages {
+		prep.SuppressBearerAuth = true
+	}
+	return prep, nil
 }

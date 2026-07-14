@@ -4142,6 +4142,100 @@ func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
 	})
 }
 
+func TestChar_MessagesRouteRegistered(t *testing.T) {
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"missing","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /v1/messages to be registered, got 404: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected request to reach messages handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelope(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
+}
+
+func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		var gotPath string
+		var gotBody []byte
+		var gotAuthorization string
+		var gotAPIKey string
+		var gotVersion string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotAuthorization = r.Header.Get("Authorization")
+			gotAPIKey = r.Header.Get("X-Api-Key")
+			gotVersion = r.Header.Get("anthropic-version")
+			gotBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","content":[]}`))
+		}))
+		defer srv.Close()
+
+		store := &mockStore{
+			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
+			rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+		defer p.Shutdown()
+
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if gotPath != "/v1/messages" {
+			t.Fatalf("expected upstream /v1/messages, got %q", gotPath)
+		}
+		if gotAuthorization != "" || gotAPIKey != "secret" {
+			t.Fatalf("Authorization=%q X-Api-Key=%q, want no bearer and x-api-key", gotAuthorization, gotAPIKey)
+		}
+		if gotVersion != AnthropicDefaultVersion {
+			t.Fatalf("anthropic-version=%q want %q", gotVersion, AnthropicDefaultVersion)
+		}
+		if string(gotBody) != `{"messages":[{"role":"user","content":"hi"}],"model":"claude-upstream"}` {
+			t.Fatalf("unexpected upstream body %q", string(gotBody))
+		}
+	})
+
+	t.Run("preflight reject", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called, got %s", r.URL.Path)
+		}))
+		defer srv.Close()
+
+		store := &mockStore{
+			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: false}},
+			rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+		defer p.Shutdown()
+
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude","messages":[]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+		}
+		assertErrorEnvelope(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"claude\" are disabled or have open circuits")
+	})
+}
+
 func TestChar_WriteErrorEnvelopeFormats(t *testing.T) {
 	p := New(&mockStore{}, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()

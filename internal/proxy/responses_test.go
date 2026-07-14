@@ -62,6 +62,15 @@ func TestResponsesInputCachedTokens(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessageStopTerminal(t *testing.T) {
+	var acc streamUsageAccumulator
+	acc.Feed([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":8}}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	input, _, _, _ := acc.Usage()
+	if input != 8 || acc.TerminalState() != "message_stop" || !acc.Done() || !acc.Successful() {
+		t.Fatalf("input=%d terminal=%q done=%v successful=%v", input, acc.TerminalState(), acc.Done(), acc.Successful())
+	}
+}
+
 func TestRewriteBodyModelPreservesRawValues(t *testing.T) {
 	body := []byte(`{"model":"old","big":9007199254740993,"unknown":{"x":true}}`)
 	out, err := rewriteBodyModel(body, "new")
