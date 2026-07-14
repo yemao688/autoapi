@@ -21,6 +21,18 @@ func TestValidateResponsesRequest(t *testing.T) {
 	}
 }
 
+func TestValidateMessagesRequest(t *testing.T) {
+	if req, err := validateMessagesRequest([]byte(`{"model":"claude","messages":[],"stream":true}`)); err != nil || !req.Stream || req.Model != "claude" {
+		t.Fatalf("valid request: %#v, %v", req, err)
+	}
+	if _, err := validateMessagesRequest([]byte(`{"messages":[]}`)); err == nil {
+		t.Fatal("expected missing model rejection")
+	}
+	if _, err := validateMessagesRequest([]byte(`{"model":`)); err == nil {
+		t.Fatal("expected invalid JSON rejection")
+	}
+}
+
 func TestParseResponsesStreamTerminalAndUsage(t *testing.T) {
 	var acc streamUsageAccumulator
 	acc.Feed([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":7}}\n\n"))

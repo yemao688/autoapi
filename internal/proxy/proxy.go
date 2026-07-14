@@ -1063,15 +1063,7 @@ outer:
 				req.URL.RawPath = upstreamURL.RawPath
 				req.URL.RawQuery = r.URL.RawQuery
 				req.Host = upstreamURL.Host
-				req.Header.Del("Authorization")
-				if prep.SuppressBearerAuth {
-					req.Header.Set("X-Api-Key", upstreamKey)
-					if req.Header.Get("anthropic-version") == "" {
-						req.Header.Set("anthropic-version", AnthropicDefaultVersion)
-					}
-				} else {
-					req.Header.Set("Authorization", "Bearer "+upstreamKey)
-				}
+				applyUpstreamAuth(req.Header, prep, upstreamKey)
 				req.Header.Set("X-Autoapi-Route", c.ruleID)
 				if req.Header.Get("Content-Type") == "" {
 					req.Header.Set("Content-Type", "application/json")
@@ -1871,15 +1863,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
 	attemptReq.ContentLength = int64(len(rewrittenBody))
 	attemptReq.Header = r.Header.Clone()
-	attemptReq.Header.Del("Authorization")
-	if prep.SuppressBearerAuth {
-		attemptReq.Header.Set("X-Api-Key", upstreamKey)
-		if attemptReq.Header.Get("anthropic-version") == "" {
-			attemptReq.Header.Set("anthropic-version", AnthropicDefaultVersion)
-		}
-	} else {
-		attemptReq.Header.Set("Authorization", "Bearer "+upstreamKey)
-	}
+	applyUpstreamAuth(attemptReq.Header, prep, upstreamKey)
 	attemptReq.Header.Set("X-Autoapi-Route", c.ruleID)
 	attemptReq.Header.Del("Transfer-Encoding")
 	if attemptReq.Header.Get("Content-Type") == "" {
@@ -2418,6 +2402,18 @@ func applyExtraHeaders(h http.Header, extra http.Header) {
 		for _, value := range values {
 			h.Add(name, value)
 		}
+	}
+}
+
+func applyUpstreamAuth(h http.Header, prep AttemptPreparation, upstreamKey string) {
+	h.Del("Authorization")
+	if prep.SuppressBearerAuth {
+		h.Set("X-Api-Key", upstreamKey)
+		if h.Get("anthropic-version") == "" {
+			h.Set("anthropic-version", AnthropicDefaultVersion)
+		}
+	} else {
+		h.Set("Authorization", "Bearer "+upstreamKey)
 	}
 }
 

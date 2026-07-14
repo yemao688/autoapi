@@ -4210,6 +4210,38 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		}
 	})
 
+	t.Run("version passthrough", func(t *testing.T) {
+		var gotVersion string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotVersion = r.Header.Get("anthropic-version")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","content":[]}`))
+		}))
+		defer srv.Close()
+
+		store := &mockStore{
+			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
+			rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+		defer p.Shutdown()
+
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude","messages":[]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		req.Header.Set("anthropic-version", "2024-01-01")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if gotVersion != "2024-01-01" {
+			t.Fatalf("anthropic-version=%q want 2024-01-01", gotVersion)
+		}
+	})
+
 	t.Run("preflight reject", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatalf("upstream should not be called, got %s", r.URL.Path)
@@ -4234,6 +4266,63 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		}
 		assertErrorEnvelope(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"claude\" are disabled or have open circuits")
 	})
+}
+
+func TestChar_MessagesStreamingE2E(t *testing.T) {
+	var mu sync.Mutex
+	var gotAuthorization string
+	var gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuthorization = r.Header.Get("Authorization")
+		gotAPIKey = r.Header.Get("X-Api-Key")
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	auth, apiKey := gotAuthorization, gotAPIKey
+	mu.Unlock()
+	if auth != "" || apiKey != "secret" {
+		t.Fatalf("Authorization=%q X-Api-Key=%q, want no bearer and x-api-key", auth, apiKey)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: message_start") || !strings.Contains(body, "event: content_block_delta") || !strings.Contains(body, "event: message_stop") {
+		t.Fatalf("expected Anthropic SSE passthrough, got %s", body)
+	}
+	log := waitForLog(t, store)
+	if len(log.Chain) != 1 || log.Chain[0].Status != "success" {
+		t.Fatalf("expected one success chain entry, got %+v", log.Chain)
+	}
 }
 
 func TestChar_WriteErrorEnvelopeFormats(t *testing.T) {
