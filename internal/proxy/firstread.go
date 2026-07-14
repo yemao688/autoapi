@@ -10,12 +10,20 @@ import (
 // attempt. Closing the body on timeout unblocks readers that do not expose a
 // net.Conn deadline, and waiting for the goroutine prevents leaks.
 func readFirstBodyByte(ctx context.Context, body io.ReadCloser, deadline time.Time) ([]byte, error) {
+	return readBodyChunk(ctx, body, 32*1024, deadline)
+}
+
+// readBodyChunk reads one body chunk while a pre-commit deadline is active.
+// The body is closed on cancellation so a provider that stalls in Read cannot
+// leave a goroutine behind. The result channel is buffered and the reader is
+// always joined after Close.
+func readBodyChunk(ctx context.Context, body io.ReadCloser, size int, deadline time.Time) ([]byte, error) {
 	result := make(chan struct {
 		data []byte
 		err  error
 	}, 1)
 	go func() {
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, size)
 		n, err := body.Read(buf)
 		result <- struct {
 			data []byte

@@ -33,6 +33,7 @@ type messagesToResponsesStreamConverter struct {
 	inputTokens  int
 	outputTokens int
 	stopReason   string
+	terminal     bool
 	closed       bool
 }
 
@@ -115,6 +116,9 @@ func (c *messagesToResponsesStreamConverter) processLine(line []byte) ([]byte, e
 }
 
 func (c *messagesToResponsesStreamConverter) processEvent() ([]byte, error) {
+	if c.terminal {
+		return nil, nil
+	}
 	event, data := c.event, append([]byte(nil), c.data...)
 	c.event, c.data = "", nil
 	if event == "ping" || len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
@@ -205,6 +209,7 @@ func (c *messagesToResponsesStreamConverter) processEvent() ([]byte, error) {
 			c.outputTokens = n
 		}
 	case "message_stop":
+		c.terminal = true
 		return obj("response.completed", map[string]interface{}{"response": map[string]interface{}{"id": c.responseID, "object": "response", "status": "completed", "usage": map[string]interface{}{"input_tokens": c.inputTokens, "output_tokens": c.outputTokens}, "stop_reason": c.stopReason}}), nil
 	}
 	return nil, nil
@@ -223,6 +228,7 @@ type responsesToMessagesStreamConverter struct {
 	blockType    string
 	blockID      string
 	blockName    string
+	blockIndex   int
 	blockOpen    bool
 	blockStopped bool
 	toolArgs     strings.Builder
@@ -234,7 +240,7 @@ type responsesToMessagesStreamConverter struct {
 }
 
 func newResponsesToMessagesStreamConverter() StreamConverter {
-	return &responsesToMessagesStreamConverter{}
+	return &responsesToMessagesStreamConverter{blockIndex: -1}
 }
 
 func (c *responsesToMessagesStreamConverter) Write(p []byte) ([]byte, error) {
@@ -361,43 +367,63 @@ func (c *responsesToMessagesStreamConverter) processEvent() ([]byte, error) {
 			return nil, nil
 		}
 		c.blockOpen, c.blockStopped = true, false
+		c.blockIndex++
 		c.blockType = kind
-		c.blockID, _ = item["id"].(string)
+		c.blockID, _ = item["call_id"].(string)
+		if c.blockID == "" {
+			c.blockID, _ = item["id"].(string)
+		}
 		c.blockName, _ = item["name"].(string)
 		c.toolArgs.Reset()
 		block := map[string]interface{}{"type": "text"}
 		if kind == "function_call" {
 			block = map[string]interface{}{"type": "tool_use", "id": c.blockID, "name": c.blockName, "input": map[string]interface{}{}}
 		}
-		return anthropicEvent("content_block_start", map[string]interface{}{"index": 0, "content_block": block}), nil
+		return anthropicEvent("content_block_start", map[string]interface{}{"index": c.blockIndex, "content_block": block}), nil
 	case "response.output_text.delta":
 		if c.blockType != "message" || !c.blockOpen {
 			return nil, nil
 		}
 		text, _ := v["delta"].(string)
-		return anthropicEvent("content_block_delta", map[string]interface{}{"index": 0, "delta": map[string]interface{}{"type": "text_delta", "text": text}}), nil
+		return anthropicEvent("content_block_delta", map[string]interface{}{"index": c.blockIndex, "delta": map[string]interface{}{"type": "text_delta", "text": text}}), nil
 	case "response.function_call_arguments.delta":
 		if c.blockType != "function_call" || !c.blockOpen {
 			return nil, nil
 		}
 		part, _ := v["delta"].(string)
 		c.toolArgs.WriteString(part)
-		return anthropicEvent("content_block_delta", map[string]interface{}{"index": 0, "delta": map[string]interface{}{"type": "input_json_delta", "partial_json": part}}), nil
+		return anthropicEvent("content_block_delta", map[string]interface{}{"index": c.blockIndex, "delta": map[string]interface{}{"type": "input_json_delta", "partial_json": part}}), nil
 	case "response.output_text.done", "response.content_part.done", "response.output_item.done":
 		if !c.blockOpen || c.blockStopped {
 			return nil, nil
 		}
 		c.blockStopped = true
 		c.blockOpen = false
-		return anthropicEvent("content_block_stop", map[string]interface{}{"index": 0}), nil
+		return anthropicEvent("content_block_stop", map[string]interface{}{"index": c.blockIndex}), nil
 	case "response.function_call_arguments.done":
 		return nil, nil
 	case "response.completed":
 		return c.finish(get(v, "response"), "completed"), nil
 	case "response.incomplete":
-		return c.finish(get(v, "response"), "max_tokens"), nil
+		response := get(v, "response")
+		details, _ := response["incomplete_details"].(map[string]interface{})
+		reason, _ := details["reason"].(string)
+		if reason == "max_output_tokens" || reason == "max_tokens" {
+			return c.finish(response, "max_tokens"), nil
+		}
+		return nil, fmt.Errorf("responses stream incomplete: unsupported reason %q", reason)
 	case "response.failed":
-		return c.finish(get(v, "response"), "error"), nil
+		// Do not emit an error event or message_stop. Returning an error lets
+		// streamAttempt distinguish an upstream conversion failure from a
+		// successfully delivered stream.
+		c.terminal = true
+		message := "Responses response failed"
+		if details := get(v, "response"); details != nil {
+			if status, _ := details["status"].(string); status != "" {
+				message += ": " + status
+			}
+		}
+		return nil, fmt.Errorf("responses stream failed: %s", message)
 	default:
 		if strings.Contains(typ, "reasoning") || strings.Contains(typ, "refusal") {
 			slog.Debug("proxy: dropping unsupported Responses event", "type", typ)
@@ -424,7 +450,15 @@ func (c *responsesToMessagesStreamConverter) finish(response map[string]interfac
 	} else {
 		c.stopReason = reason
 	}
-	return append(anthropicEvent("message_delta", map[string]interface{}{"delta": map[string]interface{}{"stop_reason": c.stopReason}, "usage": map[string]interface{}{"output_tokens": c.outputTokens}}), anthropicEvent("message_stop", map[string]interface{}{})...)
+	var out []byte
+	if c.blockOpen && !c.blockStopped {
+		c.blockStopped = true
+		c.blockOpen = false
+		out = append(out, anthropicEvent("content_block_stop", map[string]interface{}{"index": c.blockIndex})...)
+	}
+	out = append(out, anthropicEvent("message_delta", map[string]interface{}{"delta": map[string]interface{}{"stop_reason": c.stopReason}, "usage": map[string]interface{}{"output_tokens": c.outputTokens}})...)
+	out = append(out, anthropicEvent("message_stop", map[string]interface{}{})...)
+	return out
 }
 
 func getMap(m map[string]interface{}, key string) map[string]interface{} {

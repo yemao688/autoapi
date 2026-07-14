@@ -18,6 +18,11 @@ const AnthropicDefaultVersion = "2023-06-01"
 
 type ConversionMode string
 
+func supportsStreamConversion(from, to Protocol) bool {
+	return (from == ProtocolOpenAIResponses && to == ProtocolAnthropicMessages) ||
+		(from == ProtocolAnthropicMessages && to == ProtocolOpenAIResponses)
+}
+
 const (
 	ConversionModeNative  ConversionMode = "native"
 	ConversionModeConvert ConversionMode = "convert"

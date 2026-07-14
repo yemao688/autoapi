@@ -53,7 +53,7 @@ func TestResponsesToMessagesStreamTextGolden(t *testing.T) {
 
 func TestResponsesToMessagesStreamTerminalAndUnknown(t *testing.T) {
 	c := newResponsesToMessagesStreamConverter()
-	out, err := c.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"bad\"}\n\nevent: response.incomplete\ndata: {\"type\":\"response.incomplete\"}\n\n"))
+	out, err := c.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"bad\"}\n\nevent: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +67,37 @@ func TestResponsesToMessagesStreamTerminalAndUnknown(t *testing.T) {
 	}
 	if strings.Contains(string(out), "text_delta") || strings.Contains(string(out), "secret") {
 		t.Fatalf("reasoning became text: %s", out)
+	}
+}
+
+func TestResponsesToMessagesStreamTerminalSemantics(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	out, err := c.Write([]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if strings.Index(got, "event: content_block_stop") > strings.Index(got, "event: message_delta") || strings.Count(got, "event: message_stop") != 1 {
+		t.Fatalf("active block was not closed before terminal events: %s", got)
+	}
+	more, err := c.Write([]byte("event: response.completed\ndata: {}\n\n"))
+	if err != nil || len(more) != 0 {
+		t.Fatalf("duplicate terminal was not ignored: out=%q err=%v", more, err)
+	}
+
+	c = newResponsesToMessagesStreamConverter()
+	if _, err := c.Write([]byte("event: response.failed\ndata: {\"type\":\"response.failed\"}\n\n")); err == nil {
+		t.Fatal("failed response was treated as successful conversion")
+	}
+	if _, err := c.Write([]byte("event: response.completed\ndata: {}\n\n")); err != nil {
+		t.Fatalf("terminal guard did not suppress later events: %v", err)
+	}
+}
+
+func TestResponsesToMessagesStreamIncompleteReasonError(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	if _, err := c.Write([]byte("event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"content_filter\"}}}\n\n")); err == nil || !strings.Contains(err.Error(), "content_filter") {
+		t.Fatalf("unsupported incomplete reason did not return clear error: %v", err)
 	}
 }
 

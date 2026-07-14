@@ -278,8 +278,7 @@ func hasUnsupportedStreamConversion(candidates []candidate, from Protocol) bool 
 		if c.convertTo == "" {
 			continue
 		}
-		if !((from == ProtocolOpenAIResponses && c.convertTo == ProtocolAnthropicMessages) ||
-			(from == ProtocolAnthropicMessages && c.convertTo == ProtocolOpenAIResponses)) {
+		if !supportsStreamConversion(from, c.convertTo) {
 			return true
 		}
 	}

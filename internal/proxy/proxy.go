@@ -2197,6 +2197,17 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	if prep.NewStreamConverter != nil {
 		converter = prep.NewStreamConverter()
 	}
+	// A converted stream cannot commit on the first raw byte: the converter
+	// may need a complete SSE event. Keep the candidate first-byte budget alive
+	// until the first non-empty converted output is available. Native streams
+	// retain their existing header/first-raw-byte semantics.
+	conversionDeadline := time.Time{}
+	if converter != nil {
+		conversionDeadline = effectiveAttemptFirstBodyByteDeadline(attemptStart, attemptStart.Add(c.firstByteBudget), c.targetFirstBodyByteTimeout)
+		if dl, ok := ctx.Deadline(); ok && (conversionDeadline.IsZero() || dl.Before(conversionDeadline)) {
+			conversionDeadline = dl
+		}
+	}
 	writeConverted := func(input []byte) error {
 		out := input
 		var err error
@@ -2204,11 +2215,10 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			out, err = converter.Write(input)
 			if err != nil {
 				conversionErr = err
-				return err
 			}
 		}
 		if len(out) == 0 {
-			return nil
+			return err
 		}
 		if !committed {
 			if converter != nil {
@@ -2226,7 +2236,10 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		if _, err = ww.Write(out); err == nil && flusher != nil {
 			flusher.Flush()
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return conversionErr
 	}
 	if writeErr = writeConverted(initial); writeErr != nil { /* handled below */
 	}
@@ -2237,9 +2250,17 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		if streamErr != nil || writeErr != nil {
 			break
 		}
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if werr := writeConverted(buf[:n]); werr != nil {
+		var chunk []byte
+		var readErr error
+		if converter != nil && !committed {
+			chunk, readErr = readBodyChunk(r.Context(), resp.Body, len(buf), conversionDeadline)
+		} else {
+			var n int
+			n, readErr = resp.Body.Read(buf)
+			chunk = buf[:n]
+		}
+		if len(chunk) > 0 {
+			if werr := writeConverted(chunk); werr != nil {
 				writeErr = werr
 				break
 			}
@@ -2325,6 +2346,15 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	case conversionErr != nil:
 		chainEntry.Status = "truncated"
 		chainEntry.Error = conversionErr.Error()
+		p.breakerFor(c.provider.ID).Record(false)
+		if c.targetID != "" {
+			if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
+				slog.Error("proxy: increment target failure count (conversion stream)", "err", err)
+			}
+		}
+		if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, conversionErr.Error()); err != nil {
+			slog.Error("proxy: update provider health", "err", err)
+		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = chainEntry.Error
 		return streamAttemptResult{Status: model.AttemptOutcomeTruncated, StatusCode: upstreamStatus, Error: chainEntry.Error, LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()), StreamErr: conversionErr}, attemptOrder
