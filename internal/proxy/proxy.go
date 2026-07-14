@@ -680,7 +680,7 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	if err != nil {
 		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, p.store.GetProvider)
 		if conversionErr != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w (no conversion fallback: %v)", err, conversionErr)
 		}
 		candidates = conversionCandidates
 	}
@@ -1175,6 +1175,7 @@ outer:
 							Status:               "conversion_error",
 							StatusCode:           http.StatusBadGateway,
 							Error:                lastErr.Error(),
+							LatencyMs:            latencyMs,
 						})
 						p.breakerFor(c.provider.ID).Record(false)
 						if c.targetID != "" {
@@ -1484,7 +1485,6 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	// a failed attempt; the next backoff will honor it instead of the
 	// computed exponential backoff. Reset after consumption.
 	retryAfter := time.Duration(0)
-	adapter := nativeAdapter{}
 
 	// outer is the label on the candidate loop. The global attempt cap
 	// uses a labeled break to exit BOTH loops at once. Plain `break` in
@@ -1492,6 +1492,10 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	// circuit-open paths are unaffected.
 outer:
 	for _, c := range candidates {
+		var adapter ProtocolAdapter = nativeAdapter{}
+		if c.convertTo != "" {
+			adapter = conversionAdapter{from: c.protocol, to: c.convertTo}
+		}
 		lastCandidate = c
 		if !p.breakerFor(c.provider.ID).Allow() {
 			slog.Debug("proxy: stream candidate circuit open", "provider", c.provider.Name, "model", c.modelName)

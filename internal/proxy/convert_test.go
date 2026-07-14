@@ -123,6 +123,35 @@ func TestMessagesToResponsesResponseConversion(t *testing.T) {
 	}
 }
 
+func TestStopReasonStatusMapping(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		stop   string
+	}{
+		{"completed", "end_turn"},
+		{"incomplete", "max_tokens"},
+		{"failed", "error"},
+		{"unknown", "end_turn"},
+	} {
+		if got := responsesStatusToMessagesStop(tc.status); got != tc.stop {
+			t.Errorf("responsesStatusToMessagesStop(%q) = %q, want %q", tc.status, got, tc.stop)
+		}
+	}
+	for _, tc := range []struct {
+		stop   string
+		status string
+	}{
+		{"max_tokens", "incomplete"},
+		{"error", "failed"},
+		{"end_turn", "completed"},
+		{"unknown", "completed"},
+	} {
+		if got := messagesStopToResponsesStatus(tc.stop); got != tc.status {
+			t.Errorf("messagesStopToResponsesStatus(%q) = %q, want %q", tc.stop, got, tc.status)
+		}
+	}
+}
+
 func TestProtocolConversionRejections(t *testing.T) {
 	cases := []struct {
 		name string

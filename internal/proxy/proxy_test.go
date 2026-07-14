@@ -727,6 +727,49 @@ func TestResponsesClientFallsBackToMessagesProvider(t *testing.T) {
 	}
 }
 
+func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, "not-json")
+	}))
+	defer srv.Close()
+
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s, want 502", rec.Code, rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != "conversion_error" {
+		t.Fatalf("chain=%#v, want one conversion_error entry", log.Chain)
+	}
+	if log.Chain[0].LatencyMs < 0 {
+		t.Fatalf("conversion error latency=%d, want non-negative", log.Chain[0].LatencyMs)
+	}
+	if p.breakerFor("p").CurrentState() != StateClosed {
+		t.Fatalf("breaker opened after one failure; threshold should not be reached")
+	}
+	for i := 0; i < failureThreshold-1; i++ {
+		req = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec = httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+	}
+	if p.breakerFor("p").CurrentState() != StateOpen {
+		t.Fatalf("breaker state=%v, want open after %d conversion failures", p.breakerFor("p").CurrentState(), failureThreshold)
+	}
+}
+
 func TestProtocolConversionStreamingRejectedBeforeUpstream(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3799,6 +3842,25 @@ func assertErrorEnvelope(t *testing.T, body []byte, wantType, wantMessage string
 	}
 }
 
+func assertErrorEnvelopeContains(t *testing.T, body []byte, wantType, wantMessage string) {
+	t.Helper()
+	var envelope struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("expected JSON error envelope, got %q: %v", string(body), err)
+	}
+	if envelope.Error.Type != wantType {
+		t.Fatalf("error.type = %q, want %q", envelope.Error.Type, wantType)
+	}
+	if !strings.Contains(envelope.Error.Message, wantMessage) {
+		t.Fatalf("error.message = %q, want containing %q", envelope.Error.Message, wantMessage)
+	}
+}
+
 func waitForLog(t *testing.T, store *mockStore) model.RequestLog {
 	t.Helper()
 	deadline, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -4096,7 +4158,7 @@ func TestChar_ChatRouteRegistered(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected request to reach chat handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertErrorEnvelope(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
 }
 
 func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
@@ -4169,7 +4231,7 @@ func TestChar_ResponsesRouteRegistered(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected request to reach responses handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertErrorEnvelope(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
 }
 
 func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
@@ -4234,7 +4296,7 @@ func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 		}
-		assertErrorEnvelope(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"resp-model\" are disabled or have open circuits")
+		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"resp-model\" are disabled or have open circuits")
 	})
 }
 
@@ -4254,7 +4316,7 @@ func TestChar_MessagesRouteRegistered(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected request to reach messages handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertErrorEnvelope(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
 }
 
 func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
@@ -4360,7 +4422,7 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 		}
-		assertErrorEnvelope(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"claude\" are disabled or have open circuits")
+		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"claude\" are disabled or have open circuits")
 	})
 }
 

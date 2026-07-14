@@ -217,7 +217,7 @@ func messagesToResponsesInput(raw json.RawMessage) ([]byte, error) {
 				case "text":
 					content = append(content, responseContentBlock{Type: "input_text", Text: b.Text})
 				case "tool_result":
-					out = append(out, responseItem{Type: "function_call_output", CallID: b.ToolUseID, Output: responseToolOutput(b.Content)})
+					out = append(out, responseItem{Type: "function_call_output", CallID: b.ToolUseID, Output: wrapToolOutput(b.Content)})
 				case "image":
 					return nil, errors.New("image content blocks are not supported for protocol conversion")
 				case "thinking":
@@ -274,7 +274,7 @@ func responsesInputToMessages(raw json.RawMessage) ([]byte, error) {
 			}
 			out = append(out, messageItem{Role: "assistant", Content: mustJSON([]contentBlock{{Type: "tool_use", ID: firstNonEmpty(item.CallID, item.ID), Name: item.Name, Input: input}})})
 		case "function_call_output":
-			out = append(out, messageItem{Role: "user", Content: mustJSON([]contentBlock{{Type: "tool_result", ToolUseID: item.CallID, Content: toolResultContent(item.Output)}})})
+			out = append(out, messageItem{Role: "user", Content: mustJSON([]contentBlock{{Type: "tool_result", ToolUseID: item.CallID, Content: wrapToolOutput(item.Output)}})})
 		default:
 			blocks, err := responsesContentToMessagesBlocks(item.Content)
 			if err != nil {
@@ -475,18 +475,7 @@ func logDroppedFields(body []byte, fields ...string) {
 	}
 }
 
-func responseToolOutput(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 {
-		return json.RawMessage(`""`)
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return raw
-	}
-	return mustJSON(string(raw))
-}
-
-func toolResultContent(raw json.RawMessage) json.RawMessage {
+func wrapToolOutput(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return json.RawMessage(`""`)
 	}

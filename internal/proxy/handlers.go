@@ -126,7 +126,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
 		return
 	}
-	if respReq.Stream && allConversionCandidates(candidates) {
+	if respReq.Stream && hasConversionCandidate(candidates) {
 		msg := "Streaming protocol conversion is not yet supported"
 		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
@@ -182,7 +182,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
 		return
 	}
-	if msgReq.Stream && allConversionCandidates(candidates) {
+	if msgReq.Stream && hasConversionCandidate(candidates) {
 		msg := "Streaming protocol conversion is not yet supported"
 		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
@@ -192,16 +192,13 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
-func allConversionCandidates(candidates []candidate) bool {
-	if len(candidates) == 0 {
-		return false
-	}
+func hasConversionCandidate(candidates []candidate) bool {
 	for _, c := range candidates {
-		if c.convertTo == "" {
-			return false
+		if c.convertTo != "" {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // clientIPFromAddr extracts the host portion of an HTTP RemoteAddr value
