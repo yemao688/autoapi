@@ -806,7 +806,7 @@ func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
 	}
 }
 
-func TestMessagesClientToResponsesProviderStreamingRejected(t *testing.T) {
+func TestMessagesClientToResponsesProviderStreamingReachesResponses(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -826,7 +826,7 @@ func TestMessagesClientToResponsesProviderStreamingRejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnprocessableEntity || hits != 0 {
+	if rec.Code != http.StatusServiceUnavailable || hits != 1 {
 		t.Fatalf("status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
 	}
 }

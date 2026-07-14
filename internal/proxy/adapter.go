@@ -82,6 +82,7 @@ func (a conversionAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPrep
 		prep.Body = converted
 		prep.Path = "/v1/responses"
 		prep.ConvertResponse = func(body []byte) ([]byte, error) { return responsesToMessagesResponse(body, c.ruleLabel) }
+		prep.NewStreamConverter = newResponsesToMessagesStreamConverter
 	case a.from == ProtocolOpenAIResponses && a.to == ProtocolAnthropicMessages:
 		converted, err := responsesToMessagesRequest(body, c.modelName)
 		if err != nil {

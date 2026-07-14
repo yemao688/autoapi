@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -210,3 +211,223 @@ func (c *messagesToResponsesStreamConverter) processEvent() ([]byte, error) {
 }
 
 func intNumber(m map[string]interface{}, key string) int { n, _ := m[key].(float64); return int(n) }
+
+// responsesToMessagesStreamConverter translates the Responses wire format
+// into Anthropic's Messages SSE format. It deliberately does not emit a
+// terminal event from Close: EOF without a Responses terminal is truncated.
+type responsesToMessagesStreamConverter struct {
+	lines        []byte
+	event        string
+	data         []byte
+	started      bool
+	blockType    string
+	blockID      string
+	blockName    string
+	blockOpen    bool
+	blockStopped bool
+	toolArgs     strings.Builder
+	inputTokens  int
+	outputTokens int
+	stopReason   string
+	terminal     bool
+	closed       bool
+}
+
+func newResponsesToMessagesStreamConverter() StreamConverter {
+	return &responsesToMessagesStreamConverter{}
+}
+
+func (c *responsesToMessagesStreamConverter) Write(p []byte) ([]byte, error) {
+	if c.closed || len(p) == 0 {
+		return nil, nil
+	}
+	c.lines = append(c.lines, p...)
+	return c.drain(false)
+}
+
+func (c *responsesToMessagesStreamConverter) Close() ([]byte, error) {
+	if c.closed {
+		return nil, nil
+	}
+	c.closed = true
+	return c.drain(true)
+}
+
+func (c *responsesToMessagesStreamConverter) drain(eof bool) ([]byte, error) {
+	var out []byte
+	for {
+		n := bytes.IndexByte(c.lines, '\n')
+		if n < 0 {
+			break
+		}
+		line := bytes.TrimSuffix(c.lines[:n], []byte{'\r'})
+		c.lines = append([]byte(nil), c.lines[n+1:]...)
+		b, err := c.processLine(line)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, b...)
+	}
+	if eof && len(c.lines) > 0 {
+		line := bytes.TrimSuffix(c.lines, []byte{'\r'})
+		c.lines = nil
+		b, err := c.processLine(line)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, b...)
+	}
+	if eof && (len(c.data) > 0 || c.event != "") {
+		b, err := c.processEvent()
+		if err != nil {
+			return out, err
+		}
+		out = append(out, b...)
+	}
+	return out, nil
+}
+
+func (c *responsesToMessagesStreamConverter) processLine(line []byte) ([]byte, error) {
+	if len(line) == 0 {
+		return c.processEvent()
+	}
+	switch {
+	case bytes.HasPrefix(line, []byte("event:")):
+		v := line[6:]
+		if len(v) > 0 && v[0] == ' ' {
+			v = v[1:]
+		}
+		c.event = string(v)
+	case bytes.HasPrefix(line, []byte("data:")):
+		v := line[5:]
+		if len(v) > 0 && v[0] == ' ' {
+			v = v[1:]
+		}
+		if len(c.data) > 0 {
+			c.data = append(c.data, '\n')
+		}
+		c.data = append(c.data, v...)
+	}
+	return nil, nil
+}
+
+func anthropicEvent(name string, payload map[string]interface{}) []byte {
+	payload["type"] = name
+	b, _ := json.Marshal(payload)
+	return []byte(fmt.Sprintf("event: %s\ndata: %s\n\n", name, b))
+}
+
+func (c *responsesToMessagesStreamConverter) processEvent() ([]byte, error) {
+	event, data := c.event, append([]byte(nil), c.data...)
+	c.event, c.data = "", nil
+	if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+		return nil, nil
+	}
+	var v map[string]interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, err
+	}
+	typ, _ := v["type"].(string)
+	if typ == "" {
+		typ = event
+	}
+	get := func(m map[string]interface{}, key string) map[string]interface{} {
+		x, _ := m[key].(map[string]interface{})
+		return x
+	}
+	if c.terminal {
+		return nil, nil
+	}
+	switch typ {
+	case "response.created":
+		if c.started {
+			return nil, nil
+		}
+		c.started = true
+		response := get(v, "response")
+		id, _ := response["id"].(string)
+		model, _ := response["model"].(string)
+		u := get(response, "usage")
+		c.inputTokens = intNumber(u, "input_tokens")
+		return anthropicEvent("message_start", map[string]interface{}{"message": map[string]interface{}{"id": id, "type": "message", "role": "assistant", "model": model, "content": []interface{}{}, "usage": map[string]interface{}{"input_tokens": c.inputTokens, "output_tokens": 0}}}), nil
+	case "response.output_item.added":
+		item := get(v, "item")
+		kind, _ := item["type"].(string)
+		if kind != "message" && kind != "function_call" {
+			slog.Debug("proxy: dropping unsupported Responses output item", "type", kind)
+			return nil, nil
+		}
+		if c.blockOpen {
+			return nil, nil
+		}
+		c.blockOpen, c.blockStopped = true, false
+		c.blockType = kind
+		c.blockID, _ = item["id"].(string)
+		c.blockName, _ = item["name"].(string)
+		c.toolArgs.Reset()
+		block := map[string]interface{}{"type": "text"}
+		if kind == "function_call" {
+			block = map[string]interface{}{"type": "tool_use", "id": c.blockID, "name": c.blockName, "input": map[string]interface{}{}}
+		}
+		return anthropicEvent("content_block_start", map[string]interface{}{"index": 0, "content_block": block}), nil
+	case "response.output_text.delta":
+		if c.blockType != "message" || !c.blockOpen {
+			return nil, nil
+		}
+		text, _ := v["delta"].(string)
+		return anthropicEvent("content_block_delta", map[string]interface{}{"index": 0, "delta": map[string]interface{}{"type": "text_delta", "text": text}}), nil
+	case "response.function_call_arguments.delta":
+		if c.blockType != "function_call" || !c.blockOpen {
+			return nil, nil
+		}
+		part, _ := v["delta"].(string)
+		c.toolArgs.WriteString(part)
+		return anthropicEvent("content_block_delta", map[string]interface{}{"index": 0, "delta": map[string]interface{}{"type": "input_json_delta", "partial_json": part}}), nil
+	case "response.output_text.done", "response.content_part.done", "response.output_item.done":
+		if !c.blockOpen || c.blockStopped {
+			return nil, nil
+		}
+		c.blockStopped = true
+		c.blockOpen = false
+		return anthropicEvent("content_block_stop", map[string]interface{}{"index": 0}), nil
+	case "response.function_call_arguments.done":
+		return nil, nil
+	case "response.completed":
+		return c.finish(get(v, "response"), "completed"), nil
+	case "response.incomplete":
+		return c.finish(get(v, "response"), "max_tokens"), nil
+	case "response.failed":
+		return c.finish(get(v, "response"), "error"), nil
+	default:
+		if strings.Contains(typ, "reasoning") || strings.Contains(typ, "refusal") {
+			slog.Debug("proxy: dropping unsupported Responses event", "type", typ)
+		}
+	}
+	return nil, nil
+}
+
+func (c *responsesToMessagesStreamConverter) finish(response map[string]interface{}, reason string) []byte {
+	if c.terminal {
+		return nil
+	}
+	c.terminal = true
+	u := getMap(response, "usage")
+	if n := intNumber(u, "output_tokens"); n > 0 {
+		c.outputTokens = n
+	}
+	if reason == "completed" {
+		if s, ok := response["stop_reason"].(string); ok && s != "" {
+			c.stopReason = s
+		} else {
+			c.stopReason = "end_turn"
+		}
+	} else {
+		c.stopReason = reason
+	}
+	return append(anthropicEvent("message_delta", map[string]interface{}{"delta": map[string]interface{}{"stop_reason": c.stopReason}, "usage": map[string]interface{}{"output_tokens": c.outputTokens}}), anthropicEvent("message_stop", map[string]interface{}{})...)
+}
+
+func getMap(m map[string]interface{}, key string) map[string]interface{} {
+	x, _ := m[key].(map[string]interface{})
+	return x
+}

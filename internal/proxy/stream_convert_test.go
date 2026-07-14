@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -23,6 +24,49 @@ func TestResponsesClientMessagesProviderStreamTextAndUsage(t *testing.T) {
 	}
 	if strings.Contains(string(out), "ping") {
 		t.Fatal("ping event was forwarded")
+	}
+}
+
+func TestResponsesToMessagesStreamTextGolden(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	in := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt\",\"usage\":{\"input_tokens\":2}}}\n\n" +
+		"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_1\"}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
+		"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"output_tokens\":3}}}\n\n"
+	out, err := c.Write([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(out), "event: message_start") != 1 || strings.Count(string(out), "event: content_block_start") != 1 || strings.Count(string(out), "event: content_block_delta") != 1 || strings.Count(string(out), "event: content_block_stop") != 1 || strings.Count(string(out), "event: message_stop") != 1 {
+		t.Fatalf("unexpected events: %s", out)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			var v map[string]interface{}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &v); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestResponsesToMessagesStreamTerminalAndUnknown(t *testing.T) {
+	c := newResponsesToMessagesStreamConverter()
+	out, err := c.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"bad\"}\n\nevent: response.incomplete\ndata: {\"type\":\"response.incomplete\"}\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "bad") || !strings.Contains(string(out), "max_tokens") || strings.Contains(string(out), "completed") {
+		t.Fatalf("invalid terminal conversion: %s", out)
+	}
+	c = newResponsesToMessagesStreamConverter()
+	out, err = c.Write([]byte("event: response.reasoning.delta\ndata: {\"type\":\"response.reasoning.delta\",\"delta\":\"secret\"}\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "text_delta") || strings.Contains(string(out), "secret") {
+		t.Fatalf("reasoning became text: %s", out)
 	}
 }
 
