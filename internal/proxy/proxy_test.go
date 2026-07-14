@@ -26,16 +26,19 @@ import (
 )
 
 type mockStore struct {
-	providers         map[string]*model.Provider
-	rules             []model.ModelRule
-	apiKeys           []model.ApiKey
-	settings          *model.Settings
-	capabilities      []model.ProviderCapability
-	bulkProviderErr   error
-	bulkCapabilityErr error
-	bulkProviderCalls int
-	bulkProviderIDs   []string
-	getProviderCalls  int
+	providers              map[string]*model.Provider
+	rules                  []model.ModelRule
+	apiKeys                []model.ApiKey
+	settings               *model.Settings
+	capabilities           []model.ProviderCapability
+	bulkProviderErr        error
+	bulkCapabilityErr      error
+	bulkProviderCalls      int
+	bulkProviderIDs        []string
+	getProviderCalls       int
+	modelCapabilities      []model.ModelCapability
+	bulkModelCapabilityErr error
+	bulkModelRefs          []model.ProviderModelRef
 
 	mu          sync.Mutex
 	statsDeltas map[string]struct {
@@ -91,6 +94,14 @@ func (m *mockStore) GetProviderCapabilitiesForProviders(ids []string) ([]model.P
 		return nil, m.bulkCapabilityErr
 	}
 	return m.capabilities, nil
+}
+
+func (m *mockStore) GetModelCapabilitiesForModels(refs []model.ProviderModelRef) ([]model.ModelCapability, error) {
+	m.bulkModelRefs = append([]model.ProviderModelRef(nil), refs...)
+	if m.bulkModelCapabilityErr != nil {
+		return nil, m.bulkModelCapabilityErr
+	}
+	return m.modelCapabilities, nil
 }
 
 func (m *mockStore) ListAPIKeys() ([]model.ApiKey, error) { return m.apiKeys, nil }

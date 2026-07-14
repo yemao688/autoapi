@@ -707,6 +707,32 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 		providers[providerRows[i].ID] = &providerRows[i]
 	}
 	capabilities := newCapabilitySnapshot(rows, providers)
+	modelStore, hasModelCaps := p.store.(interface {
+		GetModelCapabilitiesForModels([]model.ProviderModelRef) ([]model.ModelCapability, error)
+	})
+	refs := make([]model.ProviderModelRef, 0, len(providerIDs))
+	refSeen := map[string]bool{}
+	for _, r := range rules {
+		if r.Name == req.Model {
+			for _, t := range r.Targets {
+				if t.Enabled {
+					ref := model.ProviderModelRef{ProviderID: t.ProviderID, ModelName: modelNameForTarget(t.ModelName, req.Model)}
+					key := ref.ProviderID + "\x00" + ref.ModelName
+					if !refSeen[key] {
+						refSeen[key] = true
+						refs = append(refs, ref)
+					}
+				}
+			}
+		}
+	}
+	if hasModelCaps {
+		modelRows, e := modelStore.GetModelCapabilitiesForModels(refs)
+		if e != nil {
+			return nil, e
+		}
+		capabilities = capabilities.withModels(modelRows)
+	}
 
 	// Snapshot the breaker map to avoid racing with breakerFor writes.
 	p.breakersMu.RLock()

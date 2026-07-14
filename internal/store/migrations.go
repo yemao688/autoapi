@@ -474,6 +474,20 @@ CREATE TABLE IF NOT EXISTS provider_capabilities (
 		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "providers", "gemini_enabled") },
 		SQL:             `ALTER TABLE providers ADD COLUMN gemini_enabled INTEGER NOT NULL DEFAULT 0;`,
 	},
+	{
+		ID:              "027_model_capabilities",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableExists(tx, "model_capabilities") },
+		SQL: `CREATE TABLE model_capabilities (
+    provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    model_name TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    feature TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'manual',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(provider_id, model_name, protocol, feature)
+);`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

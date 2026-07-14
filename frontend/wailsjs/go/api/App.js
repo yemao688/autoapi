@@ -34,6 +34,10 @@ export function DeleteModel(arg1, arg2) {
   return window['go']['api']['App']['DeleteModel'](arg1, arg2);
 }
 
+export function DeleteModelCapability(arg1, arg2, arg3, arg4) {
+  return window['go']['api']['App']['DeleteModelCapability'](arg1, arg2, arg3, arg4);
+}
+
 export function DeleteModelRule(arg1) {
   return window['go']['api']['App']['DeleteModelRule'](arg1);
 }
@@ -134,6 +138,10 @@ export function ListEndpoints() {
   return window['go']['api']['App']['ListEndpoints']();
 }
 
+export function ListModelCapabilities(arg1, arg2) {
+  return window['go']['api']['App']['ListModelCapabilities'](arg1, arg2);
+}
+
 export function ListModelRules() {
   return window['go']['api']['App']['ListModelRules']();
 }
@@ -204,6 +212,10 @@ export function SetAppInfo(arg1) {
 
 export function SetInitialVisibility(arg1) {
   return window['go']['api']['App']['SetInitialVisibility'](arg1);
+}
+
+export function SetModelCapability(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['api']['App']['SetModelCapability'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SetModelsActive(arg1, arg2, arg3) {

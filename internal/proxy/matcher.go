@@ -72,7 +72,7 @@ type candidate struct {
 }
 
 func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error), snapshots ...capabilitySnapshot) ([]candidate, error) {
-	capabilities := capabilitySnapshot(nil)
+	capabilities := capabilitySnapshot{}
 	if len(snapshots) > 0 {
 		capabilities = snapshots[0]
 	}
@@ -105,18 +105,19 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		if !p.Enabled || isOpen(t.ProviderID, breakers) {
 			continue
 		}
-		if capabilities == nil {
-			capabilities = make(capabilitySnapshot)
+		modelName := modelNameForTarget(t.ModelName, req.Model)
+		if capabilities.providers == nil {
+			capabilities = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})
 		}
-		if _, exists := capabilities[p.ID]; !exists {
-			capabilities[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})[p.ID]
+		if _, exists := capabilities.providers[p.ID]; !exists {
+			capabilities.providers[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p}).providers[p.ID]
 		}
-		if capabilities != nil && !capabilities.supports(p.ID, to) {
+		if !capabilities.supportsModel(p.ID, modelName, to) {
 			continue
 		}
 		out = append(out, candidate{
 			provider:                   p,
-			modelName:                  modelNameForTarget(t.ModelName, req.Model),
+			modelName:                  modelName,
 			protocol:                   req.Protocol,
 			upstreamPath:               upstreamPath,
 			ruleID:                     rule.ID,
@@ -148,7 +149,7 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 // provider IDs to full provider records. Disabled targets are skipped
 // without disturbing the relative tier ordering of the survivors.
 func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error), snapshots ...capabilitySnapshot) ([]candidate, error) {
-	capabilities := capabilitySnapshot(nil)
+	capabilities := capabilitySnapshot{}
 	if len(snapshots) > 0 {
 		capabilities = snapshots[0]
 	}
@@ -202,13 +203,14 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		if !p.Enabled {
 			continue
 		}
-		if capabilities == nil {
-			capabilities = make(capabilitySnapshot)
+		modelName := modelNameForTarget(t.ModelName, req.Model)
+		if capabilities.providers == nil {
+			capabilities = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})
 		}
-		if _, exists := capabilities[p.ID]; !exists {
-			capabilities[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})[p.ID]
+		if _, exists := capabilities.providers[p.ID]; !exists {
+			capabilities.providers[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p}).providers[p.ID]
 		}
-		if !capabilities.supports(p.ID, protocol) {
+		if !capabilities.supportsModel(p.ID, modelName, protocol) {
 			continue
 		}
 		if isOpen(t.ProviderID, breakers) {

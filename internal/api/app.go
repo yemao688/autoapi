@@ -74,6 +74,9 @@ type StoreService interface {
 	SetProviderEnabled(id string, enabled bool) error
 	ListProviderCapabilities(providerID string) ([]model.ProviderCapability, error)
 	SetProviderCapability(providerID, protocol, feature string, enabled bool) error
+	ListModelCapabilities(providerID, modelName string) ([]model.ModelCapability, error)
+	SetModelCapability(providerID, modelName, protocol, feature string, enabled bool) error
+	DeleteModelCapability(providerID, modelName, protocol, feature string) error
 
 	// Models (lookup, populated by upstream)
 	ListModels(providerID string) ([]model.Model, error)
@@ -669,6 +672,35 @@ func (a *App) ListProviderCapabilities(providerID string) ([]model.ProviderCapab
 		return nil, errNotImpl
 	}
 	return a.deps.Store.ListProviderCapabilities(providerID)
+}
+
+func (a *App) ListModelCapabilities(providerID, modelName string) ([]model.ModelCapability, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Store.ListModelCapabilities(strings.TrimSpace(providerID), strings.TrimSpace(modelName))
+}
+
+func (a *App) SetModelCapability(providerID, modelName, protocol, feature string, enabled bool) error {
+	providerID, modelName, protocol, feature = strings.TrimSpace(providerID), strings.TrimSpace(modelName), strings.TrimSpace(protocol), strings.TrimSpace(feature)
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	if providerID == "" || modelName == "" || protocol == "" || feature == "" {
+		return fmt.Errorf("provider, model, protocol and feature are required")
+	}
+	return a.deps.Store.SetModelCapability(providerID, modelName, protocol, feature, enabled)
+}
+
+func (a *App) DeleteModelCapability(providerID, modelName, protocol, feature string) error {
+	providerID, modelName, protocol, feature = strings.TrimSpace(providerID), strings.TrimSpace(modelName), strings.TrimSpace(protocol), strings.TrimSpace(feature)
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	if providerID == "" || modelName == "" || protocol == "" || feature == "" {
+		return fmt.Errorf("provider, model, protocol and feature are required")
+	}
+	return a.deps.Store.DeleteModelCapability(providerID, modelName, protocol, feature)
 }
 
 func (a *App) SetProviderCapability(providerID, protocol string, enabled bool) error {

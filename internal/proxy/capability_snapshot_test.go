@@ -36,6 +36,55 @@ func TestCapabilitySnapshotManualAndFallbackRules(t *testing.T) {
 	}
 }
 
+func TestCapabilitySnapshotModelOverridesAndIsolation(t *testing.T) {
+	p := &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true}
+	s := newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{
+		{ProviderID: "p", ModelName: "m", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
+		{ProviderID: "p", ModelName: "m", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"},
+		{ProviderID: "p", ModelName: "m2", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: true, Source: "manual"},
+		{ProviderID: "p2", ModelName: "m", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: true, Source: "manual"},
+		{ProviderID: "p", ModelName: "other", Protocol: string(ProtocolOpenAIResponses), Feature: "tools", Enabled: false, Source: "manual"},
+	})
+	if s.supportsModel("p", "m", ProtocolOpenAIResponses) {
+		t.Fatal("manual model false must tighten provider true")
+	}
+	if !s.supportsModel("p", "m", ProtocolAnthropicMessages) {
+		t.Fatal("manual model true must extend provider false")
+	}
+	if !s.supportsModel("p", "other", ProtocolOpenAIResponses) {
+		t.Fatal("non-native feature must not gate protocol")
+	}
+	if !s.supportsModel("p", "m2", ProtocolOpenAIResponses) {
+		t.Fatal("different model isolation failed")
+	}
+	if s.supportsModel("p2", "m", ProtocolOpenAIResponses) {
+		t.Fatal("model override for unknown provider must be false")
+	}
+}
+
+func TestSelectConversionCandidatesUsesUpstreamModelCapability(t *testing.T) {
+	p := &model.Provider{ID: "p", Enabled: true}
+	rule := []model.ModelRule{{Name: "client", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}}
+	lookup := func(string) (*model.Provider, error) { return p, nil }
+	s := newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "upstream", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}})
+	if _, err := selectConversionCandidates(&InboundRequest{Model: "client", Protocol: ProtocolAnthropicMessages}, rule, nil, lookup, s); err == nil {
+		t.Fatal("Messages→Responses ignored upstream model override")
+	}
+	s = newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "upstream", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}})
+	if _, err := selectConversionCandidates(&InboundRequest{Model: "client", Protocol: ProtocolOpenAIResponses}, rule, nil, lookup, s); err != nil {
+		t.Fatalf("Responses→Messages: %v", err)
+	}
+}
+
+func TestSelectCandidatesUsesUpstreamModelNameForModelCapability(t *testing.T) {
+	p := &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true}
+	rule := []model.ModelRule{{Name: "client", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}}
+	s := newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "upstream", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}})
+	if _, err := selectCandidates(&InboundRequest{Model: "client", Protocol: ProtocolOpenAIResponses}, rule, nil, func(string) (*model.Provider, error) { return p, nil }, s); err == nil {
+		t.Fatal("native selector ignored upstream model override")
+	}
+}
+
 func TestSelectCandidatesNativeCapabilityOverrides(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
@@ -103,5 +152,21 @@ func TestResolveCandidatesUsesBulkSnapshotsWithoutProviderFallback(t *testing.T)
 	}
 	if len(st.bulkProviderIDs) != 1 || st.bulkProviderIDs[0] != "p" {
 		t.Fatalf("provider IDs were not deduplicated: %v", st.bulkProviderIDs)
+	}
+}
+
+func TestResolveCandidatesModelCapabilityBulkErrorsAndRefs(t *testing.T) {
+	rule := []model.ModelRule{{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", Enabled: true}, {ProviderID: "p", ModelName: "m", Enabled: true}}}}
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Enabled: true}}, rules: rule, bulkModelCapabilityErr: errors.New("model cap")}
+	p := New(st, &mockService{}, 0, nil)
+	if _, err := p.resolveCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIChat}); err == nil || !strings.Contains(err.Error(), "model cap") {
+		t.Fatalf("model capability error: %v", err)
+	}
+	st.bulkModelCapabilityErr = nil
+	if _, err := p.resolveCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIChat}); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.bulkModelRefs) != 1 || st.bulkModelRefs[0].ModelName != "m" {
+		t.Fatalf("model refs: %+v", st.bulkModelRefs)
 	}
 }

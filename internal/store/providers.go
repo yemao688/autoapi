@@ -382,6 +382,9 @@ func (s *Store) DeleteModel(providerID, modelName string) error {
 		if n == 0 {
 			return fmt.Errorf("store: delete model %q for provider %q: %w", modelName, providerID, ErrNotFound)
 		}
+		if _, err = tx.Exec(`DELETE FROM model_capabilities WHERE provider_id=? AND model_name=?`, providerID, modelName); err != nil {
+			return err
+		}
 		_, err = tx.Exec(`UPDATE providers SET models_count = (SELECT COUNT(*) FROM models WHERE provider_id = ?), updated_at = ? WHERE id = ?`, providerID, now, providerID)
 		return err
 	})
@@ -395,6 +398,9 @@ func (s *Store) ClearProviderModels(providerID string) error {
 			return fmt.Errorf("store: clear provider models %q: %w", providerID, err)
 		}
 		n, _ := res.RowsAffected()
+		if _, err := tx.Exec(`DELETE FROM model_capabilities WHERE provider_id=?`, providerID); err != nil {
+			return err
+		}
 		if n == 0 {
 			return nil // idempotent: no models to delete
 		}
@@ -434,6 +440,9 @@ func (s *Store) UpdateProviderModel(in model.ProviderModelUpdate) error {
 		// transaction back if this collides with an existing summary key.
 		if _, err := tx.Exec(`UPDATE target_runtime_summary SET model_name=? WHERE provider_id=? AND model_name=?`, in.Name, in.ProviderID, in.OldName); err != nil {
 			return fmt.Errorf("store: update target runtime summaries: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE model_capabilities SET model_name=? WHERE provider_id=? AND model_name=?`, in.Name, in.ProviderID, in.OldName); err != nil {
+			return fmt.Errorf("store: update model capabilities: %w", err)
 		}
 		return nil
 	})

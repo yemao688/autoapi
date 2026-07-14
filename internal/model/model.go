@@ -63,6 +63,21 @@ type ProviderCapability struct {
 	UpdatedAt  int64  `json:"updated_at"`
 }
 
+type ModelCapability struct {
+	ProviderID string `json:"provider_id"`
+	ModelName  string `json:"model_name"`
+	Protocol   string `json:"protocol"`
+	Feature    string `json:"feature"`
+	Enabled    bool   `json:"enabled"`
+	Source     string `json:"source"`
+	UpdatedAt  int64  `json:"updated_at"`
+}
+
+type ProviderModelRef struct {
+	ProviderID string `json:"provider_id"`
+	ModelName  string `json:"model_name"`
+}
+
 // Model is a model offered by a provider (lookup table, populated from upstream).
 type Model struct {
 	ID            string  `json:"id"`

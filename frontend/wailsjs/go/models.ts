@@ -589,6 +589,30 @@ export namespace model {
 	        this.created_at = source["created_at"];
 	    }
 	}
+	export class ModelCapability {
+	    provider_id: string;
+	    model_name: string;
+	    protocol: string;
+	    feature: string;
+	    enabled: boolean;
+	    source: string;
+	    updated_at: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.model_name = source["model_name"];
+	        this.protocol = source["protocol"];
+	        this.feature = source["feature"];
+	        this.enabled = source["enabled"];
+	        this.source = source["source"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class ModelChatTestResult {
 	    ok: boolean;
 	    response: string;

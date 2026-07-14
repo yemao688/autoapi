@@ -20,6 +20,8 @@ export function DeleteAPIKey(arg1:string):Promise<void>;
 
 export function DeleteModel(arg1:string,arg2:string):Promise<void>;
 
+export function DeleteModelCapability(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+
 export function DeleteModelRule(arg1:string):Promise<void>;
 
 export function DeleteProvider(arg1:string):Promise<void>;
@@ -70,6 +72,8 @@ export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
 export function ListEndpoints():Promise<Array<model.Endpoint>>;
 
+export function ListModelCapabilities(arg1:string,arg2:string):Promise<Array<model.ModelCapability>>;
+
 export function ListModelRules():Promise<Array<model.ModelRule>>;
 
 export function ListModels(arg1:string):Promise<Array<model.Model>>;
@@ -105,6 +109,8 @@ export function SaveSettings(arg1:model.Settings):Promise<void>;
 export function SetAppInfo(arg1:model.AppInfo):Promise<void>;
 
 export function SetInitialVisibility(arg1:boolean):Promise<void>;
+
+export function SetModelCapability(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean):Promise<void>;
 
 export function SetModelsActive(arg1:string,arg2:Array<string>,arg3:boolean):Promise<void>;
 
