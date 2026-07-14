@@ -75,25 +75,42 @@ func (s *Store) GetProvidersForIDs(ids []string) ([]model.Provider, error) {
 	if len(ids) == 0 {
 		return []model.Provider{}, nil
 	}
-	marks := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		marks[i], args[i] = "?", id
-	}
-	rows, err := s.db.Query(`SELECT id, name, base_url, status, key_ciphertext, key_nonce, key_masked, models_count, monthly_tokens, avg_latency_ms, last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, enabled, created_at, updated_at FROM providers WHERE id IN (`+strings.Join(marks, ",")+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: get providers: %w", err)
-	}
-	defer rows.Close()
-	var out []model.Provider
-	for rows.Next() {
-		var p model.Provider
-		if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.Status, &p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked, &p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs, &p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, err
+	seen := map[string]bool{}
+	var uniq []string
+	for _, id := range ids {
+		if seen[id] {
+			continue
 		}
-		out = append(out, p)
+		seen[id] = true
+		uniq = append(uniq, id)
 	}
-	return out, rows.Err()
+	var out []model.Provider
+	for _, chunk := range chunkStrings(uniq, providerChunkSize) {
+		marks := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			marks[i], args[i] = "?", id
+		}
+		rows, err := s.db.Query(`SELECT id, name, base_url, status, key_ciphertext, key_nonce, key_masked, models_count, monthly_tokens, avg_latency_ms, last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, enabled, created_at, updated_at FROM providers WHERE id IN (`+strings.Join(marks, ",")+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: get providers: %w", err)
+		}
+		scanErr := func() error {
+			for rows.Next() {
+				var p model.Provider
+				if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.Status, &p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked, &p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs, &p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+					return err
+				}
+				out = append(out, p)
+			}
+			return rows.Err()
+		}()
+		rows.Close()
+		if scanErr != nil {
+			return nil, scanErr
+		}
+	}
+	return out, nil
 }
 
 // CreateProvider inserts a new provider and returns the full entity.
@@ -441,9 +458,8 @@ func (s *Store) UpdateProviderModel(in model.ProviderModelUpdate) error {
 		if _, err := tx.Exec(`UPDATE target_runtime_summary SET model_name=? WHERE provider_id=? AND model_name=?`, in.Name, in.ProviderID, in.OldName); err != nil {
 			return fmt.Errorf("store: update target runtime summaries: %w", err)
 		}
-		if _, err := tx.Exec(`UPDATE model_capabilities SET model_name=? WHERE provider_id=? AND model_name=?`, in.Name, in.ProviderID, in.OldName); err != nil {
-			return fmt.Errorf("store: update model capabilities: %w", err)
-		}
+		// model_capabilities rows are linked by FK ON UPDATE CASCADE; the
+		// rename is handled automatically when models.name is updated above.
 		return nil
 	})
 }

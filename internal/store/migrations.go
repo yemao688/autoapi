@@ -488,6 +488,39 @@ CREATE TABLE IF NOT EXISTS provider_capabilities (
     PRIMARY KEY(provider_id, model_name, protocol, feature)
 );`,
 	},
+	{
+		ID: "028_model_capabilities_model_fk",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) {
+			return tableHasCompositeFK(tx, "model_capabilities", "models", map[string]string{"provider_id": "provider_id", "model_name": "name"}, "CASCADE", "CASCADE")
+		},
+		SQL: `-- Rebuild model_capabilities with a composite FK to models(provider_id,name) so that model
+-- renames/deletions cascade automatically. Orphan rows that no longer match a model row are
+-- intentionally discarded during migration (INNER JOIN models); the caller should treat missing
+-- rows as "inherit from provider" anyway. The table must be rebuilt because SQLite does not
+-- support ADD FOREIGN KEY on an existing table. PRAGMA foreign_keys is left managed by the
+-- driver connection; we avoid toggling it inside the migration transaction so that DROP/RENAME
+-- are not blocked by self-referential checks.
+CREATE TABLE model_capabilities_new (
+    provider_id TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    feature TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'manual',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(provider_id, model_name, protocol, feature),
+    FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE,
+    FOREIGN KEY(provider_id, model_name) REFERENCES models(provider_id, name) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+INSERT INTO model_capabilities_new(provider_id, model_name, protocol, feature, enabled, source, updated_at)
+SELECT c.provider_id, c.model_name, c.protocol, c.feature, c.enabled, c.source, c.updated_at
+FROM model_capabilities c
+INNER JOIN models m ON m.provider_id = c.provider_id AND m.name = c.model_name;
+
+DROP TABLE model_capabilities;
+ALTER TABLE model_capabilities_new RENAME TO model_capabilities;`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists
@@ -717,6 +750,61 @@ func tableExists(tx *sql.Tx, table string) (bool, error) {
 		return false, fmt.Errorf("store: check table exists: %w", err)
 	}
 	return true, nil
+}
+
+// tableHasCompositeFK reports whether the named table has a complete composite
+// foreign key to parentTable on the given (from,to) column pairs with the
+// specified ON UPDATE and ON DELETE actions.
+func tableHasCompositeFK(tx *sql.Tx, table, parentTable string, columns map[string]string, onUpdate, onDelete string) (bool, error) {
+	rows, err := tx.Query(`PRAGMA foreign_key_list(` + table + `)`)
+	if err != nil {
+		return false, nil
+	}
+	defer rows.Close()
+
+	type fkInfo struct {
+		parent   string
+		columns  map[string]string
+		onUpdate string
+		onDelete string
+	}
+	fks := map[int]*fkInfo{}
+	for rows.Next() {
+		var id, seq int
+		var parent, from, to, upd, del string
+		var match string
+		if err := rows.Scan(&id, &seq, &parent, &from, &to, &upd, &del, &match); err != nil {
+			return false, err
+		}
+		if fks[id] == nil {
+			fks[id] = &fkInfo{parent: parent, columns: map[string]string{}}
+		}
+		fks[id].columns[from] = to
+		fks[id].onUpdate = upd
+		fks[id].onDelete = del
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, fk := range fks {
+		if fk.parent != parentTable || len(fk.columns) != len(columns) {
+			continue
+		}
+		if fk.onUpdate != onUpdate || fk.onDelete != onDelete {
+			continue
+		}
+		match := true
+		for from, to := range columns {
+			if fk.columns[from] != to {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // migrate applies all pending migrations in a single transaction.

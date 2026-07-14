@@ -40,12 +40,42 @@ func (s *Store) GetProviderCapabilitiesForProviders(providerIDs []string) ([]mod
 	if len(providerIDs) == 0 {
 		return []model.ProviderCapability{}, nil
 	}
-	placeholders := make([]string, len(providerIDs))
-	args := make([]any, len(providerIDs))
-	for i, id := range providerIDs {
-		placeholders[i], args[i] = "?", id
+	seen := map[string]bool{}
+	var uniq []string
+	for _, id := range providerIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
 	}
-	return s.listCapabilities(` WHERE provider_id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	var out []model.ProviderCapability
+	for _, chunk := range chunkStrings(uniq, providerChunkSize) {
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			placeholders[i], args[i] = "?", id
+		}
+		rows, err := s.db.Query(`SELECT provider_id, protocol, feature, enabled, source, updated_at FROM provider_capabilities WHERE provider_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY provider_id, protocol, feature`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: get provider capabilities: %w", err)
+		}
+		scanErr := func() error {
+			for rows.Next() {
+				var c model.ProviderCapability
+				if err := rows.Scan(&c.ProviderID, &c.Protocol, &c.Feature, &c.Enabled, &c.Source, &c.UpdatedAt); err != nil {
+					return err
+				}
+				out = append(out, c)
+			}
+			return rows.Err()
+		}()
+		rows.Close()
+		if scanErr != nil {
+			return nil, scanErr
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) listCapabilities(suffix string, args ...any) ([]model.ProviderCapability, error) {

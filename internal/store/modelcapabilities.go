@@ -59,6 +59,10 @@ func (s *Store) SetModelCapability(providerID, modelName, protocol, feature stri
 
 // DeleteModelCapability removes an override so the provider capability inherits.
 func (s *Store) DeleteModelCapability(providerID, modelName, protocol, feature string) error {
+	providerID, modelName, protocol, feature = strings.TrimSpace(providerID), strings.TrimSpace(modelName), strings.TrimSpace(protocol), strings.TrimSpace(feature)
+	if providerID == "" || modelName == "" || protocol == "" || feature == "" {
+		return fmt.Errorf("store: capability fields are required")
+	}
 	return s.execTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`DELETE FROM model_capabilities WHERE provider_id=? AND model_name=? AND protocol=? AND feature=?`, providerID, modelName, protocol, feature)
 		return err
@@ -70,16 +74,41 @@ func (s *Store) GetModelCapabilitiesForModels(refs []model.ProviderModelRef) ([]
 		return []model.ModelCapability{}, nil
 	}
 	seen := map[string]bool{}
-	clauses := []string{}
-	args := []any{}
+	var uniq []model.ProviderModelRef
 	for _, r := range refs {
 		key := r.ProviderID + "\x00" + r.ModelName
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		clauses = append(clauses, "(provider_id=? AND model_name=?)")
-		args = append(args, r.ProviderID, r.ModelName)
+		uniq = append(uniq, r)
 	}
-	return s.scanModelCapabilities(`SELECT provider_id, model_name, protocol, feature, enabled, source, updated_at FROM model_capabilities WHERE `+strings.Join(clauses, " OR ")+` ORDER BY provider_id,model_name,protocol,feature`, args...)
+	var out []model.ModelCapability
+	for _, chunk := range chunkModelRefs(uniq, modelRefChunkSize) {
+		clauses := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk)*2)
+		for _, r := range chunk {
+			clauses = append(clauses, "(provider_id=? AND model_name=?)")
+			args = append(args, r.ProviderID, r.ModelName)
+		}
+		rows, err := s.db.Query(`SELECT provider_id, model_name, protocol, feature, enabled, source, updated_at FROM model_capabilities WHERE `+strings.Join(clauses, " OR ")+` ORDER BY provider_id,model_name,protocol,feature`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: get model capabilities for models: %w", err)
+		}
+		scanErr := func() error {
+			for rows.Next() {
+				var c model.ModelCapability
+				if err := rows.Scan(&c.ProviderID, &c.ModelName, &c.Protocol, &c.Feature, &c.Enabled, &c.Source, &c.UpdatedAt); err != nil {
+					return err
+				}
+				out = append(out, c)
+			}
+			return rows.Err()
+		}()
+		rows.Close()
+		if scanErr != nil {
+			return nil, scanErr
+		}
+	}
+	return out, nil
 }
