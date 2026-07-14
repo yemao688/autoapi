@@ -10,6 +10,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"autoapi/internal/model"
@@ -161,6 +162,10 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		case "gemini":
 			protocol = ProtocolGemini
 		default:
+			endpoint := strings.TrimSuffix(req.Endpoint, "/")
+			if req.Task != "" || (endpoint != "" && endpoint != "/v1/chat/completions") {
+				return nil, fmt.Errorf("unknown request protocol")
+			}
 			protocol = ProtocolOpenAIChat
 		}
 	}

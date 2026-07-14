@@ -691,11 +691,20 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	if capErr != nil {
 		return nil, capErr
 	}
-	providers := make(map[string]*model.Provider)
-	for _, id := range providerIDs {
-		if provider, e := p.store.GetProvider(id); e == nil {
-			providers[id] = provider
+	providerStore, ok := p.store.(interface {
+		GetProvidersForIDs([]string) ([]model.Provider, error)
+	})
+	var providerRows []model.Provider
+	var err error
+	if ok {
+		providerRows, err = providerStore.GetProvidersForIDs(providerIDs)
+		if err != nil {
+			return nil, err
 		}
+	}
+	providers := make(map[string]*model.Provider, len(providerRows))
+	for i := range providerRows {
+		providers[providerRows[i].ID] = &providerRows[i]
 	}
 	capabilities := newCapabilitySnapshot(rows, providers)
 
@@ -707,9 +716,19 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	p.breakersMu.RUnlock()
 
-	candidates, err := selectCandidates(req, rules, breakers, p.store.GetProvider, capabilities)
+	lookup := func(id string) (*model.Provider, error) {
+		provider := providers[id]
+		if provider == nil {
+			if ok {
+				return nil, fmt.Errorf("matched provider not found")
+			}
+			return p.store.GetProvider(id)
+		}
+		return provider, nil
+	}
+	candidates, err := selectCandidates(req, rules, breakers, lookup, capabilities)
 	if err != nil {
-		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, p.store.GetProvider, capabilities)
+		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, lookup, capabilities)
 		if conversionErr != nil {
 			return nil, fmt.Errorf("%w (no conversion fallback: %v)", err, conversionErr)
 		}

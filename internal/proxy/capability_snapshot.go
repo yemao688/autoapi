@@ -18,7 +18,7 @@ func newCapabilitySnapshot(rows []model.ProviderCapability, providers map[string
 		}
 	}
 	for _, c := range rows {
-		if c.Feature != "native" {
+		if c.Feature != "native" || c.Source == "legacy" {
 			continue
 		}
 		if out[c.ProviderID] == nil {

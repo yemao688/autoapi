@@ -70,6 +70,32 @@ func (s *Store) GetProvider(id string) (*model.Provider, error) {
 	return &p, nil
 }
 
+// GetProvidersForIDs loads providers in one query for request-time routing.
+func (s *Store) GetProvidersForIDs(ids []string) ([]model.Provider, error) {
+	if len(ids) == 0 {
+		return []model.Provider{}, nil
+	}
+	marks := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		marks[i], args[i] = "?", id
+	}
+	rows, err := s.db.Query(`SELECT id, name, base_url, status, key_ciphertext, key_nonce, key_masked, models_count, monthly_tokens, avg_latency_ms, last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, enabled, created_at, updated_at FROM providers WHERE id IN (`+strings.Join(marks, ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: get providers: %w", err)
+	}
+	defer rows.Close()
+	var out []model.Provider
+	for rows.Next() {
+		var p model.Provider
+		if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.Status, &p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked, &p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs, &p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // CreateProvider inserts a new provider and returns the full entity.
 // Upstream keys are managed separately by the App layer via
 // UpdateProviderKeyCiphertext; this method does not touch key columns.
@@ -108,7 +134,7 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 		if err != nil {
 			return err
 		}
-		return syncLegacyCapabilities(tx, p.ID, p.ResponsesEnabled, p.MessagesEnabled, p.GeminiEnabled, now, true)
+		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("store: create provider: %w", err)
 	}
@@ -134,7 +160,7 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 		if n == 0 {
 			return fmt.Errorf("store: update provider %q: %w", id, ErrNotFound)
 		}
-		return syncLegacyCapabilities(tx, id, in.ResponsesEnabled, in.MessagesEnabled, in.GeminiEnabled, now, false)
+		return syncProviderCapabilities(tx, id, in.ResponsesEnabled, in.MessagesEnabled, in.GeminiEnabled, now)
 	}); err != nil {
 		return nil, err
 	}
@@ -142,7 +168,7 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 	return s.GetProvider(id)
 }
 
-func syncLegacyCapabilities(tx *sql.Tx, providerID string, responses, messages, gemini bool, now int64, onlyEnabled bool) error {
+func syncProviderCapabilities(tx *sql.Tx, providerID string, responses, messages, gemini bool, now int64) error {
 	values := []struct {
 		protocol string
 		enabled  bool
@@ -150,10 +176,7 @@ func syncLegacyCapabilities(tx *sql.Tx, providerID string, responses, messages, 
 		{"openai_responses", responses}, {"anthropic_messages", messages}, {"gemini", gemini},
 	}
 	for _, v := range values {
-		if onlyEnabled && !v.enabled {
-			continue
-		}
-		if _, err := tx.Exec(`INSERT INTO provider_capabilities (provider_id, protocol, feature, enabled, source, updated_at) VALUES (?, ?, 'native', ?, 'legacy', ?) ON CONFLICT(provider_id, protocol, feature) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at WHERE provider_capabilities.source != 'manual'`, providerID, v.protocol, boolInt(v.enabled), now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO provider_capabilities (provider_id, protocol, feature, enabled, source, updated_at) VALUES (?, ?, 'native', ?, 'manual', ?) ON CONFLICT(provider_id, protocol, feature) DO UPDATE SET enabled=excluded.enabled, source='manual', updated_at=excluded.updated_at`, providerID, v.protocol, boolInt(v.enabled), now); err != nil {
 			return err
 		}
 	}

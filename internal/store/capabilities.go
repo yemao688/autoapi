@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Store) ListProviderCapabilities(providerID string) ([]model.ProviderCapability, error) {
-	query := `SELECT provider_id, protocol, feature, enabled, source, updated_at FROM provider_capabilities WHERE source != 'legacy'`
+	query := `SELECT provider_id, protocol, feature, enabled, source, updated_at FROM provider_capabilities WHERE 1=1`
 	args := []any{}
 	if providerID != "" {
 		query += ` AND provider_id = ?`
@@ -49,11 +49,6 @@ func (s *Store) GetProviderCapabilitiesForProviders(providerIDs []string) ([]mod
 }
 
 func (s *Store) listCapabilities(suffix string, args ...any) ([]model.ProviderCapability, error) {
-	if suffix == "" {
-		suffix = ` WHERE source != 'legacy'`
-	} else {
-		suffix += ` AND source != 'legacy'`
-	}
 	rows, err := s.db.Query(`SELECT provider_id, protocol, feature, enabled, source, updated_at FROM provider_capabilities`+suffix+` ORDER BY provider_id, protocol, feature`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list provider capabilities: %w", err)
@@ -113,9 +108,20 @@ func (s *Store) GetProviderCapabilities(providerID string) ([]model.ProviderCapa
 
 func (s *Store) ProviderSupportsProtocol(providerID string, protocol string) (bool, error) {
 	var enabled bool
-	err := s.db.QueryRow(`SELECT enabled FROM provider_capabilities WHERE provider_id = ? AND protocol = ? AND feature = 'native' AND source != 'legacy'`, providerID, protocol).Scan(&enabled)
+	err := s.db.QueryRow(`SELECT enabled FROM provider_capabilities WHERE provider_id = ? AND protocol = ? AND feature = 'native' AND source = 'manual'`, providerID, protocol).Scan(&enabled)
 	if err == sql.ErrNoRows {
-		return false, nil
+		column := legacyCapabilityColumn(protocol)
+		if column == "" {
+			return false, nil
+		}
+		err = s.db.QueryRow(`SELECT `+column+` FROM providers WHERE id = ?`, providerID).Scan(&enabled)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("store: provider legacy capability: %w", err)
+		}
+		return enabled, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: provider supports protocol: %w", err)

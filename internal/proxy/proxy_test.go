@@ -26,10 +26,16 @@ import (
 )
 
 type mockStore struct {
-	providers map[string]*model.Provider
-	rules     []model.ModelRule
-	apiKeys   []model.ApiKey
-	settings  *model.Settings
+	providers         map[string]*model.Provider
+	rules             []model.ModelRule
+	apiKeys           []model.ApiKey
+	settings          *model.Settings
+	capabilities      []model.ProviderCapability
+	bulkProviderErr   error
+	bulkCapabilityErr error
+	bulkProviderCalls int
+	bulkProviderIDs   []string
+	getProviderCalls  int
 
 	mu          sync.Mutex
 	statsDeltas map[string]struct {
@@ -57,11 +63,34 @@ func (m *mockStore) ListProviders() ([]model.Provider, error) {
 func (m *mockStore) ListModelRules() ([]model.ModelRule, error) { return m.rules, nil }
 
 func (m *mockStore) GetProvider(id string) (*model.Provider, error) {
+	m.getProviderCalls++
 	p, ok := m.providers[id]
 	if !ok {
 		return nil, store.ErrNotFound
 	}
 	return p, nil
+}
+
+func (m *mockStore) GetProvidersForIDs(ids []string) ([]model.Provider, error) {
+	m.bulkProviderCalls++
+	m.bulkProviderIDs = append([]string(nil), ids...)
+	if m.bulkProviderErr != nil {
+		return nil, m.bulkProviderErr
+	}
+	out := make([]model.Provider, 0, len(ids))
+	for _, id := range ids {
+		if p, ok := m.providers[id]; ok {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) GetProviderCapabilitiesForProviders(ids []string) ([]model.ProviderCapability, error) {
+	if m.bulkCapabilityErr != nil {
+		return nil, m.bulkCapabilityErr
+	}
+	return m.capabilities, nil
 }
 
 func (m *mockStore) ListAPIKeys() ([]model.ApiKey, error) { return m.apiKeys, nil }

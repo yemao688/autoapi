@@ -17,8 +17,8 @@ func TestProviderCapabilitiesCRUDAndSupportsProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProviderSupportsProtocol empty: %v", err)
 	}
-	if supported {
-		t.Fatal("unknown capability should not be supported")
+	if !supported {
+		t.Fatal("legacy provider bool should be the effective fallback")
 	}
 
 	if err := s.SetProviderCapability(p.ID, "anthropic_messages", "native", true); err != nil {
@@ -70,7 +70,7 @@ func TestSetProviderCapabilityPromotesLegacyProjection(t *testing.T) {
 	}
 }
 
-func TestUpdateProviderDoesNotOverwriteManualCapability(t *testing.T) {
+func TestUpdateProviderOverridesManualCapability(t *testing.T) {
 	s := newTestStore(t)
 	p, err := s.CreateProvider(model.ProviderInput{Name: "Manual", BaseURL: "https://example.com"})
 	if err != nil {
@@ -87,8 +87,8 @@ func TestUpdateProviderDoesNotOverwriteManualCapability(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT enabled, source FROM provider_capabilities WHERE provider_id=? AND protocol=?`, p.ID, "gemini").Scan(&enabled, &source); err != nil {
 		t.Fatalf("read capability: %v", err)
 	}
-	if !enabled || source != "manual" {
-		t.Fatalf("capability = enabled:%v source:%q, want true/manual", enabled, source)
+	if enabled || source != "manual" {
+		t.Fatalf("capability = enabled:%v source:%q, want false/manual", enabled, source)
 	}
 }
 
