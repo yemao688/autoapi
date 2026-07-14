@@ -872,6 +872,15 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
 		t.Fatalf("chain=%+v, want retryable -> success", log.Chain)
 	}
+	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
+		t.Fatalf("pre-commit conversion failure stats=(%d,%d), want target failure +1 and no hit", hit, fail)
+	}
+	if p.breakerFor("p0").consecutiveFailures != 0 {
+		t.Fatalf("pre-commit conversion failure penalized breaker: %d", p.breakerFor("p0").consecutiveFailures)
+	}
+	if provider, _ := st.GetProvider("p0"); provider.Status == model.ProviderStatusError {
+		t.Fatal("pre-commit conversion failure penalized provider health")
+	}
 }
 
 func TestStreamingConversionPostCommitFailure(t *testing.T) {

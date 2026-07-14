@@ -54,11 +54,11 @@ func TestResponsesToMessagesStreamTextGolden(t *testing.T) {
 func TestResponsesToMessagesStreamTerminalAndUnknown(t *testing.T) {
 	c := newResponsesToMessagesStreamConverter()
 	out, err := c.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"bad\"}\n\nevent: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"))
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("incomplete response was not rejected: out=%s err=%v", out, err)
 	}
-	if strings.Contains(string(out), "bad") || !strings.Contains(string(out), "max_tokens") || strings.Contains(string(out), "completed") {
-		t.Fatalf("invalid terminal conversion: %s", out)
+	if len(out) != 0 || strings.Contains(string(out), "message_stop") {
+		t.Fatalf("incomplete response emitted client terminal: %s", out)
 	}
 	c = newResponsesToMessagesStreamConverter()
 	out, err = c.Write([]byte("event: response.reasoning.delta\ndata: {\"type\":\"response.reasoning.delta\",\"delta\":\"secret\"}\n\n"))

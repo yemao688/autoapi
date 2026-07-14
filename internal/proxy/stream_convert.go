@@ -408,10 +408,19 @@ func (c *responsesToMessagesStreamConverter) processEvent() ([]byte, error) {
 		response := get(v, "response")
 		details, _ := response["incomplete_details"].(map[string]interface{})
 		reason, _ := details["reason"].(string)
-		if reason == "max_output_tokens" || reason == "max_tokens" {
-			return c.finish(response, "max_tokens"), nil
+		// An incomplete Responses stream must never be translated into a
+		// normal Anthropic message_stop. That terminal is interpreted as a
+		// successful stream by the usage accumulator, which would hide the
+		// truncation and prevent pre-commit failover. Return an explicit
+		// conversion error for every incomplete reason, including the common
+		// token-limit reasons. If output was already committed, streamAttempt
+		// records this as truncated and accounts provider usage; otherwise it
+		// remains retryable without penalizing provider health/breaker.
+		c.terminal = true
+		if reason == "" {
+			reason = "unknown"
 		}
-		return nil, fmt.Errorf("responses stream incomplete: unsupported reason %q", reason)
+		return nil, fmt.Errorf("responses stream incomplete: %s", reason)
 	case "response.failed":
 		// Do not emit an error event or message_stop. Returning an error lets
 		// streamAttempt distinguish an upstream conversion failure from a
