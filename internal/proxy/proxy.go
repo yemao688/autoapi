@@ -2298,6 +2298,8 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		// bytes were committed, the caller may safely fail over.
 		if conversionErr != nil {
 			streamErr = conversionErr
+		} else if writeErr != nil {
+			streamErr = writeErr
 		} else {
 			streamErr = io.ErrUnexpectedEOF
 		}
@@ -2338,14 +2340,6 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	if !committed {
 		chainEntry.Status = "retryable"
 		chainEntry.Error = streamErr.Error()
-		// A conversion failure before any client-visible bytes is safe to
-		// retry/fail over. The target did fail, but the provider itself did
-		// not produce a transport failure, so do not affect breaker/health.
-		if conversionErr != nil && c.targetID != "" {
-			if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
-				slog.Error("proxy: increment target failure count (pre-commit conversion stream)", "err", err)
-			}
-		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: 0, Error: chainEntry.Error, LatencyMs: attemptLatencyMs, StreamErr: streamErr}, attemptOrder
 	}

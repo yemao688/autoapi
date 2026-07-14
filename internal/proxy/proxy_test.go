@@ -806,7 +806,7 @@ func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
 	}
 }
 
-func TestMessagesClientToResponsesProviderStreamingReachesResponses(t *testing.T) {
+func TestMessagesClientToResponsesProviderStreamingUpstreamErrorIsReached(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -837,7 +837,7 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		if strings.Contains(r.URL.Path, "/p0/") {
 			p0Hits++
-			_, _ = io.WriteString(w, "event: response.output_text.delta\n")
+			_, _ = io.WriteString(w, "event: response.created\ndata: {malformed}\n\n")
 			return
 		}
 		p1Hits++
@@ -880,6 +880,147 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 	}
 	if provider, _ := st.GetProvider("p0"); provider.Status == model.ProviderStatusError {
 		t.Fatal("pre-commit conversion failure penalized provider health")
+	}
+}
+
+func TestStreamingConversionPartialByteStallDeadlineFailover(t *testing.T) {
+	var p0Hits, p1Hits int
+	p0Done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/p0/") {
+			p0Hits++
+			_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+				close(p0Done)
+			case <-time.After(5 * time.Second):
+				t.Error("P0 was not cancelled by first-visible deadline")
+			}
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, responsesSuccessSSE("p1"))
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true, ResponsesEnabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true, FirstTokenTimeoutSeconds: 1},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	select {
+	case <-p0Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for P0 context cancellation")
+	}
+	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 1 {
+		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "p1") || strings.Contains(rec.Body.String(), "p0") {
+		t.Fatalf("client received unexpected stream: %s", rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v, want retryable -> success", log.Chain)
+	}
+	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
+		t.Fatalf("P0 target stats=(%d,%d), want (0,1)", hit, fail)
+	}
+}
+
+func TestMessagesClientResponsesProviderStreamingSuccessE2E(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"upstream\",\"usage\":{\"input_tokens\":2}}}\n\n"+
+			"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"item_1\"}}\n\n"+
+			"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"+
+			"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\"}\n\n"+
+			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"output_tokens\":3}}}\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "upstream", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/v1/responses" {
+		t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, event := range []string{"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"} {
+		if strings.Count(body, "event: "+event) != 1 {
+			t.Fatalf("event %s count=%d body=%s", event, strings.Count(body, "event: "+event), body)
+		}
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.AttemptOutcomeSuccess) || log.InputTokens != 2 || log.OutputTokens != 3 {
+		t.Fatalf("log=%+v, want one success with usage 2/3", log)
+	}
+	if hit, fail := st.statsFor("target"); hit != 1 || fail != 0 {
+		t.Fatalf("stats=(%d,%d), want (1,0)", hit, fail)
+	}
+	provider, _ := st.GetProvider("p")
+	if provider.Status != model.ProviderStatusConnected || p.breakerFor("p").consecutiveFailures != 0 {
+		t.Fatalf("provider=%q breaker failures=%d", provider.Status, p.breakerFor("p").consecutiveFailures)
+	}
+}
+
+func TestResponsesNativeStreamingPassthroughE2E(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	const upstream = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_native\",\"model\":\"native\"}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"native\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":4,\"output_tokens\":5}}}\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, upstream)
+	}))
+	defer srv.Close()
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "native", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"client-model","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/v1/responses" || gotBody["model"] != "native" {
+		t.Fatalf("status=%d path=%q body=%#v response=%s", rec.Code, gotPath, gotBody, rec.Body.String())
+	}
+	if rec.Body.String() != upstream {
+		t.Fatalf("native stream was converted or changed: %q", rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.AttemptOutcomeSuccess) || log.InputTokens != 4 || log.OutputTokens != 5 {
+		t.Fatalf("log=%+v, want native success with usage 4/5", log)
+	}
+	if hit, fail := st.statsFor("target"); hit != 1 || fail != 0 {
+		t.Fatalf("stats=(%d,%d), want (1,0)", hit, fail)
+	}
+	provider, _ := st.GetProvider("p")
+	if provider.Status != model.ProviderStatusConnected {
+		t.Fatalf("provider status=%q, want connected", provider.Status)
 	}
 }
 
