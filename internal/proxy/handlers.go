@@ -89,6 +89,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 	defer p.emitRequest(logEntry, r.URL.Path)
+	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -142,7 +143,6 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	// forwardWithFailover preserves the original JSON and uses r.URL.Path,
 	// therefore every upstream attempt is exactly POST /v1/responses.
 	p.forwardWithFailover(w, r, body, candidates, respReq.Stream, 0, logEntry)
-	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
 func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +151,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 	defer p.emitRequest(logEntry, r.URL.Path)
+	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -202,7 +203,6 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.forwardWithFailover(w, r, body, candidates, msgReq.Stream, 0, logEntry)
-	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
 func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +211,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 	defer p.emitRequest(logEntry, r.URL.Path)
+	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -276,7 +277,6 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.forwardWithFailover(w, r, body, candidates, stream, len(body)/16, logEntry)
-	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
 func parseGeminiModelAction(modelAction string) (modelName, action string, err error) {
@@ -373,6 +373,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 	defer p.emitRequest(logEntry, r.URL.Path)
+	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -460,7 +461,6 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.forwardWithFailover(w, r, body, candidates, chatReq.Stream, inbound.EstimatedTokens, logEntry)
-	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
 func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
@@ -473,6 +473,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 	defer p.emitRequest(logEntry, r.URL.Path)
+	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -540,7 +541,6 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.forwardWithFailover(w, r, body, candidates, false, inbound.EstimatedTokens, logEntry)
-	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
 // genericOpenAIRequest is the minimal body used to route unknown OpenAI
@@ -565,6 +565,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	enrichLogFromRequest(r, logEntry)
 	defer p.logRequestEntry(logEntry)
 	defer p.emitRequest(logEntry, r.URL.Path)
+	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
 	apiKeyID, ok, err := p.authenticate(r)
 	if err != nil || !ok {
@@ -651,7 +652,6 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.forwardWithFailover(w, r, body, candidates, false, inbound.EstimatedTokens, logEntry)
-	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
 }
 
 // handleModels returns the client-facing list of model names. The list is

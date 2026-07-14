@@ -1848,7 +1848,17 @@ outer:
 				logEntry.StatusCode = result.StatusCode
 				succeeded = true
 				return
-			case model.OutcomeTruncated, model.OutcomeDownstreamError:
+			case model.OutcomeTruncated:
+				// The response was committed; never retry or fail over after
+				// forwarding any upstream body bytes.
+				logEntry.StatusCode = result.StatusCode
+				logEntry.Error = result.Error
+				// A committed stream cannot be represented as a normal HTTP
+				// response after the upstream ended unexpectedly. Abort the
+				// server-side connection so net/http closes the downstream
+				// stream instead of presenting a clean EOF to the client.
+				panic(http.ErrAbortHandler)
+			case model.OutcomeDownstreamError:
 				// The response was committed; never retry or fail over after
 				// forwarding any upstream body bytes.
 				logEntry.StatusCode = result.StatusCode

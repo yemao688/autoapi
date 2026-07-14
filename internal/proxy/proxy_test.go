@@ -677,7 +677,21 @@ func TestHandlerStreamMetricsSuccessAndTruncate(t *testing.T) {
 			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","stream":true,"messages":[]}`))
 			req.Header.Set("Authorization", "Bearer key1")
 			rec := httptest.NewRecorder()
-			p.router.ServeHTTP(rec, req)
+			var aborted bool
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						if !errors.Is(recovered.(error), http.ErrAbortHandler) {
+							t.Fatalf("unexpected panic: %v", recovered)
+						}
+						aborted = true
+					}
+				}()
+				p.router.ServeHTTP(rec, req)
+			}()
+			if tc.name == "truncate" && !aborted {
+				t.Fatal("expected truncated stream to abort the handler")
+			}
 			if rec.Code != http.StatusOK || hits != 1 {
 				t.Fatalf("status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
 			}
@@ -1568,7 +1582,21 @@ func TestStreamingConversionPostCommitFailure(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer key1")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	p.router.ServeHTTP(rec, req)
+	var aborted bool
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if !errors.Is(recovered.(error), http.ErrAbortHandler) {
+					t.Fatalf("unexpected panic: %v", recovered)
+				}
+				aborted = true
+			}
+		}()
+		p.router.ServeHTTP(rec, req)
+	}()
+	if !aborted {
+		t.Fatal("expected post-commit conversion failure to abort the handler")
+	}
 	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 0 || !strings.Contains(rec.Body.String(), "p0") {
 		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
 	}
@@ -1955,7 +1983,7 @@ func TestStreaming_PassThrough(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\ndata: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 
@@ -4979,13 +5007,28 @@ func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
 	defer p.Shutdown()
 
 	before := p.breakerFor("p0").consecutiveFailures
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+	req, err := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
 	req.Header.Set("Authorization", "Bearer key1")
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	p.router.ServeHTTP(rec, req)
-	if !strings.Contains(rec.Body.String(), `"id":"c1"`) {
-		t.Fatalf("expected forwarded partial SSE data, got %q", rec.Body.String())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 after committed SSE, got %d", resp.StatusCode)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr == nil {
+		t.Fatal("expected transport error while reading truncated stream")
+	}
+	if !strings.Contains(string(body), `"id":"c1"`) {
+		t.Fatalf("expected forwarded partial SSE data, got %q", body)
 	}
 
 	deadline, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
