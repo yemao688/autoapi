@@ -5,9 +5,16 @@ import "net/http"
 type Protocol string
 
 const (
+	ProtocolOpenAI          Protocol = "openai"
 	ProtocolOpenAIChat      Protocol = "openai_chat"
 	ProtocolOpenAIResponses Protocol = "openai_responses"
 	ProtocolUnknown         Protocol = ""
+)
+
+type ConversionMode string
+
+const (
+	ConversionModeNative ConversionMode = "native"
 )
 
 // AttemptPreparation carries per-attempt protocol decisions that replace
@@ -18,6 +25,6 @@ type AttemptPreparation struct {
 	ExtraHeaders     http.Header
 	InboundProtocol  Protocol
 	UpstreamProtocol Protocol
-	// ConversionMode: "native" for same-protocol passthrough.
-	ConversionMode string
+	// ConversionMode: ConversionModeNative for same-protocol passthrough.
+	ConversionMode ConversionMode
 }

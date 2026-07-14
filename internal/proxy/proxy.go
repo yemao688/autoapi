@@ -1068,12 +1068,7 @@ outer:
 				if req.Header.Get("Content-Type") == "" {
 					req.Header.Set("Content-Type", "application/json")
 				}
-				for name, values := range prep.ExtraHeaders {
-					req.Header.Del(name)
-					for _, value := range values {
-						req.Header.Add(name, value)
-					}
-				}
+				applyExtraHeaders(req.Header, prep.ExtraHeaders)
 			}
 
 			buf := &responseBuffer{statusCode: 0, header: make(http.Header), body: bytes.NewBuffer(nil)}
@@ -1875,12 +1870,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	if attemptReq.Header.Get("Content-Type") == "" {
 		attemptReq.Header.Set("Content-Type", "application/json")
 	}
-	for name, values := range extraHeaders {
-		attemptReq.Header.Del(name)
-		for _, value := range values {
-			attemptReq.Header.Add(name, value)
-		}
-	}
+	applyExtraHeaders(attemptReq.Header, extraHeaders)
 	attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 
 	// Per-attempt transport with the candidate-specific first-byte
@@ -2405,6 +2395,15 @@ func cloneURL(u *url.URL) *url.URL {
 		c.User = &userCopy
 	}
 	return &c
+}
+
+func applyExtraHeaders(h http.Header, extra http.Header) {
+	for name, values := range extra {
+		h.Del(name)
+		for _, value := range values {
+			h.Add(name, value)
+		}
+	}
 }
 
 // isTimeoutError reports whether err represents an upstream header or

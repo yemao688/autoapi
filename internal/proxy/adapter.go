@@ -1,6 +1,7 @@
 package proxy
 
 // ProtocolAdapter prepares an upstream attempt for a given candidate.
+// Phase 2 extension point: adapters may translate between inbound and upstream protocols.
 type ProtocolAdapter interface {
 	PrepareAttempt(body []byte, candidate candidate) (AttemptPreparation, error)
 }
@@ -18,6 +19,6 @@ func (nativeAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPreparatio
 		Path:             c.upstreamPath,
 		InboundProtocol:  c.protocol,
 		UpstreamProtocol: c.protocol,
-		ConversionMode:   "native",
+		ConversionMode:   ConversionModeNative,
 	}, nil
 }

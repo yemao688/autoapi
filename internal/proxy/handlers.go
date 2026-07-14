@@ -320,6 +320,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		Task:            "embeddings",
 		TimeHour:        time.Now().Hour(),
 		Endpoint:        r.URL.Path,
+		Protocol:        ProtocolOpenAI,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 	p.insertPendingLog(logEntry)
@@ -430,6 +431,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		Task:            task,
 		TimeHour:        time.Now().Hour(),
 		Endpoint:        r.URL.Path,
+		Protocol:        ProtocolOpenAI,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 	p.insertPendingLog(logEntry)
