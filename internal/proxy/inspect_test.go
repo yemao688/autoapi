@@ -133,7 +133,7 @@ func TestInspectMessagesFeatures(t *testing.T) {
 		{"tool use", `{"model":"m","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"n","input":{}}]}]}`, []model.Feature{model.FeatureTools}, false},
 		{"tool result", `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"tool","tool_use_id":"x","content":"ok"}]}`, []model.Feature{model.FeatureTools}, false},
 		{"reasoning", `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"y"}]}]}`, []model.Feature{model.FeatureReasoning}, false},
-		{"cache", `{"model":"m","system":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"}]}`, []model.Feature{model.FeatureCacheControl}, false},
+		{"cache", `{"model":"m","system":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"}]}`, []model.Feature{model.FeatureCacheControl}, true},
 		{"stop sequences", `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop_sequences":["x"]}`, nil, true},
 		{"unknown content", `{"model":"m","messages":[{"role":"user","content":[{"type":"video"}]}]}`, nil, true},
 	}
@@ -249,6 +249,67 @@ func TestInspectGeminiKnownShapeErrors(t *testing.T) {
 	for _, body := range invalid {
 		if _, err := inspectGeminiRequest([]byte(body)); err == nil {
 			t.Fatalf("expected error for %s", body)
+		}
+	}
+}
+
+func TestInspectMessagesSystemArrayAlwaysNativeOnly(t *testing.T) {
+	textArray := `{"model":"m","system":[{"type":"text","text":"system"}],"messages":[{"role":"user","content":"hi"}]}`
+	res, err := inspectMessagesRequest([]byte(textArray))
+	if err != nil {
+		t.Fatalf("text system array rejected: %v", err)
+	}
+	if !res.Requirements.NativeOnly || !res.Requirements.UnknownSemantic {
+		t.Fatalf("text system array must be native-only: %+v", res.Requirements)
+	}
+	if res.Requirements.Has(model.FeatureCacheControl) {
+		t.Fatal("plain text system array unexpectedly has cache feature")
+	}
+
+	cacheArray := `{"model":"m","system":[{"type":"text","text":"system","cache_control":{"type":"ephemeral"}}],"messages":[]}`
+	res, err = inspectMessagesRequest([]byte(cacheArray))
+	if err != nil {
+		t.Fatalf("cached system array rejected: %v", err)
+	}
+	if !res.Requirements.Has(model.FeatureCacheControl) || !res.Requirements.NativeOnly {
+		t.Fatalf("cached system array requirements: %+v", res.Requirements)
+	}
+
+	for _, body := range []string{
+		`{"model":"m","system":[{"type":"text"}],"messages":[]}`,
+		`{"model":"m","system":[{"type":"text","text":123}],"messages":[]}`,
+		`{"model":"m","system":[{}],"messages":[]}`,
+	} {
+		if _, err := inspectMessagesRequest([]byte(body)); err == nil {
+			t.Fatalf("expected system array shape error: %s", body)
+		}
+	}
+}
+
+func TestInspectGeminiPartReasoningMetadataIsOrderIndependent(t *testing.T) {
+	cases := []string{
+		`{"contents":[{"parts":[{"text":"hi","thought":true}]}]}`,
+		`{"contents":[{"parts":[{"text":"hi","thoughtSignature":"sig"}]}]}`,
+		`{"contents":[{"parts":[{"functionCall":{"name":"lookup"},"thoughtSignature":"sig"}]}]}`,
+	}
+	for _, body := range cases {
+		for i := 0; i < 5; i++ {
+			res, err := inspectGeminiRequest([]byte(body))
+			if err != nil {
+				t.Fatalf("iteration %d body=%s: %v", i, body, err)
+			}
+			if !res.Requirements.Has(model.FeatureReasoning) {
+				t.Fatalf("iteration %d missing reasoning for %s", i, body)
+			}
+		}
+	}
+	for _, body := range []string{
+		`{"contents":[{"parts":[{"text":"hi","thought":"true"}]}]}`,
+		`{"contents":[{"parts":[{"text":"hi","thoughtSignature":123}]}]}`,
+		`{"contents":[{"parts":[{"functionCall":{"name":"lookup"},"thoughtSignature":false}]}]}`,
+	} {
+		if _, err := inspectGeminiRequest([]byte(body)); err == nil {
+			t.Fatalf("expected reasoning metadata shape error: %s", body)
 		}
 	}
 }

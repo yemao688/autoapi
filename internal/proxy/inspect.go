@@ -974,6 +974,11 @@ func inspectMessagesSystem(raw json.RawMessage, reqs *model.RequestRequirements)
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return &requestParseError{msg: "system must be a string or array", cause: err}
 	}
+	// The Messages↔Responses converter does not support the Messages system
+	// array representation at all. Keep validating each block below, but force
+	// conversion to remain native-only even when every block is text.
+	reqs.NativeOnly = true
+	reqs.UnknownSemantic = true
 	for i, item := range arr {
 		var block map[string]json.RawMessage
 		if err := json.Unmarshal(item, &block); err != nil {
@@ -986,6 +991,18 @@ func inspectMessagesSystem(raw json.RawMessage, reqs *model.RequestRequirements)
 		if t, ok := block["type"]; ok {
 			if err := json.Unmarshal(t, &typ); err != nil {
 				return &requestParseError{msg: fmt.Sprintf("system[%d].type must be a string", i), cause: err}
+			}
+		} else {
+			return &requestParseError{msg: fmt.Sprintf("system[%d].type is required", i)}
+		}
+		if typ == "text" {
+			text, ok := block["text"]
+			if !ok {
+				return &requestParseError{msg: fmt.Sprintf("system[%d].text is required", i)}
+			}
+			var textValue string
+			if err := json.Unmarshal(text, &textValue); err != nil {
+				return &requestParseError{msg: fmt.Sprintf("system[%d].text must be a string", i), cause: err}
 			}
 		}
 		if typ != "text" && typ != "" {
@@ -1115,11 +1132,6 @@ func inspectMessagesContent(raw json.RawMessage, reqs *model.RequestRequirements
 var knownGeminiTopLevel = map[string]bool{
 	"contents": true, "tools": true, "toolConfig": true, "systemInstruction": true,
 	"generationConfig": true, "safetySettings": true, "cachedContent": true,
-}
-
-var knownGeminiPartTypes = map[string]bool{
-	"text": true, "inlineData": true, "fileData": true, "functionCall": true,
-	"functionResponse": true, "thought": true, "thoughtSignature": true,
 }
 
 func inspectGeminiRequest(body []byte) (geminiInspectResult, error) {
@@ -1271,27 +1283,50 @@ func inspectGeminiParts(raw json.RawMessage, reqs *model.RequestRequirements, co
 		if err := json.Unmarshal(item, &part); err != nil {
 			return &requestParseError{msg: fmt.Sprintf("contents[%d].parts[%d] must be an object", contentIdx, i), cause: err}
 		}
-		typ := classifyGeminiPart(part)
+		// Gemini thought metadata is independent of the payload kind. Inspect it
+		// first, then classify the remaining payload so map iteration order cannot
+		// make text/function parts disappear behind thought fields.
+		payload := make(map[string]json.RawMessage, len(part))
+		if rawThought, ok := part["thought"]; ok {
+			var thought bool
+			if rawThought == nil || string(rawThought) == "null" || json.Unmarshal(rawThought, &thought) != nil {
+				return &requestParseError{msg: fmt.Sprintf("contents[%d].parts[%d].thought must be a boolean", contentIdx, i)}
+			}
+			if thought {
+				reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+			}
+		}
+		if rawSignature, ok := part["thoughtSignature"]; ok {
+			var signature string
+			if rawSignature == nil || string(rawSignature) == "null" || json.Unmarshal(rawSignature, &signature) != nil {
+				return &requestParseError{msg: fmt.Sprintf("contents[%d].parts[%d].thoughtSignature must be a string", contentIdx, i)}
+			}
+			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+		}
+		for key, value := range part {
+			if key != "thought" && key != "thoughtSignature" {
+				payload[key] = value
+			}
+		}
+		typ := classifyGeminiPart(payload)
 		switch typ {
 		case "inlineData":
-			if err := inspectGeminiInlineData(part["inlineData"], reqs, contentIdx, i); err != nil {
+			if err := inspectGeminiInlineData(payload["inlineData"], reqs, contentIdx, i); err != nil {
 				return err
 			}
 		case "fileData":
-			if err := inspectGeminiFileData(part["fileData"], reqs, contentIdx, i); err != nil {
+			if err := inspectGeminiFileData(payload["fileData"], reqs, contentIdx, i); err != nil {
 				return err
 			}
 		case "functionCall", "functionResponse":
 			key := typ
-			if err := inspectGeminiFunctionCallResponse(part[key], contentIdx, i); err != nil {
+			if err := inspectGeminiFunctionCallResponse(payload[key], contentIdx, i); err != nil {
 				return err
 			}
 			reqs.Features = appendFeature(reqs.Features, model.FeatureTools)
 		case "text":
-		case "thought", "thoughtSignature":
-			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
 		default:
-			if len(part) > 0 {
+			if len(payload) > 0 {
 				reqs.NativeOnly = true
 				reqs.UnknownSemantic = true
 			}
@@ -1301,13 +1336,8 @@ func inspectGeminiParts(raw json.RawMessage, reqs *model.RequestRequirements, co
 }
 
 func classifyGeminiPart(part map[string]json.RawMessage) string {
-	for _, k := range []string{"functionCall", "functionResponse"} {
+	for _, k := range []string{"text", "inlineData", "fileData", "functionCall", "functionResponse"} {
 		if v, ok := part[k]; ok && v != nil && string(v) != "null" {
-			return k
-		}
-	}
-	for k := range part {
-		if knownGeminiPartTypes[k] {
 			return k
 		}
 	}

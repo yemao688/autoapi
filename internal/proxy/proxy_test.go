@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,6 +41,7 @@ type mockStore struct {
 	bulkModelCapabilityErr error
 	bulkModelRefs          []model.ProviderModelRef
 	getSettingsCalls       int
+	getProviderKeyCalls    int
 
 	mu          sync.Mutex
 	statsDeltas map[string]struct {
@@ -108,6 +110,7 @@ func (m *mockStore) GetModelCapabilitiesForModels(refs []model.ProviderModelRef)
 func (m *mockStore) ListAPIKeys() ([]model.ApiKey, error) { return m.apiKeys, nil }
 
 func (m *mockStore) GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error) {
+	m.getProviderKeyCalls++
 	return nil, nil, nil
 }
 
@@ -749,6 +752,154 @@ func TestMessagesClientFallsBackToResponsesProvider(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"type":"message"`) || !strings.Contains(rec.Body.String(), `"model":"client-model"`) || !strings.Contains(rec.Body.String(), `"stop_reason":"end_turn"`) {
 		t.Fatalf("response was not converted to Messages: %s", rec.Body.String())
+	}
+}
+
+func TestMessagesSystemArrayNativePassThroughAndConversionPreflight(t *testing.T) {
+	t.Run("native Messages provider preserves raw system array", func(t *testing.T) {
+		var gotBody []byte
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"msg_1","content":[],"stop_reason":"end_turn"}`)
+		}))
+		defer srv.Close()
+		st := &mockStore{
+			providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
+			rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(st, &mockService{}, 0, nil)
+		defer p.Shutdown()
+		body := `{"model":"m","system":[{"type":"text","text":"system"}],"messages":[{"role":"user","content":"hi"}]}`
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var gotJSON, wantJSON map[string]any
+		if err := json.Unmarshal(gotBody, &gotJSON); err != nil {
+			t.Fatalf("decode native body: %v", err)
+		}
+		if err := json.Unmarshal([]byte(body), &wantJSON); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if !reflect.DeepEqual(gotJSON["system"], wantJSON["system"]) || gotJSON["model"] != "upstream" {
+			t.Fatalf("native body changed: got %s", gotBody)
+		}
+	})
+
+	t.Run("Responses-only target rejects system array before upstream HTTP", func(t *testing.T) {
+		hits := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits++
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+		st := &mockStore{
+			providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+			rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+			apiKeys:   []model.ApiKey{{ID: "key1"}},
+		}
+		p := New(st, &mockService{}, 0, nil)
+		defer p.Shutdown()
+		body := `{"model":"m","system":[{"type":"text","text":"system"}],"messages":[]}`
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity || hits != 0 {
+			t.Fatalf("status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"unsupported_feature"`) {
+			t.Fatalf("unexpected error body: %s", rec.Body.String())
+		}
+	})
+}
+
+func TestConversionPreservationAvailabilityE2E(t *testing.T) {
+	tests := []struct {
+		name             string
+		provider         *model.Provider
+		body             string
+		breakerOpen      bool
+		wantStatus       int
+		wantKeyLookups   int
+		wantUpstreamHits int
+	}{
+		{
+			name:             "native-only disabled provider is 503",
+			provider:         &model.Provider{ID: "p", Enabled: false, ResponsesEnabled: true},
+			body:             `{"model":"m","system":[{"type":"text","text":"system"}],"messages":[]}`,
+			wantStatus:       http.StatusServiceUnavailable,
+			wantKeyLookups:   0,
+			wantUpstreamHits: 0,
+		},
+		{
+			name:             "vision breaker open is 503",
+			provider:         &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true},
+			body:             `{"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"x","media_type":"image/png"}}]}]}`,
+			breakerOpen:      true,
+			wantStatus:       http.StatusServiceUnavailable,
+			wantKeyLookups:   0,
+			wantUpstreamHits: 0,
+		},
+		{
+			name:             "native-only no target protocol is 503",
+			provider:         &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: false},
+			body:             `{"model":"m","system":[{"type":"text","text":"system"}],"messages":[]}`,
+			wantStatus:       http.StatusServiceUnavailable,
+			wantKeyLookups:   0,
+			wantUpstreamHits: 0,
+		},
+		{
+			name:             "native-only basic target is 422 before key and HTTP",
+			provider:         &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true},
+			body:             `{"model":"m","system":[{"type":"text","text":"system"}],"messages":[]}`,
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantKeyLookups:   0,
+			wantUpstreamHits: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hits := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"upstream"}`)
+			}))
+			defer srv.Close()
+			provider := *tc.provider
+			provider.BaseURL = srv.URL
+			st := &mockStore{
+				providers: map[string]*model.Provider{"p": &provider},
+				rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+				apiKeys:   []model.ApiKey{{ID: "key1"}},
+			}
+			p := New(st, &mockService{}, 0, nil)
+			defer p.Shutdown()
+			if tc.breakerOpen {
+				cb := p.breakerFor("p")
+				cb.mutex.Lock()
+				cb.state = StateOpen
+				cb.openedAt = time.Now()
+				cb.mutex.Unlock()
+			}
+			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer key1")
+			rec := httptest.NewRecorder()
+			p.router.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if st.getProviderKeyCalls != tc.wantKeyLookups || hits != tc.wantUpstreamHits {
+				t.Fatalf("key lookups=%d upstream hits=%d", st.getProviderKeyCalls, hits)
+			}
+		})
 	}
 }
 

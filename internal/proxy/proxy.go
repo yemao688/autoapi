@@ -792,11 +792,17 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 func (p *Proxy) loadFeatureEnforcement() {
 	var mode string
 	if p.settingsProvider != nil {
-		if settings, err := p.settingsProvider(); err == nil && settings != nil {
+		settings, err := p.settingsProvider()
+		if err != nil {
+			slog.Warn("proxy: failed to load feature capability enforcement", "error", err)
+		} else if settings != nil {
 			mode = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
 		}
 	} else if p.store != nil {
-		if settings, err := p.store.GetSettings(); err == nil && settings != nil {
+		settings, err := p.store.GetSettings()
+		if err != nil {
+			slog.Warn("proxy: failed to load feature capability enforcement", "error", err)
+		} else if settings != nil {
 			mode = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
 		}
 	}

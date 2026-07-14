@@ -100,22 +100,6 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		return nil, fmt.Errorf("no conversion fallback for protocol %q", req.Protocol)
 	}
 
-	// Messages<->Responses conversion is restricted to text/system/tools/tool
-	// results and the supported streaming edge. Any other feature or unknown
-	// semantic must be rejected before we spend time on provider lookup.
-	if req.Requirements != nil {
-		for _, f := range req.Requirements.Features {
-			switch f {
-			case model.FeatureTools, model.FeatureStreaming:
-				continue
-			}
-			return nil, fmt.Errorf("%w: conversion cannot preserve feature %q", errUnsupportedFeature, f)
-		}
-		if req.Requirements.NativeOnly || req.Requirements.UnknownSemantic {
-			return nil, fmt.Errorf("%w: request contains native-only semantics", errUnsupportedFeature)
-		}
-	}
-
 	// First determine whether there is at least one "basic" conversion
 	// candidate: enabled target, enabled provider, closed breaker, and the
 	// target protocol is supported. Without such a candidate the conversion
@@ -147,6 +131,23 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 	}
 	if !basicAvailable {
 		return nil, fmt.Errorf("no available conversion provider for model %q", req.Model)
+	}
+
+	// Messages<->Responses conversion is restricted to text/system/tools/tool
+	// results and the supported streaming edge. Do this only after confirming a
+	// basic conversion path exists: otherwise the request is ordinary routing
+	// unavailability (503), not a preservation failure (422).
+	if req.Requirements != nil {
+		for _, f := range req.Requirements.Features {
+			switch f {
+			case model.FeatureTools, model.FeatureStreaming:
+				continue
+			}
+			return nil, fmt.Errorf("%w: conversion cannot preserve feature %q", errUnsupportedFeature, f)
+		}
+		if req.Requirements.NativeOnly || req.Requirements.UnknownSemantic {
+			return nil, fmt.Errorf("%w: request contains native-only semantics", errUnsupportedFeature)
+		}
 	}
 
 	// Static stream-conversion edge is a conversion limitation, not a feature

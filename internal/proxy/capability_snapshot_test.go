@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"autoapi/internal/model"
 )
@@ -339,6 +340,68 @@ func TestSelectConversionCandidatesCapabilityGate(t *testing.T) {
 	}
 	if _, err := selectConversionCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIResponses}, rule, nil, lookup, newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}}, map[string]*model.Provider{"p": p})); err != nil {
 		t.Fatalf("Responses to Messages: %v", err)
+	}
+}
+
+func TestSelectConversionCandidatesPreservationClassificationAfterBasicAvailability(t *testing.T) {
+	rule := []model.ModelRule{{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", Enabled: true}}}}
+	nativeOnly := &model.RequestRequirements{NativeOnly: true, UnknownSemantic: true}
+
+	tests := []struct {
+		name        string
+		provider    *model.Provider
+		breakerOpen bool
+		snap        capabilitySnapshot
+		reqs        *model.RequestRequirements
+		want422     bool
+	}{
+		{
+			name:     "native-only with disabled provider is unavailable",
+			provider: &model.Provider{ID: "p", Enabled: false, ResponsesEnabled: true},
+			reqs:     nativeOnly,
+		},
+		{
+			name:        "vision with breaker open is unavailable",
+			provider:    &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true},
+			breakerOpen: true,
+			reqs:        &model.RequestRequirements{Features: []model.Feature{model.FeatureVision}},
+		},
+		{
+			name:     "native-only with no target protocol is unavailable",
+			provider: &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: false},
+			reqs:     nativeOnly,
+		},
+		{
+			name:     "native-only with basic target is unsupported",
+			provider: &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true},
+			reqs:     nativeOnly,
+			want422:  true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := func(string) (*model.Provider, error) { return tc.provider, nil }
+			providers := map[string]*model.Provider{"p": tc.provider}
+			snap := tc.snap
+			if snap.providers == nil {
+				snap = newCapabilitySnapshot(nil, providers)
+			}
+			breakers := map[string]*CircuitBreaker(nil)
+			if tc.breakerOpen {
+				cb := NewCircuitBreaker()
+				cb.state = StateOpen
+				cb.openedAt = time.Now()
+				breakers = map[string]*CircuitBreaker{"p": cb}
+			}
+			_, err := selectConversionCandidates(&InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Requirements: tc.reqs}, rule, breakers, lookup, snap)
+			got422 := errors.Is(err, errUnsupportedFeature)
+			if got422 != tc.want422 {
+				t.Fatalf("want422=%v err=%v", tc.want422, err)
+			}
+			if err == nil {
+				t.Fatal("expected candidate selection to fail")
+			}
+		})
 	}
 }
 
