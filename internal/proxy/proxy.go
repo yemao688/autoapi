@@ -678,7 +678,11 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 
 	candidates, err := selectCandidates(req, rules, breakers, p.store.GetProvider)
 	if err != nil {
-		return nil, err
+		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, p.store.GetProvider)
+		if conversionErr != nil {
+			return nil, err
+		}
+		candidates = conversionCandidates
 	}
 	// Price snapshots are needed by execution and request-log accounting for
 	// every strategy, including priority_first. Only planCandidates may skip
@@ -776,8 +780,6 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// outside the candidate loop so the value carries over to the first
 	// attempt on a new target after a failed one.
 	retryAfter := time.Duration(0)
-	adapter := nativeAdapter{}
-
 	// outer is the label on the candidate loop. Used by the global attempt
 	// cap (maxTotalAttempts) to break out of BOTH the candidate and retry
 	// loops at once when the cap is reached. Plain `break` inside the retry
@@ -785,6 +787,10 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// client-abort paths are unaffected.
 outer:
 	for _, c := range candidates {
+		var adapter ProtocolAdapter = nativeAdapter{}
+		if c.convertTo != "" {
+			adapter = conversionAdapter{from: c.protocol, to: c.convertTo}
+		}
 		lastCandidate = c
 		if !p.breakerFor(c.provider.ID).Allow() {
 			slog.Debug("proxy: candidate circuit open", "provider", c.provider.Name, "model", c.modelName)
@@ -1152,6 +1158,46 @@ outer:
 
 			if attemptErr == nil && effectiveStatus < 400 {
 				// SUCCESS — copy response, record breaker + hit counter once.
+				if prep.ConvertResponse != nil {
+					out, err := prep.ConvertResponse(buf.body.Bytes())
+					if err != nil {
+						lastErr = fmt.Errorf("convert response from %s: %w", c.provider.Name, err)
+						attemptOrder++
+						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+							UpstreamStarted:      true,
+							RequestCost:          c.requestPrice,
+							RequestCostAvailable: c.requestPriceAvailable,
+							AttemptOrder:         attemptOrder,
+							ProviderID:           c.provider.ID,
+							ProviderName:         c.provider.Name,
+							ModelName:            c.modelName,
+							TargetID:             c.targetID,
+							Status:               "conversion_error",
+							StatusCode:           http.StatusBadGateway,
+							Error:                lastErr.Error(),
+						})
+						p.breakerFor(c.provider.ID).Record(false)
+						if c.targetID != "" {
+							if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
+								slog.Error("proxy: increment target failure count", "err", err)
+							}
+						}
+						if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
+							slog.Error("proxy: update provider health", "err", err)
+						}
+						p.writeError(w, http.StatusBadGateway, "upstream_error", lastErr.Error())
+						logEntry.StatusCode = http.StatusBadGateway
+						logEntry.Error = lastErr.Error()
+						logEntry.ProviderID = c.provider.ID
+						logEntry.ProviderName = c.provider.Name
+						logEntry.Model = c.modelName
+						logEntry.RouteID = c.ruleID
+						logEntry.RouteLabel = c.ruleLabel
+						return
+					}
+					buf.body = bytes.NewBuffer(out)
+					buf.header.Del("Content-Length")
+				}
 				copyBufferedResponse(w, buf)
 				logEntry.StatusCode = buf.statusCode
 				logEntry.ProviderID = c.provider.ID

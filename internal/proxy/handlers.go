@@ -126,6 +126,12 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
 		return
 	}
+	if respReq.Stream && allConversionCandidates(candidates) {
+		msg := "Streaming protocol conversion is not yet supported"
+		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
+		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
+		return
+	}
 	// forwardWithFailover preserves the original JSON and uses r.URL.Path,
 	// therefore every upstream attempt is exactly POST /v1/responses.
 	p.forwardWithFailover(w, r, body, candidates, respReq.Stream, 0, logEntry)
@@ -176,8 +182,26 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
 		return
 	}
+	if msgReq.Stream && allConversionCandidates(candidates) {
+		msg := "Streaming protocol conversion is not yet supported"
+		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
+		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
+		return
+	}
 	p.forwardWithFailover(w, r, body, candidates, msgReq.Stream, 0, logEntry)
 	logEntry.LatencyMs = int(time.Since(start).Milliseconds())
+}
+
+func allConversionCandidates(candidates []candidate) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+	for _, c := range candidates {
+		if c.convertTo == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // clientIPFromAddr extracts the host portion of an HTTP RemoteAddr value

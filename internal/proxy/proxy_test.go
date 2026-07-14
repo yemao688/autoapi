@@ -659,6 +659,102 @@ func TestHandlerMetricSinkPanicDoesNotChangeResponse(t *testing.T) {
 	}
 }
 
+func TestMessagesClientFallsBackToResponsesProvider(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":2,"output_tokens":3}}`)
+	}))
+	defer srv.Close()
+
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-resp", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/responses" || gotBody["model"] != "upstream-resp" {
+		t.Fatalf("upstream path/body = %q %#v", gotPath, gotBody)
+	}
+	if !strings.Contains(rec.Body.String(), `"type":"message"`) || !strings.Contains(rec.Body.String(), `"model":"client-model"`) || !strings.Contains(rec.Body.String(), `"stop_reason":"end_turn"`) {
+		t.Fatalf("response was not converted to Messages: %s", rec.Body.String())
+	}
+}
+
+func TestResponsesClientFallsBackToMessagesProvider(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_1","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":5}}`)
+	}))
+	defer srv.Close()
+
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-msg", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"client-model","instructions":"brief","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/messages" || gotBody["model"] != "upstream-msg" || gotBody["system"] != "brief" {
+		t.Fatalf("upstream path/body = %q %#v", gotPath, gotBody)
+	}
+	if !strings.Contains(rec.Body.String(), `"object":"response"`) || !strings.Contains(rec.Body.String(), `"model":"client-model"`) || !strings.Contains(rec.Body.String(), `"status":"completed"`) {
+		t.Fatalf("response was not converted to Responses: %s", rec.Body.String())
+	}
+}
+
+func TestProtocolConversionStreamingRejectedBeforeUpstream(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-resp", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity || hits != 0 {
+		t.Fatalf("status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"type":"unsupported_feature"`) || !strings.Contains(rec.Body.String(), "Streaming protocol conversion is not yet supported") {
+		t.Fatalf("unexpected error body: %s", rec.Body.String())
+	}
+}
+
 func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

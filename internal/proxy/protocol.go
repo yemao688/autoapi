@@ -17,7 +17,8 @@ const AnthropicDefaultVersion = "2023-06-01"
 type ConversionMode string
 
 const (
-	ConversionModeNative ConversionMode = "native"
+	ConversionModeNative  ConversionMode = "native"
+	ConversionModeConvert ConversionMode = "convert"
 )
 
 // AttemptPreparation carries per-attempt protocol decisions that replace
@@ -29,6 +30,7 @@ type AttemptPreparation struct {
 	InboundProtocol    Protocol
 	UpstreamProtocol   Protocol
 	SuppressBearerAuth bool
+	ConvertResponse    func([]byte) ([]byte, error) `json:"-"`
 	// ConversionMode: ConversionModeNative for same-protocol passthrough.
 	ConversionMode ConversionMode
 }

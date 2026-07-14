@@ -67,6 +67,65 @@ type candidate struct {
 	strategy                   routing.Strategy
 	requestPrice               float64
 	requestPriceAvailable      bool
+	convertTo                  Protocol
+}
+
+func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
+	rule, matched := findModelRule(req, rules)
+	if !matched {
+		return nil, fmt.Errorf("%w: %s", errNoMatch, req.Model)
+	}
+
+	var to Protocol
+	var upstreamPath string
+	switch req.Protocol {
+	case ProtocolAnthropicMessages:
+		to, upstreamPath = ProtocolOpenAIResponses, "/v1/responses"
+	case ProtocolOpenAIResponses:
+		to, upstreamPath = ProtocolAnthropicMessages, "/v1/messages"
+	default:
+		return nil, fmt.Errorf("no conversion fallback for protocol %q", req.Protocol)
+	}
+
+	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
+	var out []candidate
+	for _, t := range rule.Targets {
+		if !t.Enabled {
+			continue
+		}
+		p, err := getProvider(t.ProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("matched provider not found")
+		}
+		if !p.Enabled || isOpen(t.ProviderID, breakers) {
+			continue
+		}
+		if to == ProtocolOpenAIResponses && !p.ResponsesEnabled {
+			continue
+		}
+		if to == ProtocolAnthropicMessages && !p.MessagesEnabled {
+			continue
+		}
+		out = append(out, candidate{
+			provider:                   p,
+			modelName:                  modelNameForTarget(t.ModelName, req.Model),
+			protocol:                   req.Protocol,
+			upstreamPath:               upstreamPath,
+			ruleID:                     rule.ID,
+			ruleLabel:                  rule.Name,
+			targetID:                   t.ID,
+			maxRetries:                 t.MaxRetries,
+			firstByteBudget:            firstByteBudget,
+			targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds),
+			tier:                       t.Tier,
+			strategy:                   routing.Strategy(rule.Strategy),
+			convertTo:                  to,
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no available conversion provider for model %q", req.Model)
+	}
+	return out, nil
 }
 
 // selectCandidates picks the enabled model rule whose Name equals req.Model

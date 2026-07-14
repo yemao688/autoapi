@@ -26,3 +26,38 @@ func (nativeAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPreparatio
 	}
 	return prep, nil
 }
+
+type conversionAdapter struct {
+	from Protocol
+	to   Protocol
+}
+
+func (a conversionAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPreparation, error) {
+	prep := AttemptPreparation{
+		InboundProtocol:  a.from,
+		UpstreamProtocol: a.to,
+		ConversionMode:   ConversionModeConvert,
+	}
+	switch {
+	case a.from == ProtocolAnthropicMessages && a.to == ProtocolOpenAIResponses:
+		converted, err := messagesToResponsesRequest(body, c.modelName)
+		if err != nil {
+			return AttemptPreparation{}, err
+		}
+		prep.Body = converted
+		prep.Path = "/v1/responses"
+		prep.ConvertResponse = func(body []byte) ([]byte, error) { return responsesToMessagesResponse(body, c.ruleLabel) }
+	case a.from == ProtocolOpenAIResponses && a.to == ProtocolAnthropicMessages:
+		converted, err := responsesToMessagesRequest(body, c.modelName)
+		if err != nil {
+			return AttemptPreparation{}, err
+		}
+		prep.Body = converted
+		prep.Path = "/v1/messages"
+		prep.SuppressBearerAuth = true
+		prep.ConvertResponse = func(body []byte) ([]byte, error) { return messagesToResponsesResponse(body, c.ruleLabel) }
+	default:
+		return AttemptPreparation{}, errUnsupportedConversion(a.from, a.to)
+	}
+	return prep, nil
+}
