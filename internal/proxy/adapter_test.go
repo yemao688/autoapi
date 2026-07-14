@@ -59,6 +59,42 @@ func TestNativeAdapterPrepareAttemptWithUnknownProtocol(t *testing.T) {
 	}
 }
 
+func TestChatToResponsesAdapterSetsStreamConverter(t *testing.T) {
+	c := candidate{modelName: "m", protocol: ProtocolOpenAIChat}
+	prep, err := conversionAdapter{from: ProtocolOpenAIChat, to: ProtocolOpenAIResponses}.PrepareAttempt([]byte(`{"model":"m","messages":[]}`), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.ConvertResponse == nil {
+		t.Fatal("expected non-stream ConvertResponse")
+	}
+	if prep.NewStreamConverter == nil {
+		t.Fatal("expected NewStreamConverter")
+	}
+	conv := prep.NewStreamConverter()
+	if conv == nil {
+		t.Fatal("NewStreamConverter returned nil")
+	}
+}
+
+func TestResponsesToChatAdapterSetsStreamConverter(t *testing.T) {
+	c := candidate{modelName: "m", protocol: ProtocolOpenAIResponses}
+	prep, err := conversionAdapter{from: ProtocolOpenAIResponses, to: ProtocolOpenAIChat}.PrepareAttempt([]byte(`{"model":"m","input":"hi"}`), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.ConvertResponse == nil {
+		t.Fatal("expected non-stream ConvertResponse")
+	}
+	if prep.NewStreamConverter == nil {
+		t.Fatal("expected NewStreamConverter")
+	}
+	conv := prep.NewStreamConverter()
+	if conv == nil {
+		t.Fatal("NewStreamConverter returned nil")
+	}
+}
+
 func TestNativeAdapterPrepareAttemptAnthropicMessagesSuppressesBearer(t *testing.T) {
 	prep, err := (nativeAdapter{}).PrepareAttempt([]byte(`{"model":"requested","messages":[]}`), candidate{
 		modelName:    "claude-upstream",

@@ -55,6 +55,15 @@ func chatToResponsesRequest(body []byte, upstreamModel string) ([]byte, error) {
 		return nil, err
 	}
 	out["input"] = input
+	if raw, ok := req["stream"]; ok && string(raw) != "null" {
+		var stream bool
+		if err := json.Unmarshal(raw, &stream); err != nil {
+			return nil, fmt.Errorf("stream must be a boolean")
+		}
+		if stream {
+			out["stream"] = true
+		}
+	}
 	return json.Marshal(out)
 }
 
@@ -92,6 +101,15 @@ func responsesToChatRequest(body []byte, upstreamModel string) ([]byte, error) {
 		return nil, err
 	}
 	out["messages"] = messages
+	if raw, ok := req["stream"]; ok && string(raw) != "null" {
+		var stream bool
+		if err := json.Unmarshal(raw, &stream); err != nil {
+			return nil, fmt.Errorf("stream must be a boolean")
+		}
+		if stream {
+			out["stream"] = true
+		}
+	}
 	return json.Marshal(out)
 }
 

@@ -264,19 +264,19 @@ func TestChatConverterDoesNotAcceptUnknownTextSemantics(t *testing.T) {
 	}
 }
 
-func TestConversionAdapterChatEdgesAreNonStreaming(t *testing.T) {
+func TestConversionAdapterChatEdgesSetStreamConverter(t *testing.T) {
 	chatPrep, err := (conversionAdapter{from: ProtocolOpenAIChat, to: ProtocolOpenAIResponses}).PrepareAttempt([]byte(`{"model":"m","messages":[]}`), candidate{modelName: "upstream", ruleLabel: "m"})
 	if err != nil {
 		t.Fatalf("Chat adapter: %v", err)
 	}
-	if chatPrep.Path != "/v1/responses" || chatPrep.NewStreamConverter != nil || chatPrep.ConvertResponse == nil {
+	if chatPrep.Path != "/v1/responses" || chatPrep.NewStreamConverter == nil || chatPrep.ConvertResponse == nil {
 		t.Fatalf("Chat adapter preparation: %+v", chatPrep)
 	}
 	responsesPrep, err := (conversionAdapter{from: ProtocolOpenAIResponses, to: ProtocolOpenAIChat}).PrepareAttempt([]byte(`{"model":"m","input":"hi"}`), candidate{modelName: "upstream", ruleLabel: "m"})
 	if err != nil {
 		t.Fatalf("Responses adapter: %v", err)
 	}
-	if responsesPrep.Path != "/v1/chat/completions" || responsesPrep.NewStreamConverter != nil || responsesPrep.ConvertResponse == nil {
+	if responsesPrep.Path != "/v1/chat/completions" || responsesPrep.NewStreamConverter == nil || responsesPrep.ConvertResponse == nil {
 		t.Fatalf("Responses adapter preparation: %+v", responsesPrep)
 	}
 }

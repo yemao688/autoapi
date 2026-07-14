@@ -1166,9 +1166,15 @@ func TestAllChatResponseConversionErrorsReturn502(t *testing.T) {
 	}
 }
 
-func TestChatStreamResponsesOnlyPreflightBeforeKeyAndHTTP(t *testing.T) {
+func TestChatStreamRoutesToResponsesProvider(t *testing.T) {
 	hits := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"model\":\"m\"}}\n\n"+
+			"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"ok\"}\n\n"+
+			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"output_tokens\":1},\"stop_reason\":\"end_turn\"}}\n\n")
+	}))
 	defer srv.Close()
 	store := &mockStore{
 		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
@@ -1183,27 +1189,24 @@ func TestChatStreamResponsesOnlyPreflightBeforeKeyAndHTTP(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer key1")
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnprocessableEntity || keys.keyResolveCalls != 0 || hits != 0 {
+	if rec.Code != http.StatusOK || keys.keyResolveCalls != 1 || hits != 1 {
 		t.Fatalf("status=%d keyCalls=%d hits=%d body=%s", rec.Code, keys.keyResolveCalls, hits, rec.Body.String())
 	}
 }
 
-func TestResponsesStreamSkipsChatOnlyTargetForMessagesTarget(t *testing.T) {
+func TestResponsesStreamPrefersChatEdgeOverMessagesTarget(t *testing.T) {
+	chatHits := 0
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("Chat-only target should not receive Responses stream")
-	}))
-	defer chatSrv.Close()
-	messagesSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/messages" {
+		chatHits++
+		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("path=%s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n"+
-			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n"+
-			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n"+
-			"event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n"+
-			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"+
-			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl-up\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer chatSrv.Close()
+	messagesSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("Messages target should not be reached when Chat edge is available")
 	}))
 	defer messagesSrv.Close()
 	store := &mockStore{
@@ -1227,8 +1230,8 @@ func TestResponsesStreamSkipsChatOnlyTargetForMessagesTarget(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer key1")
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "response.output_text.delta") {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || chatHits != 1 || !strings.Contains(rec.Body.String(), "response.output_text.delta") {
+		t.Fatalf("status=%d chatHits=%d body=%s", rec.Code, chatHits, rec.Body.String())
 	}
 }
 
@@ -5672,5 +5675,207 @@ func TestChar_PriorityFirstFailoverPreservesCandidateOrder(t *testing.T) {
 	}
 	if log.Chain[1].AttemptOrder != 2 || log.Chain[1].ProviderID != "p1" {
 		t.Fatalf("second attempt reordered: %+v", log.Chain[1])
+	}
+}
+
+func TestChatToResponsesStreamingE2E(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	upstream := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_up\",\"model\":\"upstream\",\"usage\":{\"input_tokens\":3}}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"output_tokens\":1,\"total_tokens\":4},\"stop_reason\":\"end_turn\"}}\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, upstream)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/v1/responses" {
+		t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+	}
+	if gotBody["stream"] != true {
+		t.Fatalf("upstream stream flag missing: %#v", gotBody)
+	}
+	body := rec.Body.String()
+	for _, ev := range []string{"data: ", "\"role\":\"assistant\"", "\"content\":\"hello\"", "\"finish_reason\":\"stop\"", "data: [DONE]"} {
+		if !strings.Contains(body, ev) {
+			t.Fatalf("missing %s in %s", ev, body)
+		}
+	}
+	if !strings.Contains(body, "\"prompt_tokens\":3") || !strings.Contains(body, "\"completion_tokens\":1") {
+		t.Fatalf("usage not mapped: %s", body)
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.AttemptOutcomeSuccess) || log.InputTokens != 3 || log.OutputTokens != 1 {
+		t.Fatalf("log=%+v", log)
+	}
+}
+
+func TestResponsesToChatStreamingE2E(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	upstream := "data: {\"id\":\"chatcmpl-up\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-up\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-up\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-up\",\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3}}\n\n" +
+		"data: [DONE]\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, upstream)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotPath != "/v1/chat/completions" {
+		t.Fatalf("status=%d path=%q body=%s", rec.Code, gotPath, rec.Body.String())
+	}
+	if gotBody["stream"] != true {
+		t.Fatalf("upstream stream flag missing: %#v", gotBody)
+	}
+	body := rec.Body.String()
+	for _, ev := range []string{"event: response.created", "event: response.output_text.delta", "event: response.completed"} {
+		if !strings.Contains(body, ev) {
+			t.Fatalf("missing %s in %s", ev, body)
+		}
+	}
+	if !strings.Contains(body, "\"input_tokens\":2") || !strings.Contains(body, "\"output_tokens\":1") {
+		t.Fatalf("usage not mapped: %s", body)
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.AttemptOutcomeSuccess) || log.InputTokens != 2 || log.OutputTokens != 1 {
+		t.Fatalf("log=%+v", log)
+	}
+}
+
+func TestChatToResponsesStreamingPreCommitFailover(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/p0/") {
+			p0Hits++
+			_, _ = io.WriteString(w, "event: response.created\ndata: {not json}\n\n")
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"model\":\"m1\"}}\n\n"+
+			"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"ok\"}\n\n"+
+			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"output_tokens\":1},\"stop_reason\":\"end_turn\"}}\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true, ResponsesEnabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{
+			{ProviderID: "p0", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+			{ProviderID: "p1", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 1 {
+		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ok") || strings.Contains(rec.Body.String(), "not json") {
+		t.Fatalf("client received unexpected stream: %s", rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v", log.Chain)
+	}
+	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
+		t.Fatalf("pre-commit stats=(%d,%d), want (0,1)", hit, fail)
+	}
+	if p.breakerFor("p0").consecutiveFailures != 0 {
+		t.Fatalf("pre-commit failure penalized breaker: %d", p.breakerFor("p0").consecutiveFailures)
+	}
+}
+
+func TestResponsesToChatStreamingPreCommitFailover(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/p0/") {
+			p0Hits++
+			_, _ = io.WriteString(w, "data: {not json}\n\n")
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl-p1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{
+			{ProviderID: "p0", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
+			{ProviderID: "p1", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 1 {
+		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ok") || strings.Contains(rec.Body.String(), "not json") {
+		t.Fatalf("client received unexpected stream: %s", rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v", log.Chain)
+	}
+	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
+		t.Fatalf("pre-commit stats=(%d,%d), want (0,1)", hit, fail)
+	}
+	if p.breakerFor("p0").consecutiveFailures != 0 {
+		t.Fatalf("pre-commit failure penalized breaker: %d", p.breakerFor("p0").consecutiveFailures)
 	}
 }
