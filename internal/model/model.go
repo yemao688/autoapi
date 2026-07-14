@@ -63,6 +63,57 @@ type ProviderCapability struct {
 	UpdatedAt  int64  `json:"updated_at"`
 }
 
+// Feature is a canonical capability that an inbound request may require.
+type Feature string
+
+const (
+	FeatureTools            Feature = "tools"
+	FeatureVision           Feature = "vision"
+	FeatureReasoning        Feature = "reasoning"
+	FeatureStructuredOutput Feature = "structured_output"
+	FeatureStateful         Feature = "stateful"
+	FeatureCacheControl     Feature = "cache_control"
+	FeatureAudio            Feature = "audio"
+	FeatureDocument         Feature = "document"
+	FeatureStreaming        Feature = "streaming"
+)
+
+// RequestRequirements captures the canonical capabilities required by an
+// inbound request, plus flags that constrain whether conversion is safe.
+type RequestRequirements struct {
+	Features        []Feature `json:"features"`
+	NativeOnly      bool      `json:"native_only"`
+	UnknownSemantic bool      `json:"unknown_semantic"`
+}
+
+func (r *RequestRequirements) Has(f Feature) bool {
+	if r == nil {
+		return false
+	}
+	for _, x := range r.Features {
+		if x == f {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	FeatureCapabilityEnforcementObserve = "observe"
+	FeatureCapabilityEnforcementEnforce = "enforce"
+)
+
+// NormalizeFeatureCapabilityEnforcement coerces empty or unexpected values to
+// the safe default "observe".
+func NormalizeFeatureCapabilityEnforcement(v string) string {
+	switch v {
+	case FeatureCapabilityEnforcementEnforce:
+		return v
+	default:
+		return FeatureCapabilityEnforcementObserve
+	}
+}
+
 type ModelCapability struct {
 	ProviderID string `json:"provider_id"`
 	ModelName  string `json:"model_name"`
@@ -476,9 +527,10 @@ type DataSettings struct {
 }
 
 type AdvancedSettings struct {
-	DebugMode    bool   `json:"debug_mode"`
-	Experimental bool   `json:"experimental"`
-	HTTPProxy    string `json:"http_proxy"` // "system" | "none" | url
+	DebugMode                    bool   `json:"debug_mode"`
+	Experimental                 bool   `json:"experimental"`
+	HTTPProxy                    string `json:"http_proxy"`                     // "system" | "none" | url
+	FeatureCapabilityEnforcement string `json:"feature_capability_enforcement"` // "observe" | "enforce"
 }
 
 // LoggingSettings configures the application diagnostic logger. The fields

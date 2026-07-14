@@ -36,6 +36,229 @@ func TestCapabilitySnapshotManualAndFallbackRules(t *testing.T) {
 	}
 }
 
+func TestFeatureEnabledPrecedenceAndIsolation(t *testing.T) {
+	p := &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true}
+	rows := []model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: true, Source: "manual"},
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureVision), Enabled: true, Source: "manual"},
+	}
+	s := newCapabilitySnapshot(rows, map[string]*model.Provider{"p": p})
+
+	if ok, _ := s.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureTools), false); !ok {
+		t.Fatal("provider explicit true should enable")
+	}
+	if ok, _ := s.featureEnabled("missing", "m", ProtocolOpenAIResponses, string(model.FeatureTools), false); ok {
+		t.Fatal("unknown provider should be false")
+	}
+	if ok, _ := s.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureStreaming), false); !ok {
+		t.Fatal("streaming unknown should default true")
+	}
+	if ok, _ := s.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureReasoning), true); ok {
+		t.Fatal("non-streaming unknown should default false in enforce")
+	}
+	if ok, known := s.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureReasoning), false); !ok || known {
+		t.Fatal("non-streaming unknown should default true in observe")
+	}
+
+	// Model override disables vision for this model.
+	s = s.withModels([]model.ModelCapability{
+		{ProviderID: "p", ModelName: "m", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureVision), Enabled: false, Source: "manual"},
+	})
+	if ok, _ := s.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureVision), false); ok {
+		t.Fatal("model explicit false should override provider true")
+	}
+	if ok, _ := s.featureEnabled("p", "other", ProtocolOpenAIResponses, string(model.FeatureVision), false); !ok {
+		t.Fatal("model override should not leak to other models")
+	}
+
+	// Explicit streaming false is respected.
+	s2 := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureStreaming), Enabled: false, Source: "manual"},
+	}, map[string]*model.Provider{"p": p})
+	if ok, _ := s2.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureStreaming), false); ok {
+		t.Fatal("explicit streaming false should reject")
+	}
+
+	// Protocol isolation: same feature on a different protocol must not leak.
+	if ok, _ := s.featureEnabled("p", "m", ProtocolAnthropicMessages, string(model.FeatureTools), true); ok {
+		t.Fatal("feature must be protocol-isolated")
+	}
+
+	// Legacy rows must not act as explicit feature overrides.
+	s3 := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: true, Source: "legacy"},
+	}, map[string]*model.Provider{"p": p})
+	if ok, known := s3.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureTools), false); !ok || known {
+		t.Fatalf("legacy row must not be explicit override: ok=%v known=%v", ok, known)
+	}
+}
+
+func TestNativeSelectorPrefersNativeBeforeConversionFallback(t *testing.T) {
+	// Native target does NOT support tools; conversion target supports tools.
+	rule := []model.ModelRule{{
+		Name: "r", Enabled: true,
+		Targets: []model.ModelRuleTarget{
+			{ProviderID: "native", Enabled: true},
+			{ProviderID: "convert", Enabled: true},
+		},
+	}}
+	providers := map[string]*model.Provider{
+		"native":  {ID: "native", Enabled: true, MessagesEnabled: true},
+		"convert": {ID: "convert", Enabled: true, ResponsesEnabled: true},
+	}
+	caps := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "convert", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: true, Source: "manual"},
+	}, providers)
+
+	req := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Enforcement: model.FeatureCapabilityEnforcementEnforce, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools}}}
+	cands, err := selectCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps)
+	if err == nil && len(cands) != 0 {
+		t.Fatalf("expected no native candidates, got %d", len(cands))
+	}
+
+	// Fallback conversion should pick convert target.
+	conv, err := selectConversionCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conv) != 1 || conv[0].provider.ID != "convert" || conv[0].convertTo != ProtocolOpenAIResponses {
+		t.Fatalf("unexpected conversion candidates: %+v", conv)
+	}
+}
+
+func TestConversionRejectsUnpreservableFeatures(t *testing.T) {
+	rule := []model.ModelRule{{
+		Name: "r", Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p", Enabled: true}},
+	}}
+	providers := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
+	caps := newCapabilitySnapshot(nil, providers)
+	for _, f := range []model.Feature{model.FeatureVision, model.FeatureReasoning, model.FeatureStructuredOutput, model.FeatureStateful, model.FeatureCacheControl, model.FeatureAudio, model.FeatureDocument} {
+		req := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Requirements: &model.RequestRequirements{Features: []model.Feature{f}}}
+		if _, err := selectConversionCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps); err == nil || !errors.Is(err, errUnsupportedFeature) {
+			t.Fatalf("feature %q should be rejected, got %v", f, err)
+		}
+	}
+	// NativeOnly / UnknownSemantic also rejected.
+	req := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Requirements: &model.RequestRequirements{NativeOnly: true}}
+	if _, err := selectConversionCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps); err == nil || !errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("NativeOnly should be rejected, got %v", err)
+	}
+}
+
+func TestConversionToolsRequireExplicitCapability(t *testing.T) {
+	rule := []model.ModelRule{{
+		Name: "r", Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p", Enabled: true}},
+	}}
+	providers := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
+	caps := newCapabilitySnapshot(nil, providers)
+	req := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools}}}
+	if _, err := selectConversionCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps); err == nil || !errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("tools without explicit capability should be rejected, got %v", err)
+	}
+
+	caps = newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: true, Source: "manual"},
+	}, providers)
+	conv, err := selectConversionCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conv) != 1 {
+		t.Fatalf("expected one conversion candidate, got %d", len(conv))
+	}
+}
+
+func TestFeatureFilteredNotAffectedByOpenCircuit(t *testing.T) {
+	// Single target: breaker open + feature false must still be 503 (unavailable),
+	// not 422, because the open target is not an available candidate.
+	rule := []model.ModelRule{{
+		Name: "r", Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p", Enabled: true}},
+	}}
+	providers := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
+	caps := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
+	}, providers)
+	cb := NewCircuitBreaker()
+	for i := 0; i < failureThreshold+1; i++ {
+		cb.Record(false) // force open
+	}
+	breakers := map[string]*CircuitBreaker{"p": cb}
+	req := &InboundRequest{Model: "r", Protocol: ProtocolOpenAIResponses, Enforcement: model.FeatureCapabilityEnforcementEnforce, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools}}}
+	_, err := selectCandidates(req, rule, breakers, func(id string) (*model.Provider, error) { return providers[id], nil }, caps)
+	if err == nil || errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("expected regular unavailable error, got %v", err)
+	}
+
+	// One open target + one feature-failed available target => 422.
+	rule = []model.ModelRule{{
+		Name: "r", Enabled: true,
+		Targets: []model.ModelRuleTarget{{ProviderID: "p", Enabled: true}, {ProviderID: "p2", Enabled: true}},
+	}}
+	providers["p2"] = &model.Provider{ID: "p2", Enabled: true, ResponsesEnabled: true}
+	req = &InboundRequest{Model: "r", Protocol: ProtocolOpenAIResponses, Enforcement: model.FeatureCapabilityEnforcementEnforce, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools}}}
+	_, err = selectCandidates(req, rule, breakers, func(id string) (*model.Provider, error) { return providers[id], nil }, caps)
+	if err == nil || !errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("expected unsupported feature, got %v", err)
+	}
+}
+
+func TestConversionFeatureFilteringRespectsAvailability(t *testing.T) {
+	// Helper to build a rule with a single target.
+	makeRule := func(pid string) []model.ModelRule {
+		return []model.ModelRule{{
+			Name: "r", Enabled: true,
+			Targets: []model.ModelRuleTarget{{ProviderID: pid, Enabled: true}},
+		}}
+	}
+	reqTools := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools}}}
+
+	// 1) Tools request, only conversion target breaker open -> regular unavailable, not 422.
+	providersOpen := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
+	capsTools := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: true, Source: "manual"},
+	}, providersOpen)
+	cb := NewCircuitBreaker()
+	for i := 0; i < failureThreshold+1; i++ {
+		cb.Record(false)
+	}
+	breakers := map[string]*CircuitBreaker{"p": cb}
+	_, err := selectConversionCandidates(reqTools, makeRule("p"), breakers, func(id string) (*model.Provider, error) { return providersOpen[id], nil }, capsTools)
+	if err == nil || errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("expected regular conversion unavailable, got %v", err)
+	}
+
+	// 2) Tools request, target protocol not supported -> regular unavailable.
+	providersNoProto := map[string]*model.Provider{"p": {ID: "p", Enabled: true, MessagesEnabled: true}}
+	_, err = selectConversionCandidates(reqTools, makeRule("p"), nil, func(id string) (*model.Provider, error) { return providersNoProto[id], nil }, newCapabilitySnapshot(nil, providersNoProto))
+	if err == nil || errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("expected regular conversion unavailable, got %v", err)
+	}
+
+	// 3) Tools request, available target with explicit tools=false -> unsupported feature 422.
+	providersFalse := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
+	capsFalse := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
+	}, providersFalse)
+	_, err = selectConversionCandidates(reqTools, makeRule("p"), nil, func(id string) (*model.Provider, error) { return providersFalse[id], nil }, capsFalse)
+	if err == nil || !errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("expected unsupported feature, got %v", err)
+	}
+
+	// 4) Preservation: vision request -> unsupported feature 422 regardless of capability rows.
+	providersVision := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
+	capsVision := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureVision), Enabled: true, Source: "manual"},
+	}, providersVision)
+	reqVision := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureVision}}}
+	_, err = selectConversionCandidates(reqVision, makeRule("p"), nil, func(id string) (*model.Provider, error) { return providersVision[id], nil }, capsVision)
+	if err == nil || !errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("expected unsupported feature for vision preservation, got %v", err)
+	}
+}
+
 func TestCapabilitySnapshotModelOverridesAndIsolation(t *testing.T) {
 	p := &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: true}
 	s := newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{

@@ -108,20 +108,26 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.Body.Close()
-	respReq, err := validateResponsesRequest(body)
+	respReq, reqs, err := parseAndInspectResponses(body)
 	if err != nil {
 		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = respReq.Model, respReq.Model, respReq.Stream
-	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream, Protocol: ProtocolOpenAIResponses}
+	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream, Protocol: ProtocolOpenAIResponses, Requirements: reqs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		errType := "service_unavailable"
-		if errors.Is(err, errNoMatch) {
+		switch {
+		case errors.Is(err, errNoMatch):
 			errType = "no_matching_rule"
+		case errors.Is(err, errUnsupportedFeature):
+			errType = "unsupported_feature"
+			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
+			logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+			return
 		}
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
@@ -164,20 +170,26 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.Body.Close()
-	msgReq, err := validateMessagesRequest(body)
+	msgReq, reqs, err := parseAndInspectMessages(body)
 	if err != nil {
 		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = msgReq.Model, msgReq.Model, msgReq.Stream
-	inbound := &InboundRequest{Model: msgReq.Model, Header: extractHeaders(r.Header), Task: "messages", TimeHour: time.Now().Hour(), Endpoint: "/v1/messages", Stream: msgReq.Stream, Protocol: ProtocolAnthropicMessages}
+	inbound := &InboundRequest{Model: msgReq.Model, Header: extractHeaders(r.Header), Task: "messages", TimeHour: time.Now().Hour(), Endpoint: "/v1/messages", Stream: msgReq.Stream, Protocol: ProtocolAnthropicMessages, Requirements: reqs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		errType := "service_unavailable"
-		if errors.Is(err, errNoMatch) {
+		switch {
+		case errors.Is(err, errNoMatch):
 			errType = "no_matching_rule"
+		case errors.Is(err, errUnsupportedFeature):
+			errType = "unsupported_feature"
+			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
+			logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+			return
 		}
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
@@ -233,14 +245,31 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
+	gReq, reqs, err := parseAndInspectGemini(body)
+	if err != nil {
+		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
+		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+		return
+	}
+	_ = gReq
+	if stream {
+		reqs.Features = appendFeature(reqs.Features, model.FeatureStreaming)
+	}
+
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = modelName, modelName, stream
-	inbound := &InboundRequest{Model: modelName, Header: extractHeaders(r.Header), Task: "gemini", TimeHour: time.Now().Hour(), Endpoint: r.URL.Path, Stream: stream, Protocol: ProtocolGemini}
+	inbound := &InboundRequest{Model: modelName, Header: extractHeaders(r.Header), Task: "gemini", TimeHour: time.Now().Hour(), Endpoint: r.URL.Path, Stream: stream, Protocol: ProtocolGemini, Requirements: reqs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
 		errType := "service_unavailable"
-		if errors.Is(err, errNoMatch) {
+		switch {
+		case errors.Is(err, errNoMatch):
 			errType = "no_matching_rule"
+		case errors.Is(err, errUnsupportedFeature):
+			errType = "unsupported_feature"
+			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
+			logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+			return
 		}
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
@@ -371,12 +400,11 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.Body.Close()
-
-	var chatReq chatRequest
-	if err := json.Unmarshal(body, &chatReq); err != nil {
-		slog.Warn("proxy: invalid JSON body", "path", r.URL.Path, "err", err)
-		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body")
-		logEntry.StatusCode = http.StatusBadRequest
+	chatReq, reqs, err := parseAndInspectChat(body)
+	if err != nil {
+		slog.Warn("proxy: invalid chat request", "path", r.URL.Path, "err", err)
+		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
+		logEntry.StatusCode = http.StatusUnprocessableEntity
 		logEntry.Error = err.Error()
 		return
 	}
@@ -384,10 +412,6 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		chatReq.Task = "chat"
 	}
 
-	// Pre-populate log fields early so that even if the request is
-	// aborted (client disconnect, 499/0) or fails before the proxy loop
-	// assigns a specific upstream candidate, the log entry still
-	// carries the client-facing model name the user requested.
 	logEntry.Model = chatReq.Model
 	logEntry.RouteLabel = chatReq.Model
 	logEntry.IsStream = chatReq.Stream
@@ -401,6 +425,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Endpoint:        r.URL.Path,
 		Stream:          chatReq.Stream,
 		Protocol:        ProtocolOpenAIChat,
+		Requirements:    reqs,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 
@@ -418,8 +443,15 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		// loudly with 503 + "no_matching_rule" instead of being silently
 		// forwarded to a synthetic default provider.
 		errType := "service_unavailable"
-		if errors.Is(err, errNoMatch) {
+		switch {
+		case errors.Is(err, errNoMatch):
 			errType = "no_matching_rule"
+		case errors.Is(err, errUnsupportedFeature):
+			errType = "unsupported_feature"
+			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
+			logEntry.StatusCode = http.StatusUnprocessableEntity
+			logEntry.Error = err.Error()
+			return
 		}
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable

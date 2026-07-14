@@ -667,6 +667,12 @@ func (p *Proxy) insertPendingLog(log *model.RequestLog) {
 // resolveCandidates selects one or more provider/model candidates using the
 // model-rule matcher, filtering out providers with an open circuit breaker.
 func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
+	settings, err := p.store.GetSettings()
+	if err != nil {
+		return nil, fmt.Errorf("load settings: %w", err)
+	}
+	req.Enforcement = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
+
 	rules := p.loadModelRules()
 	providerIDs := make([]string, 0)
 	seen := make(map[string]bool)
@@ -695,7 +701,6 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 		GetProvidersForIDs([]string) ([]model.Provider, error)
 	})
 	var providerRows []model.Provider
-	var err error
 	if ok {
 		providerRows, err = providerStore.GetProvidersForIDs(providerIDs)
 		if err != nil {
@@ -754,8 +759,17 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	candidates, err := selectCandidates(req, rules, breakers, lookup, capabilities)
 	if err != nil {
+		// Conversion fallback is only defined between Anthropic Messages and
+		// OpenAI Responses. For all other inbound protocols the native error
+		// is authoritative.
+		if req.Protocol != ProtocolAnthropicMessages && req.Protocol != ProtocolOpenAIResponses {
+			return nil, err
+		}
 		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, lookup, capabilities)
 		if conversionErr != nil {
+			if errors.Is(conversionErr, errUnsupportedFeature) {
+				return nil, conversionErr
+			}
 			return nil, fmt.Errorf("%w (no conversion fallback: %v)", err, conversionErr)
 		}
 		candidates = conversionCandidates

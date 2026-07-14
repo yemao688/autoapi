@@ -943,6 +943,9 @@ func TestSettings(t *testing.T) {
 	if settings.General.StartupAction != "show_window" {
 		t.Fatalf("expected default startup action show_window, got %q", settings.General.StartupAction)
 	}
+	if settings.Advanced.FeatureCapabilityEnforcement != model.FeatureCapabilityEnforcementObserve {
+		t.Fatalf("expected default feature enforcement observe, got %q", settings.Advanced.FeatureCapabilityEnforcement)
+	}
 
 	settings.Server.Port = 9090
 	settings.Appearance.Theme = "dark"
@@ -1003,6 +1006,32 @@ func TestSettingsZeroDefaultPortFallsBack(t *testing.T) {
 	settings, err := s.GetSettings()
 	if err != nil || settings.Server.Port != 8344 {
 		t.Fatalf("zero default port fallback: settings=%+v err=%v", settings, err)
+	}
+}
+
+func TestFeatureCapabilityEnforcementNormalization(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES ('advanced', '{"feature_capability_enforcement":"bad"}')`); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := s.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Advanced.FeatureCapabilityEnforcement != model.FeatureCapabilityEnforcementObserve {
+		t.Fatalf("expected invalid value normalized to observe, got %q", settings.Advanced.FeatureCapabilityEnforcement)
+	}
+
+	settings.Advanced.FeatureCapabilityEnforcement = model.FeatureCapabilityEnforcementEnforce
+	if err := s.SaveSettings(*settings); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = s.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Advanced.FeatureCapabilityEnforcement != model.FeatureCapabilityEnforcementEnforce {
+		t.Fatalf("expected enforce roundtrip, got %q", settings.Advanced.FeatureCapabilityEnforcement)
 	}
 }
 

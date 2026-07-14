@@ -186,6 +186,16 @@ type mockService struct{}
 
 func (m *mockService) ResolveProviderKey(providerID string) (string, error) { return "secret", nil }
 
+type countingKeyService struct {
+	inner           upstreamKeyProvider
+	keyResolveCalls int
+}
+
+func (c *countingKeyService) ResolveProviderKey(providerID string) (string, error) {
+	c.keyResolveCalls++
+	return c.inner.ResolveProviderKey(providerID)
+}
+
 func TestCurrentSettingsDefaultPortFallbacks(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -603,6 +613,12 @@ func TestHandlerPreflightMetricsAreRequestOnly(t *testing.T) {
 	}{
 		{name: "invalid json", body: `{`, model: "", want: http.StatusBadRequest},
 		{name: "no matching rule", body: `{"model":"missing","messages":[]}`, model: "missing", want: http.StatusServiceUnavailable},
+	}
+	// Phase 7.3: malformed request bodies now return 422.
+	for i := range cases {
+		if cases[i].name == "invalid json" {
+			cases[i].want = http.StatusUnprocessableEntity
+		}
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4624,7 +4640,7 @@ func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 		}
-		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"resp-model\" are disabled or have open circuits")
+		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider for model \"resp-model\"")
 	})
 }
 
@@ -4645,6 +4661,142 @@ func TestChar_MessagesRouteRegistered(t *testing.T) {
 		t.Fatalf("expected request to reach messages handler and fail with 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
+}
+
+func TestFeatureMismatchReturns422UnsupportedFeature(t *testing.T) {
+	// Model rule exists, but the only target lacks vision capability and
+	// conversion cannot preserve vision either.
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true, MessagesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) {
+		return &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}}, nil
+	})
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"vision-model","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"x","media_type":"image/png"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 unsupported_feature, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "unsupported_feature", "vision")
+}
+
+func TestNoRuleStillReturns503(t *testing.T) {
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}, providers: map[string]*model.Provider{}, rules: nil}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"missing","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "no_matching_rule", "no matching model rule: missing")
+}
+
+func TestChatFeatureExplicitFalseE2E422(t *testing.T) {
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{
+			{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: string(model.FeatureVision), Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"vision-model","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "unsupported_feature", "vision")
+}
+
+func TestGeminiFeatureExplicitFalseE2E422(t *testing.T) {
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true, GeminiEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "gemini-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		capabilities: []model.ProviderCapability{
+			{ProviderID: "p", Protocol: string(ProtocolGemini), Feature: string(model.FeatureVision), Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1beta/models/gemini-model:generateContent", strings.NewReader(`{"contents":[{"parts":[{"inlineData":{"mimeType":"image/png","data":"x"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "unsupported_feature", "vision")
+}
+
+func TestNonFeatureUnavailableStillReturns503(t *testing.T) {
+	// Provider disabled is not a feature failure; should remain 503.
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: false, MessagesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConversionRejectsBeforeUpstreamAttempt(t *testing.T) {
+	// A vision Messages request with only a Responses-capable provider should
+	// fail at the conversion selector before any upstream HTTP/key attempt.
+	var upstreamHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "x", "content": []map[string]string{{"type": "text", "text": "ok"}}, "stop_reason": "end_turn", "usage": map[string]int{"input_tokens": 1, "output_tokens": 1}})
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	svc := &countingKeyService{inner: &mockService{}}
+	p := New(store, svc, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"x","media_type":"image/png"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.keyResolveCalls != 0 {
+		t.Fatalf("expected no key resolve calls, got %d", svc.keyResolveCalls)
+	}
+	if upstreamHits != 0 {
+		t.Fatalf("expected no upstream hits, got %d", upstreamHits)
+	}
 }
 
 func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
@@ -4750,7 +4902,7 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 		}
-		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"claude\" are disabled or have open circuits")
+		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider for model \"claude\"")
 	})
 }
 
@@ -4844,7 +4996,7 @@ func TestChar_GeminiE2EAndPreflightReject(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 		}
-		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider: all targets of model \"gemini-pro\" are disabled or have open circuits")
+		assertErrorEnvelopeContains(t, rec.Body.Bytes(), "service_unavailable", "no available provider for model \"gemini-pro\"")
 	})
 }
 

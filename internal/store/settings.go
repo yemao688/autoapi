@@ -53,6 +53,7 @@ func (s *Store) GetSettings() (*model.Settings, error) {
 		settings.Server.Port = s.defaultPort
 	}
 	settings.Data.StoragePath = s.dsnPath
+	settings.Advanced.FeatureCapabilityEnforcement = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
 
 	return &settings, nil
 }
@@ -143,9 +144,10 @@ func (s *Store) defaultSettings() model.Settings {
 			StoragePath:      "", // filled at runtime
 		},
 		Advanced: model.AdvancedSettings{
-			DebugMode:    false,
-			Experimental: false,
-			HTTPProxy:    "system",
+			DebugMode:                    false,
+			Experimental:                 false,
+			HTTPProxy:                    "system",
+			FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementObserve,
 		},
 		Logging: model.LoggingSettings{
 			Enabled:    true,

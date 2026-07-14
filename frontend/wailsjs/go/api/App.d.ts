@@ -118,6 +118,8 @@ export function SetProviderCapability(arg1:string,arg2:string,arg3:boolean):Prom
 
 export function SetProviderEnabled(arg1:string,arg2:boolean):Promise<void>;
 
+export function SetProviderFeatureCapability(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
+
 export function ShowApp():Promise<void>;
 
 export function ShowWindow():Promise<void>;

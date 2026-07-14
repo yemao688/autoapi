@@ -230,6 +230,10 @@ export function SetProviderEnabled(arg1, arg2) {
   return window['go']['api']['App']['SetProviderEnabled'](arg1, arg2);
 }
 
+export function SetProviderFeatureCapability(arg1, arg2, arg3, arg4) {
+  return window['go']['api']['App']['SetProviderFeatureCapability'](arg1, arg2, arg3, arg4);
+}
+
 export function ShowApp() {
   return window['go']['api']['App']['ShowApp']();
 }

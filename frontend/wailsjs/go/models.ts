@@ -51,6 +51,7 @@ export namespace model {
 	    debug_mode: boolean;
 	    experimental: boolean;
 	    http_proxy: string;
+	    feature_capability_enforcement: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedSettings(source);
@@ -61,6 +62,7 @@ export namespace model {
 	        this.debug_mode = source["debug_mode"];
 	        this.experimental = source["experimental"];
 	        this.http_proxy = source["http_proxy"];
+	        this.feature_capability_enforcement = source["feature_capability_enforcement"];
 	    }
 	}
 	export class ApiKey {

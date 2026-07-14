@@ -710,6 +710,20 @@ func (a *App) SetProviderCapability(providerID, protocol string, enabled bool) e
 	return a.deps.Store.SetProviderCapability(providerID, protocol, "native", enabled)
 }
 
+func (a *App) SetProviderFeatureCapability(providerID, protocol, feature string, enabled bool) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	providerID, protocol, feature = strings.TrimSpace(providerID), strings.TrimSpace(protocol), strings.TrimSpace(feature)
+	if providerID == "" || protocol == "" || feature == "" {
+		return fmt.Errorf("provider, protocol and feature are required")
+	}
+	if feature == "native" {
+		return fmt.Errorf("use SetProviderCapability to configure the native protocol capability")
+	}
+	return a.deps.Store.SetProviderCapability(providerID, protocol, feature, enabled)
+}
+
 func (a *App) TestProvider(id string) (*model.ProviderTestResult, error) {
 	if a.deps.Service == nil {
 		return nil, errNotImpl

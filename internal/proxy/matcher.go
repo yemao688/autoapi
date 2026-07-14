@@ -10,6 +10,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -21,6 +22,11 @@ import (
 // model does not correspond to any enabled model rule. The proxy handler
 // converts this into a 503 with error type "no_matching_rule".
 var errNoMatch = errors.New("no matching model rule")
+
+// errUnsupportedFeature is returned when the request requires a feature that
+// no candidate provider/model can satisfy (or that is unsafe to convert).
+// Handlers convert this into a 422 with error type "unsupported_feature".
+var errUnsupportedFeature = errors.New("unsupported feature")
 
 // defaultFirstByteTimeout is the budget for receiving the first response
 // byte from an upstream provider when the rule's first_byte_timeout_seconds
@@ -43,6 +49,8 @@ type InboundRequest struct {
 	Endpoint        string
 	Stream          bool
 	Protocol        Protocol
+	Requirements    *model.RequestRequirements
+	Enforcement     string
 }
 
 // candidate is one possible provider/model the proxy can forward a request to.
@@ -92,8 +100,25 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		return nil, fmt.Errorf("no conversion fallback for protocol %q", req.Protocol)
 	}
 
+	// Messages<->Responses conversion is restricted to text/system/tools/tool
+	// results and the supported streaming edge. Any other feature or unknown
+	// semantic must be rejected before we spend time on provider lookup.
+	if req.Requirements != nil {
+		for _, f := range req.Requirements.Features {
+			switch f {
+			case model.FeatureTools, model.FeatureStreaming:
+				continue
+			}
+			return nil, fmt.Errorf("%w: conversion cannot preserve feature %q", errUnsupportedFeature, f)
+		}
+		if req.Requirements.NativeOnly || req.Requirements.UnknownSemantic {
+			return nil, fmt.Errorf("%w: request contains native-only semantics", errUnsupportedFeature)
+		}
+	}
+
 	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
 	var out []candidate
+	var featureFiltered bool
 	for _, t := range rule.Targets {
 		if !t.Enabled {
 			continue
@@ -115,6 +140,26 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		if !capabilities.supportsModel(p.ID, modelName, to) {
 			continue
 		}
+		// A conversion candidate is enabled, resolvable, provider-enabled,
+		// breaker-closed and supports the target protocol. If it is rejected
+		// only because of an unpreserved feature capability, remember that.
+		if req.Requirements != nil {
+			skip := false
+			for _, f := range req.Requirements.Features {
+				supported, _ := capabilities.featureEnabled(p.ID, modelName, to, string(f), true)
+				if !supported {
+					skip = true
+					featureFiltered = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+		}
+		if req.Stream && !supportsStreamConversion(req.Protocol, to) {
+			return nil, fmt.Errorf("%w: streaming not supported for conversion %s->%s", errUnsupportedFeature, req.Protocol, to)
+		}
 		out = append(out, candidate{
 			provider:                   p,
 			modelName:                  modelName,
@@ -132,6 +177,9 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		})
 	}
 	if len(out) == 0 {
+		if featureFiltered {
+			return nil, fmt.Errorf("%w: no conversion provider satisfies required features %v for model %q", errUnsupportedFeature, req.Requirements.Features, req.Model)
+		}
 		return nil, fmt.Errorf("no available conversion provider for model %q", req.Model)
 	}
 	return out, nil
@@ -184,6 +232,7 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 	}
 
 	var out []candidate
+	var featureFiltered bool
 	// Resolve the rule's first-byte budget ONCE; every candidate in
 	// the same rule shares the same budget.
 	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
@@ -213,8 +262,35 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		if !capabilities.supportsModel(p.ID, modelName, protocol) {
 			continue
 		}
+		// Circuit breaker must be checked before feature filtering: an open
+		// target is not "available" and must not turn a 503 into a 422.
 		if isOpen(t.ProviderID, breakers) {
 			continue
+		}
+		// A target that reaches this point is enabled, resolvable, supports
+		// the target protocol and has a closed breaker. If it is rejected
+		// only because of a requirements feature, we remember that so the
+		// caller can return 422 instead of a generic 503.
+		if req.Requirements != nil {
+			skip := false
+			for _, f := range req.Requirements.Features {
+				enforce := req.Enforcement == model.FeatureCapabilityEnforcementEnforce
+				supported, known := capabilities.featureEnabled(p.ID, modelName, protocol, string(f), enforce)
+				// Observe-mode diagnostics: log when an unknown feature is
+				// allowed through so operators can audit implicit capability.
+				if !enforce && !known && supported {
+					slog.Debug("proxy: native feature implicitly allowed",
+						"provider", p.ID, "model", modelName, "protocol", protocol, "feature", f, "enforcement", req.Enforcement)
+				}
+				if !supported {
+					skip = true
+					featureFiltered = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
 		}
 		out = append(out, candidate{
 			provider:                   p,
@@ -233,11 +309,10 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 	}
 
 	if len(out) == 0 {
-		// The rule matched, but every target is disabled or its circuit is
-		// open. There is no longer a default fallback to bridge this gap, so
-		// the caller must surface the failure rather than silently forward
-		// to a wrong target.
-		return nil, fmt.Errorf("no available provider: all targets of model %q are disabled or have open circuits", req.Model)
+		if featureFiltered {
+			return nil, fmt.Errorf("%w: no native provider satisfies required features %v for model %q", errUnsupportedFeature, req.Requirements.Features, req.Model)
+		}
+		return nil, fmt.Errorf("no available provider for model %q", req.Model)
 	}
 	return out, nil
 }

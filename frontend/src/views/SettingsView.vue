@@ -116,6 +116,7 @@ function defaultSettings(): model.Settings {
       debug_mode: false,
       experimental: false,
       http_proxy: 'system',
+      feature_capability_enforcement: 'observe',
     },
     logging: {
       enabled: true,
