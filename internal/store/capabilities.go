@@ -3,15 +3,16 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"autoapi/internal/model"
 )
 
 func (s *Store) ListProviderCapabilities(providerID string) ([]model.ProviderCapability, error) {
-	query := `SELECT provider_id, protocol, feature, enabled, source, updated_at FROM provider_capabilities`
+	query := `SELECT provider_id, protocol, feature, enabled, source, updated_at FROM provider_capabilities WHERE source != 'legacy'`
 	args := []any{}
 	if providerID != "" {
-		query += ` WHERE provider_id = ?`
+		query += ` AND provider_id = ?`
 		args = append(args, providerID)
 	}
 	query += ` ORDER BY provider_id ASC, protocol ASC, feature ASC`
@@ -33,6 +34,42 @@ func (s *Store) ListProviderCapabilities(providerID string) ([]model.ProviderCap
 	return out, rows.Err()
 }
 
+// GetProviderCapabilitiesForProviders returns all capability rows for the
+// supplied providers in one query. An empty list returns an empty snapshot.
+func (s *Store) GetProviderCapabilitiesForProviders(providerIDs []string) ([]model.ProviderCapability, error) {
+	if len(providerIDs) == 0 {
+		return []model.ProviderCapability{}, nil
+	}
+	placeholders := make([]string, len(providerIDs))
+	args := make([]any, len(providerIDs))
+	for i, id := range providerIDs {
+		placeholders[i], args[i] = "?", id
+	}
+	return s.listCapabilities(` WHERE provider_id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+}
+
+func (s *Store) listCapabilities(suffix string, args ...any) ([]model.ProviderCapability, error) {
+	if suffix == "" {
+		suffix = ` WHERE source != 'legacy'`
+	} else {
+		suffix += ` AND source != 'legacy'`
+	}
+	rows, err := s.db.Query(`SELECT provider_id, protocol, feature, enabled, source, updated_at FROM provider_capabilities`+suffix+` ORDER BY provider_id, protocol, feature`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list provider capabilities: %w", err)
+	}
+	defer rows.Close()
+	var out []model.ProviderCapability
+	for rows.Next() {
+		var c model.ProviderCapability
+		if err := rows.Scan(&c.ProviderID, &c.Protocol, &c.Feature, &c.Enabled, &c.Source, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SetProviderCapability(providerID, protocol, feature string, enabled bool) error {
 	if feature == "" {
 		feature = "native"
@@ -47,8 +84,27 @@ func (s *Store) SetProviderCapability(providerID, protocol, feature string, enab
 		if err != nil {
 			return fmt.Errorf("store: set provider capability: %w", err)
 		}
+		if feature == "native" {
+			if column := legacyCapabilityColumn(protocol); column != "" {
+				if _, err := tx.Exec(`UPDATE providers SET `+column+`=? WHERE id=?`, boolInt(enabled), providerID); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	})
+}
+
+func legacyCapabilityColumn(protocol string) string {
+	switch protocol {
+	case "openai_responses":
+		return "responses_enabled"
+	case "anthropic_messages":
+		return "messages_enabled"
+	case "gemini":
+		return "gemini_enabled"
+	}
+	return ""
 }
 
 func (s *Store) GetProviderCapabilities(providerID string) ([]model.ProviderCapability, error) {
@@ -57,7 +113,7 @@ func (s *Store) GetProviderCapabilities(providerID string) ([]model.ProviderCapa
 
 func (s *Store) ProviderSupportsProtocol(providerID string, protocol string) (bool, error) {
 	var enabled bool
-	err := s.db.QueryRow(`SELECT enabled FROM provider_capabilities WHERE provider_id = ? AND protocol = ? AND feature = 'native'`, providerID, protocol).Scan(&enabled)
+	err := s.db.QueryRow(`SELECT enabled FROM provider_capabilities WHERE provider_id = ? AND protocol = ? AND feature = 'native' AND source != 'legacy'`, providerID, protocol).Scan(&enabled)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

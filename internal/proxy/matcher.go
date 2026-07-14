@@ -70,7 +70,11 @@ type candidate struct {
 	convertTo                  Protocol
 }
 
-func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
+func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error), snapshots ...capabilitySnapshot) ([]candidate, error) {
+	capabilities := capabilitySnapshot(nil)
+	if len(snapshots) > 0 {
+		capabilities = snapshots[0]
+	}
 	rule, matched := findModelRule(req, rules)
 	if !matched {
 		return nil, fmt.Errorf("%w: %s", errNoMatch, req.Model)
@@ -100,10 +104,13 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 		if !p.Enabled || isOpen(t.ProviderID, breakers) {
 			continue
 		}
-		if to == ProtocolOpenAIResponses && !p.ResponsesEnabled {
-			continue
+		if capabilities == nil {
+			capabilities = make(capabilitySnapshot)
 		}
-		if to == ProtocolAnthropicMessages && !p.MessagesEnabled {
+		if _, exists := capabilities[p.ID]; !exists {
+			capabilities[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})[p.ID]
+		}
+		if capabilities != nil && !capabilities.supports(p.ID, to) {
 			continue
 		}
 		out = append(out, candidate{
@@ -139,7 +146,24 @@ func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, br
 // so the input order is irrelevant. The getProvider closure resolves
 // provider IDs to full provider records. Disabled targets are skipped
 // without disturbing the relative tier ordering of the survivors.
-func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error)) ([]candidate, error) {
+func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error), snapshots ...capabilitySnapshot) ([]candidate, error) {
+	capabilities := capabilitySnapshot(nil)
+	if len(snapshots) > 0 {
+		capabilities = snapshots[0]
+	}
+	protocol := req.Protocol
+	if protocol == ProtocolUnknown {
+		switch req.Task {
+		case "responses":
+			protocol = ProtocolOpenAIResponses
+		case "messages":
+			protocol = ProtocolAnthropicMessages
+		case "gemini":
+			protocol = ProtocolGemini
+		default:
+			protocol = ProtocolOpenAIChat
+		}
+	}
 	rule, matched := findModelRule(req, rules)
 	if !matched {
 		// Include the model name in the error so the 503 body is
@@ -173,13 +197,13 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		if !p.Enabled {
 			continue
 		}
-		if req.Task == "responses" && !p.ResponsesEnabled {
-			continue
+		if capabilities == nil {
+			capabilities = make(capabilitySnapshot)
 		}
-		if req.Task == "messages" && !p.MessagesEnabled {
-			continue
+		if _, exists := capabilities[p.ID]; !exists {
+			capabilities[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})[p.ID]
 		}
-		if req.Task == "gemini" && !p.GeminiEnabled {
+		if !capabilities.supports(p.ID, protocol) {
 			continue
 		}
 		if isOpen(t.ProviderID, breakers) {

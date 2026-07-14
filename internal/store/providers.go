@@ -105,7 +105,10 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 			        ?, ?)`,
 			p.ID, p.Name, p.BaseURL, p.Status,
 			boolInt(p.IsCustom), boolInt(p.ResponsesEnabled), boolInt(p.MessagesEnabled), boolInt(p.GeminiEnabled), p.CreatedAt, p.UpdatedAt)
-		return err
+		if err != nil {
+			return err
+		}
+		return syncLegacyCapabilities(tx, p.ID, p.ResponsesEnabled, p.MessagesEnabled, p.GeminiEnabled, now, true)
 	}); err != nil {
 		return nil, fmt.Errorf("store: create provider: %w", err)
 	}
@@ -131,12 +134,30 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 		if n == 0 {
 			return fmt.Errorf("store: update provider %q: %w", id, ErrNotFound)
 		}
-		return nil
+		return syncLegacyCapabilities(tx, id, in.ResponsesEnabled, in.MessagesEnabled, in.GeminiEnabled, now, false)
 	}); err != nil {
 		return nil, err
 	}
 	slog.Info("store: provider updated", "id", id, "name", in.Name)
 	return s.GetProvider(id)
+}
+
+func syncLegacyCapabilities(tx *sql.Tx, providerID string, responses, messages, gemini bool, now int64, onlyEnabled bool) error {
+	values := []struct {
+		protocol string
+		enabled  bool
+	}{
+		{"openai_responses", responses}, {"anthropic_messages", messages}, {"gemini", gemini},
+	}
+	for _, v := range values {
+		if onlyEnabled && !v.enabled {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO provider_capabilities (provider_id, protocol, feature, enabled, source, updated_at) VALUES (?, ?, 'native', ?, 'legacy', ?) ON CONFLICT(provider_id, protocol, feature) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at WHERE provider_capabilities.source != 'manual'`, providerID, v.protocol, boolInt(v.enabled), now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteProvider removes a provider by ID (models cascade).

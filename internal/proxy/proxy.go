@@ -668,6 +668,36 @@ func (p *Proxy) insertPendingLog(log *model.RequestLog) {
 // model-rule matcher, filtering out providers with an open circuit breaker.
 func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	rules := p.loadModelRules()
+	providerIDs := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, r := range rules {
+		if r.Name == req.Model {
+			for _, t := range r.Targets {
+				if t.Enabled && !seen[t.ProviderID] {
+					seen[t.ProviderID] = true
+					providerIDs = append(providerIDs, t.ProviderID)
+				}
+			}
+		}
+	}
+	capStore, ok := p.store.(interface {
+		GetProviderCapabilitiesForProviders([]string) ([]model.ProviderCapability, error)
+	})
+	var rows []model.ProviderCapability
+	var capErr error
+	if ok {
+		rows, capErr = capStore.GetProviderCapabilitiesForProviders(providerIDs)
+	}
+	if capErr != nil {
+		return nil, capErr
+	}
+	providers := make(map[string]*model.Provider)
+	for _, id := range providerIDs {
+		if provider, e := p.store.GetProvider(id); e == nil {
+			providers[id] = provider
+		}
+	}
+	capabilities := newCapabilitySnapshot(rows, providers)
 
 	// Snapshot the breaker map to avoid racing with breakerFor writes.
 	p.breakersMu.RLock()
@@ -677,9 +707,9 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	p.breakersMu.RUnlock()
 
-	candidates, err := selectCandidates(req, rules, breakers, p.store.GetProvider)
+	candidates, err := selectCandidates(req, rules, breakers, p.store.GetProvider, capabilities)
 	if err != nil {
-		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, p.store.GetProvider)
+		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, p.store.GetProvider, capabilities)
 		if conversionErr != nil {
 			return nil, fmt.Errorf("%w (no conversion fallback: %v)", err, conversionErr)
 		}
