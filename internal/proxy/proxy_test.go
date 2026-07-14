@@ -771,7 +771,7 @@ func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
 	}
 }
 
-func TestProtocolConversionStreamingRejectedBeforeUpstream(t *testing.T) {
+func TestProtocolConversionStreamingReachesResponsesUpstream(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -791,11 +791,8 @@ func TestProtocolConversionStreamingRejectedBeforeUpstream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnprocessableEntity || hits != 0 {
+	if rec.Code != http.StatusServiceUnavailable || hits != 1 {
 		t.Fatalf("status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"type":"unsupported_feature"`) || !strings.Contains(rec.Body.String(), "Streaming protocol conversion is not yet supported") {
-		t.Fatalf("unexpected error body: %s", rec.Body.String())
 	}
 }
 

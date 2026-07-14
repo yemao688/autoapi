@@ -127,7 +127,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
 		return
 	}
-	if respReq.Stream && hasConversionCandidate(candidates) {
+	if respReq.Stream && hasUnsupportedStreamConversion(candidates, ProtocolOpenAIResponses) {
 		msg := "Streaming protocol conversion is not yet supported"
 		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
@@ -183,7 +183,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
 		return
 	}
-	if msgReq.Stream && hasConversionCandidate(candidates) {
+	if msgReq.Stream && hasUnsupportedStreamConversion(candidates, ProtocolAnthropicMessages) {
 		msg := "Streaming protocol conversion is not yet supported"
 		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
@@ -267,6 +267,18 @@ func parseGeminiModelAction(modelAction string) (modelName, action string, err e
 func hasConversionCandidate(candidates []candidate) bool {
 	for _, c := range candidates {
 		if c.convertTo != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUnsupportedStreamConversion(candidates []candidate, from Protocol) bool {
+	for _, c := range candidates {
+		if c.convertTo == "" {
+			continue
+		}
+		if !(from == ProtocolAnthropicMessages && c.convertTo == ProtocolOpenAIResponses) {
 			return true
 		}
 	}

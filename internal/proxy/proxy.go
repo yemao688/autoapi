@@ -1861,6 +1861,7 @@ outer:
 func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, prep AttemptPreparation, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
 	order = attemptOrder
 	emitted := false
+	committed := false
 	defer func() {
 		if emitted {
 			return
@@ -2175,11 +2176,6 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			ww.Header().Add(k, v)
 		}
 	}
-	ww.WriteHeader(upstreamStatus)
-	if flusher != nil {
-		flusher.Flush()
-	}
-
 	// TTFT is captured inline on the first body Read that returns
 	// n>0. This is the single point of success: breaker Record(true),
 	// hit counter, provider health all fire here. Body reads are
@@ -2194,9 +2190,29 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	var streamErr error
 	var writeErr error
 	firstByteTime = time.Since(attemptStart)
-	usageAcc.Feed(initial)
-	if _, writeErr = ww.Write(initial); writeErr == nil && flusher != nil {
-		flusher.Flush()
+	writeConverted := func(input []byte) error {
+		out := input
+		var err error
+		if prep.ConvertStream != nil {
+			out, err = prep.ConvertStream.Write(input)
+			if err != nil {
+				return err
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		if !committed {
+			ww.WriteHeader(upstreamStatus)
+			committed = true
+		}
+		usageAcc.Feed(out)
+		if _, err = ww.Write(out); err == nil && flusher != nil {
+			flusher.Flush()
+		}
+		return err
+	}
+	if writeErr = writeConverted(initial); writeErr != nil { /* handled below */
 	}
 	if writeErr == nil && initialErr != nil && initialErr != io.EOF {
 		streamErr = initialErr
@@ -2207,13 +2223,9 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			usageAcc.Feed(buf[:n])
-			if _, werr := ww.Write(buf[:n]); werr != nil {
+			if werr := writeConverted(buf[:n]); werr != nil {
 				writeErr = werr
 				break
-			}
-			if flusher != nil {
-				flusher.Flush()
 			}
 		}
 		if readErr == io.EOF {
@@ -2223,6 +2235,26 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			streamErr = readErr
 			break
 		}
+	}
+	if streamErr == nil && writeErr == nil && prep.ConvertStream != nil {
+		out, cerr := prep.ConvertStream.Close()
+		if cerr != nil {
+			streamErr = cerr
+		} else if len(out) > 0 {
+			if !committed {
+				ww.WriteHeader(upstreamStatus)
+				committed = true
+			}
+			usageAcc.Feed(out)
+			if _, writeErr = ww.Write(out); writeErr == nil && flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}
+	if !committed {
+		// A converter may buffer an incomplete event. Since no client
+		// bytes were committed, the caller may safely fail over.
+		streamErr = io.ErrUnexpectedEOF
 	}
 
 	// End-of-stream handling.
