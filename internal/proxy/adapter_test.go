@@ -95,6 +95,40 @@ func TestResponsesToChatAdapterSetsStreamConverter(t *testing.T) {
 	}
 }
 
+func TestConversionEdgeRegistryMatchesAdapters(t *testing.T) {
+	bodyFor := func(protocol Protocol) []byte {
+		switch protocol {
+		case ProtocolOpenAIChat:
+			return []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+		case ProtocolOpenAIResponses:
+			return []byte(`{"model":"m","input":"hi"}`)
+		case ProtocolAnthropicMessages:
+			return []byte(`{"model":"m","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+		default:
+			t.Fatalf("no minimal request body for protocol %q", protocol)
+			return nil
+		}
+	}
+
+	for _, edge := range conversionEdges {
+		t.Run(string(edge.From)+"_to_"+string(edge.To), func(t *testing.T) {
+			prep, err := (conversionAdapter{from: edge.From, to: edge.To}).PrepareAttempt(bodyFor(edge.From), candidate{
+				modelName: "m",
+				protocol:  edge.From,
+			})
+			if err != nil {
+				t.Fatalf("PrepareAttempt: %v", err)
+			}
+			if prep.Path != edge.UpstreamPath {
+				t.Fatalf("path=%q, want %q", prep.Path, edge.UpstreamPath)
+			}
+			if edge.SupportsStream && prep.NewStreamConverter == nil {
+				t.Fatal("stream-capable edge has no stream converter")
+			}
+		})
+	}
+}
+
 func TestNativeAdapterPrepareAttemptAnthropicMessagesSuppressesBearer(t *testing.T) {
 	prep, err := (nativeAdapter{}).PrepareAttempt([]byte(`{"model":"requested","messages":[]}`), candidate{
 		modelName:    "claude-upstream",

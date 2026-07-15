@@ -75,6 +75,20 @@ const editingModel = ref<model.Model | null>(null)
 const modelEditName = ref('')
 const modelEditPrice = ref('0.1')
 const modelEditSaving = ref(false)
+const modelCapabilitiesLoading = ref(false)
+const modelCapabilitiesError = ref('')
+const modelCapabilityStates = ref<Record<string, 'inherit' | 'native' | 'unsupported'>>({})
+const modelCapabilityBaseline = ref<Record<string, 'inherit' | 'native' | 'unsupported'>>({})
+
+const nativeProtocols = [
+  { key: 'openai_chat', labelKey: 'providers.modal.openaiChatApi' },
+  { key: 'openai_responses', labelKey: 'providers.modal.responsesApi' },
+  { key: 'anthropic_messages', labelKey: 'providers.modal.messagesApi' },
+  { key: 'gemini', labelKey: 'providers.modal.geminiApi' },
+] as const
+
+type NativeProtocol = typeof nativeProtocols[number]['key']
+type ModelCapabilityState = 'inherit' | 'native' | 'unsupported'
 
 const form = ref<model.ProviderInput>({
   name: '',
@@ -354,7 +368,12 @@ function startEditModel(m: model.Model) {
   editingModel.value = m
   modelEditName.value = m.name
   modelEditPrice.value = Number.isFinite(m.request_price) ? String(m.request_price) : '0.1'
+  const defaults = modelCapabilityDefaults()
+  modelCapabilityStates.value = { ...defaults }
+  modelCapabilityBaseline.value = { ...defaults }
+  modelCapabilitiesError.value = ''
   modelEditOpen.value = true
+  void loadModelCapabilities(m.name)
 }
 
 function closeModelEdit() {
@@ -362,6 +381,59 @@ function closeModelEdit() {
   editingModel.value = null
   modelEditName.value = ''
   modelEditPrice.value = '0.1'
+  modelCapabilitiesLoading.value = false
+  modelCapabilitiesError.value = ''
+  modelCapabilityStates.value = {}
+  modelCapabilityBaseline.value = {}
+}
+
+function modelCapabilityDefaults(): Record<NativeProtocol, ModelCapabilityState> {
+  return {
+    openai_chat: 'inherit',
+    openai_responses: 'inherit',
+    anthropic_messages: 'inherit',
+    gemini: 'inherit',
+  }
+}
+
+function inheritedCapabilityEnabled(protocol: NativeProtocol): boolean {
+  if (protocol === 'openai_chat') return true
+  if (protocol === 'openai_responses') return form.value.responses_enabled
+  if (protocol === 'anthropic_messages') return form.value.messages_enabled
+  return form.value.gemini_enabled
+}
+
+function inheritedCapabilityLabel(protocol: NativeProtocol): string {
+  return inheritedCapabilityEnabled(protocol)
+    ? t('providers.modal.inheritEnabled')
+    : t('providers.modal.inheritDisabled')
+}
+
+async function loadModelCapabilities(modelName: string) {
+  if (!editingId.value) return
+  const providerId = editingId.value
+  const modelId = editingModel.value?.id
+  modelCapabilitiesLoading.value = true
+  modelCapabilitiesError.value = ''
+  try {
+    const capabilities = await api.listModelCapabilities(providerId, modelName)
+    if (!modelEditOpen.value || editingId.value !== providerId || editingModel.value?.id !== modelId) return
+    const states = modelCapabilityDefaults()
+    for (const capability of capabilities) {
+      if (capability.feature !== 'native' || !(capability.protocol in states)) continue
+      states[capability.protocol as NativeProtocol] = capability.enabled ? 'native' : 'unsupported'
+    }
+    modelCapabilityStates.value = { ...states }
+    modelCapabilityBaseline.value = { ...states }
+  } catch (e: any) {
+    if (!modelEditOpen.value || editingId.value !== providerId || editingModel.value?.id !== modelId) return
+    modelCapabilitiesError.value = t('providers.modal.capabilitiesLoadFailed', { error: e?.message || String(e) })
+    toast.push(modelCapabilitiesError.value, 'error')
+  } finally {
+    if (editingId.value === providerId && editingModel.value?.id === modelId) {
+      modelCapabilitiesLoading.value = false
+    }
+  }
 }
 
 const modelEditPriceNumber = computed(() => Number(modelEditPrice.value))
@@ -385,13 +457,35 @@ async function saveModelEdit() {
   }
   mutationBusy.value = true
   modelEditSaving.value = true
+  let capabilitySaveStarted = false
   try {
     await api.updateProviderModel({ provider_id: editingId.value, old_name: oldName, name: newName, request_price: modelEditPriceNumber.value })
+    // Keep the renamed model in local state if a later capability write fails.
+    editingModel.value.name = newName
+    const row = models.value.find((m) => m.id === editingModel.value?.id)
+    if (row) row.name = newName
+    for (const protocol of nativeProtocols) {
+      const next = modelCapabilityStates.value[protocol.key]
+      const previous = modelCapabilityBaseline.value[protocol.key]
+      if (!next || next === previous) continue
+      capabilitySaveStarted = true
+      if (next === 'inherit') {
+        await api.deleteModelCapability(editingId.value, newName, protocol.key, 'native')
+      } else {
+        await api.setModelCapability(editingId.value, newName, protocol.key, 'native', next === 'native')
+      }
+      modelCapabilityBaseline.value = { ...modelCapabilityBaseline.value, [protocol.key]: next }
+    }
     toast.push(t('providers.modal.modelUpdated', { name: newName }), 'success')
     closeModelEdit()
     await refreshModels()
   } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
+    const error = e?.message || String(e)
+    const message = capabilitySaveStarted
+      ? t('providers.modal.capabilitiesSaveFailed', { error })
+      : t('providers.modal.modelSaveFailed', { error })
+    modelCapabilitiesError.value = message
+    toast.push(message, 'error')
   } finally {
     modelEditSaving.value = false
     mutationBusy.value = false
@@ -1078,6 +1172,33 @@ onMounted(() => {
           </div>
           <div v-if="modelEditError" class="field-error" role="alert">{{ modelEditError }}</div>
         </div>
+        <div class="field model-capabilities-field">
+          <div class="row-between" style="margin-bottom: 6px;">
+            <label class="field-label" style="margin: 0;">{{ t('providers.modal.nativeApis') }}</label>
+            <span v-if="modelCapabilitiesLoading" class="text-muted" style="font-size: 12px;">{{ t('providers.modal.loadingCapabilities') }}</span>
+          </div>
+          <div class="field-help" :id="`model-native-apis-help-${editingModel?.id || 'model'}`">{{ t('providers.modal.nativeApisHelp') }}</div>
+          <div class="model-capabilities" :aria-busy="modelCapabilitiesLoading">
+            <div v-for="protocol in nativeProtocols" :key="protocol.key" class="model-capability-row">
+              <div class="model-capability-label">
+                <span>{{ t(protocol.labelKey) }}</span>
+                <span class="model-capability-inherited">{{ inheritedCapabilityLabel(protocol.key) }}</span>
+              </div>
+              <select
+                v-model="modelCapabilityStates[protocol.key]"
+                class="select model-capability-select"
+                :aria-label="t('providers.modal.nativeApiFor', { protocol: t(protocol.labelKey) })"
+                :aria-describedby="`model-native-apis-help-${editingModel?.id || 'model'}`"
+                :disabled="modelEditSaving || modelCapabilitiesLoading"
+              >
+                <option value="inherit">{{ t('providers.modal.inherit') }}</option>
+                <option value="native">{{ t('providers.modal.native') }}</option>
+                <option value="unsupported">{{ t('providers.modal.unsupported') }}</option>
+              </select>
+            </div>
+          </div>
+          <div v-if="modelCapabilitiesError" class="field-error" role="alert">{{ modelCapabilitiesError }}</div>
+        </div>
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModelEdit">{{ t('common.cancel') }}</button>
           <button class="btn btn-primary" :disabled="!!modelEditError || modelEditSaving" @click="saveModelEdit">{{ modelEditSaving ? t('common.processing') : t('common.save') }}</button>
@@ -1148,6 +1269,65 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.model-capabilities-field {
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.model-capabilities {
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.model-capability-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 6px 10px;
+}
+.model-capability-row + .model-capability-row {
+  border-top: 1px solid var(--border);
+}
+.model-capability-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.model-capability-inherited {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.model-capability-select {
+  flex: 0 0 156px;
+  min-width: 0;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 12px;
+}
+@media (max-width: 520px) {
+  .model-capability-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .model-capability-label {
+    justify-content: space-between;
+  }
+  .model-capability-select {
+    flex-basis: auto;
+    width: 100%;
+  }
+}
 .btn-danger-text {
   background: transparent;
   color: var(--negative);

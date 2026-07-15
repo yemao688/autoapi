@@ -49,8 +49,42 @@ func TestSelectCandidates_ResponsesRequiresExplicitCapability(t *testing.T) {
 		return &model.Provider{ID: id, Name: id, Enabled: true, ResponsesEnabled: id == "responses"}, nil
 	}
 	candidates, err := selectCandidates(&InboundRequest{Model: "r", Task: "responses"}, rules, nil, lookup)
-	if err != nil || len(candidates) != 1 || candidates[0].provider.ID != "responses" {
+	if err != nil || len(candidates) != 2 || candidates[0].provider.ID != "chat" || candidates[0].convertTo != ProtocolOpenAIChat || candidates[1].provider.ID != "responses" || candidates[1].convertTo != ProtocolUnknown {
 		t.Fatalf("responses capability filtering failed: candidates=%+v err=%v", candidates, err)
+	}
+}
+
+func TestSelectCandidatesHybridOrderAndNativePreference(t *testing.T) {
+	providers := map[string]*model.Provider{
+		"convert": {ID: "convert", Enabled: true, ResponsesEnabled: true},
+		"native":  {ID: "native", Enabled: true, MessagesEnabled: true},
+		"both":    {ID: "both", Enabled: true, MessagesEnabled: true, ResponsesEnabled: true},
+	}
+	lookup := func(id string) (*model.Provider, error) { return providers[id], nil }
+	rule := func(targets ...model.ModelRuleTarget) []model.ModelRule {
+		return []model.ModelRule{{Name: "r", Enabled: true, Targets: targets}}
+	}
+	request := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages}
+
+	candidates, err := selectCandidates(request, rule(
+		model.ModelRuleTarget{ID: "conversion", ProviderID: "convert", Enabled: true},
+		model.ModelRuleTarget{ID: "native", ProviderID: "native", Enabled: true},
+	), nil, lookup)
+	if err != nil || len(candidates) != 2 || candidates[0].convertTo != ProtocolOpenAIResponses || candidates[1].convertTo != ProtocolUnknown {
+		t.Fatalf("conversion target order was not preserved: candidates=%+v err=%v", candidates, err)
+	}
+
+	candidates, err = selectCandidates(request, rule(
+		model.ModelRuleTarget{ID: "native", ProviderID: "native", Enabled: true},
+		model.ModelRuleTarget{ID: "conversion", ProviderID: "convert", Enabled: true},
+	), nil, lookup)
+	if err != nil || len(candidates) != 2 || candidates[0].convertTo != ProtocolUnknown || candidates[1].convertTo != ProtocolOpenAIResponses {
+		t.Fatalf("native target order was not preserved: candidates=%+v err=%v", candidates, err)
+	}
+
+	candidates, err = selectCandidates(request, rule(model.ModelRuleTarget{ID: "both", ProviderID: "both", Enabled: true}), nil, lookup)
+	if err != nil || len(candidates) != 1 || candidates[0].convertTo != ProtocolUnknown {
+		t.Fatalf("native candidate did not suppress same-target conversion: candidates=%+v err=%v", candidates, err)
 	}
 }
 

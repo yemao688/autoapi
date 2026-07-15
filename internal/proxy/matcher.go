@@ -120,106 +120,6 @@ func edgeFor(from, to Protocol) (conversionEdge, bool) {
 	return conversionEdge{}, false
 }
 
-func selectConversionCandidates(req *InboundRequest, rules []model.ModelRule, breakers map[string]*CircuitBreaker, getProvider func(string) (*model.Provider, error), snapshots ...capabilitySnapshot) ([]candidate, error) {
-	capabilities := capabilitySnapshot{}
-	if len(snapshots) > 0 {
-		capabilities = snapshots[0]
-	}
-	rule, matched := findModelRule(req, rules)
-	if !matched {
-		return nil, fmt.Errorf("%w: %s", errNoMatch, req.Model)
-	}
-
-	var edges []conversionEdge
-	for _, edge := range conversionEdges {
-		if edge.From == req.Protocol {
-			edges = append(edges, edge)
-		}
-	}
-	if len(edges) == 0 {
-		return nil, fmt.Errorf("no conversion fallback for protocol %q", req.Protocol)
-	}
-	sort.SliceStable(edges, func(i, j int) bool { return edges[i].Priority < edges[j].Priority })
-	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
-	var out []candidate
-	basicAvailable := false
-	var rejected bool
-	for _, t := range rule.Targets {
-		if !t.Enabled {
-			continue
-		}
-		p, err := getProvider(t.ProviderID)
-		if err != nil || p == nil || !p.Enabled {
-			continue
-		}
-		if isOpen(t.ProviderID, breakers) {
-			continue
-		}
-		modelName := modelNameForTarget(t.ModelName, req.Model)
-		if capabilities.providers == nil {
-			capabilities = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p})
-		}
-		if _, exists := capabilities.providers[p.ID]; !exists {
-			capabilities.providers[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p}).providers[p.ID]
-		}
-		for _, edge := range edges {
-			if !capabilities.supportsModel(p.ID, modelName, edge.To) {
-				continue
-			}
-			basicAvailable = true
-			if req.Stream && !edge.SupportsStream {
-				rejected = true
-				continue
-			}
-			if !edge.Preserves(req) {
-				rejected = true
-				continue
-			}
-			featureOK := true
-			if req.Requirements != nil {
-				for _, feature := range req.Requirements.Features {
-					if feature == model.FeatureStreaming && !edge.SupportsStream {
-						featureOK = false
-						break
-					}
-					supported, _ := capabilities.featureEnabled(p.ID, modelName, edge.To, string(feature), true)
-					if !supported {
-						featureOK = false
-						break
-					}
-				}
-			}
-			if !featureOK {
-				rejected = true
-				continue
-			}
-			out = append(out, candidate{
-				provider:                   p,
-				modelName:                  modelName,
-				protocol:                   req.Protocol,
-				upstreamPath:               edge.UpstreamPath,
-				ruleID:                     rule.ID,
-				ruleLabel:                  rule.Name,
-				targetID:                   t.ID,
-				maxRetries:                 t.MaxRetries,
-				firstByteBudget:            firstByteBudget,
-				targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds),
-				tier:                       t.Tier,
-				strategy:                   routing.Strategy(rule.Strategy),
-				convertTo:                  edge.To,
-			})
-			break
-		}
-	}
-	if len(out) == 0 {
-		if basicAvailable && rejected {
-			return nil, fmt.Errorf("%w: no conversion provider satisfies request for model %q", errUnsupportedFeature, req.Model)
-		}
-		return nil, fmt.Errorf("no available conversion provider for model %q", req.Model)
-	}
-	return out, nil
-}
-
 // selectCandidates picks the enabled model rule whose Name equals req.Model
 // (exact match) and collects all of its forwarding targets in slice order,
 // filtering out targets that are disabled or whose provider's circuit
@@ -236,22 +136,9 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 	if len(snapshots) > 0 {
 		capabilities = snapshots[0]
 	}
-	protocol := req.Protocol
-	if protocol == ProtocolUnknown {
-		switch req.Task {
-		case "responses":
-			protocol = ProtocolOpenAIResponses
-		case "messages":
-			protocol = ProtocolAnthropicMessages
-		case "gemini":
-			protocol = ProtocolGemini
-		default:
-			endpoint := strings.TrimSuffix(req.Endpoint, "/")
-			if req.Task != "" || (endpoint != "" && endpoint != "/v1/chat/completions") {
-				return nil, fmt.Errorf("unknown request protocol")
-			}
-			protocol = ProtocolOpenAIChat
-		}
+	protocol, err := normalizedInboundProtocol(req)
+	if err != nil {
+		return nil, err
 	}
 	rule, matched := findModelRule(req, rules)
 	if !matched {
@@ -266,8 +153,10 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		return nil, fmt.Errorf("%w: %s", errNoMatch, req.Model)
 	}
 
+	normalizedReq := *req
+	normalizedReq.Protocol = protocol
 	var out []candidate
-	var featureFiltered bool
+	var rejectedWireRoute bool
 	// Resolve the rule's first-byte budget ONCE; every candidate in
 	// the same rule shares the same budget.
 	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
@@ -294,62 +183,118 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		if _, exists := capabilities.providers[p.ID]; !exists {
 			capabilities.providers[p.ID] = newCapabilitySnapshot(nil, map[string]*model.Provider{p.ID: p}).providers[p.ID]
 		}
-		if !capabilities.supportsModel(p.ID, modelName, protocol) {
-			continue
-		}
 		// Circuit breaker must be checked before feature filtering: an open
 		// target is not "available" and must not turn a 503 into a 422.
 		if isOpen(t.ProviderID, breakers) {
 			continue
 		}
-		// A target that reaches this point is enabled, resolvable, supports
-		// the target protocol and has a closed breaker. If it is rejected
-		// only because of a requirements feature, we remember that so the
-		// caller can return 422 instead of a generic 503.
-		if req.Requirements != nil {
-			skip := false
-			for _, f := range req.Requirements.Features {
-				enforce := req.Enforcement == model.FeatureCapabilityEnforcementEnforce
-				supported, known := capabilities.featureEnabled(p.ID, modelName, protocol, string(f), enforce)
-				// Observe-mode diagnostics: log when an unknown feature is
-				// allowed through so operators can audit implicit capability.
-				if !enforce && !known && supported {
-					slog.Debug("proxy: native feature implicitly allowed",
-						"provider", p.ID, "model", modelName, "protocol", protocol, "feature", f, "enforcement", req.Enforcement)
-				}
-				if !supported {
-					skip = true
-					featureFiltered = true
-					break
-				}
-			}
-			if skip {
+		if capabilities.supportsModel(p.ID, modelName, protocol) {
+			if nativeFeaturesSupported(&normalizedReq, capabilities, p.ID, modelName, protocol) {
+				out = append(out, makeCandidate(p, modelName, protocol, req.Endpoint, rule, t, firstByteBudget))
 				continue
 			}
+			rejectedWireRoute = true
 		}
-		out = append(out, candidate{
-			provider:                   p,
-			modelName:                  modelNameForTarget(t.ModelName, req.Model),
-			protocol:                   req.Protocol,
-			upstreamPath:               req.Endpoint,
-			ruleID:                     rule.ID,
-			ruleLabel:                  rule.Name,
-			targetID:                   t.ID,
-			maxRetries:                 t.MaxRetries,
-			firstByteBudget:            firstByteBudget,
-			targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds),
-			tier:                       t.Tier,
-			strategy:                   routing.Strategy(rule.Strategy),
-		})
+		for _, edge := range conversionEdgesFor(protocol) {
+			if !capabilities.supportsModel(p.ID, modelName, edge.To) {
+				continue
+			}
+			if !edgeSupportsRequest(&normalizedReq, edge, capabilities, p.ID, modelName) {
+				rejectedWireRoute = true
+				continue
+			}
+			candidate := makeCandidate(p, modelName, protocol, edge.UpstreamPath, rule, t, firstByteBudget)
+			candidate.convertTo = edge.To
+			out = append(out, candidate)
+			break
+		}
 	}
 
 	if len(out) == 0 {
-		if featureFiltered {
-			return nil, fmt.Errorf("%w: no native provider satisfies required features %v for model %q", errUnsupportedFeature, req.Requirements.Features, req.Model)
+		if rejectedWireRoute {
+			return nil, fmt.Errorf("%w: no provider satisfies request requirements %v for model %q", errUnsupportedFeature, requestFeatureNames(req), req.Model)
 		}
 		return nil, fmt.Errorf("no available provider for model %q", req.Model)
 	}
 	return out, nil
+}
+
+func requestFeatureNames(req *InboundRequest) []model.Feature {
+	if req.Requirements == nil {
+		return nil
+	}
+	return req.Requirements.Features
+}
+
+func normalizedInboundProtocol(req *InboundRequest) (Protocol, error) {
+	if req.Protocol != ProtocolUnknown {
+		return req.Protocol, nil
+	}
+	switch req.Task {
+	case "responses":
+		return ProtocolOpenAIResponses, nil
+	case "messages":
+		return ProtocolAnthropicMessages, nil
+	case "gemini":
+		return ProtocolGemini, nil
+	default:
+		endpoint := strings.TrimSuffix(req.Endpoint, "/")
+		if req.Task != "" || (endpoint != "" && endpoint != "/v1/chat/completions") {
+			return ProtocolUnknown, fmt.Errorf("unknown request protocol")
+		}
+		return ProtocolOpenAIChat, nil
+	}
+}
+
+func conversionEdgesFor(from Protocol) []conversionEdge {
+	edges := make([]conversionEdge, 0, len(conversionEdges))
+	for _, edge := range conversionEdges {
+		if edge.From == from {
+			edges = append(edges, edge)
+		}
+	}
+	sort.SliceStable(edges, func(i, j int) bool { return edges[i].Priority < edges[j].Priority })
+	return edges
+}
+
+func nativeFeaturesSupported(req *InboundRequest, capabilities capabilitySnapshot, providerID, modelName string, protocol Protocol) bool {
+	if req.Requirements == nil {
+		return true
+	}
+	enforce := req.Enforcement == model.FeatureCapabilityEnforcementEnforce
+	for _, feature := range req.Requirements.Features {
+		supported, known := capabilities.featureEnabled(providerID, modelName, protocol, string(feature), enforce)
+		if !enforce && !known && supported {
+			slog.Debug("proxy: native feature implicitly allowed", "provider", providerID, "model", modelName, "protocol", protocol, "feature", feature, "enforcement", req.Enforcement)
+		}
+		if !supported {
+			return false
+		}
+	}
+	return true
+}
+
+func edgeSupportsRequest(req *InboundRequest, edge conversionEdge, capabilities capabilitySnapshot, providerID, modelName string) bool {
+	if (req.Stream && !edge.SupportsStream) || !edge.Preserves(req) {
+		return false
+	}
+	if req.Requirements == nil {
+		return true
+	}
+	for _, feature := range req.Requirements.Features {
+		if feature == model.FeatureStreaming && !edge.SupportsStream {
+			return false
+		}
+		supported, _ := capabilities.featureEnabled(providerID, modelName, edge.To, string(feature), true)
+		if !supported {
+			return false
+		}
+	}
+	return true
+}
+
+func makeCandidate(p *model.Provider, modelName string, protocol Protocol, upstreamPath string, rule *model.ModelRule, t model.ModelRuleTarget, firstByteBudget time.Duration) candidate {
+	return candidate{provider: p, modelName: modelName, protocol: protocol, upstreamPath: upstreamPath, ruleID: rule.ID, ruleLabel: rule.Name, targetID: t.ID, maxRetries: t.MaxRetries, firstByteBudget: firstByteBudget, targetFirstBodyByteTimeout: targetFirstBodyByteTimeout(t.FirstTokenTimeoutSeconds), tier: t.Tier, strategy: routing.Strategy(rule.Strategy)}
 }
 
 func targetFirstBodyByteTimeout(seconds int) time.Duration {

@@ -99,6 +99,18 @@ export const api = {
     ensureWails()
     return wails.UpdateProviderModel(input) as Promise<void>
   },
+  listModelCapabilities: (providerId: string, modelName: string): Promise<model.ModelCapability[]> => {
+    ensureWails()
+    return wails.ListModelCapabilities(providerId, modelName) as Promise<model.ModelCapability[]>
+  },
+  setModelCapability: (providerId: string, modelName: string, protocol: string, feature: string, enabled: boolean): Promise<void> => {
+    ensureWails()
+    return wails.SetModelCapability(providerId, modelName, protocol, feature, enabled) as Promise<void>
+  },
+  deleteModelCapability: (providerId: string, modelName: string, protocol: string, feature: string): Promise<void> => {
+    ensureWails()
+    return wails.DeleteModelCapability(providerId, modelName, protocol, feature) as Promise<void>
+  },
   getProviderKey: (providerId: string): Promise<string> => {
     ensureWails()
     return wails.GetProviderKey(providerId) as Promise<string>

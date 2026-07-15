@@ -2021,6 +2021,160 @@ func TestStreaming_PassThrough(t *testing.T) {
 	}
 }
 
+func TestHybridFailover_ChatConversionToNativeChat(t *testing.T) {
+	var calls []string
+	responses := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, "responses")
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("conversion target path=%q", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "upstream-responses" {
+			t.Fatalf("conversion target model=%v", body["model"])
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"retryable"}`)
+	}))
+	defer responses.Close()
+
+	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, "chat")
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("native target path=%q", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "upstream-chat" {
+			t.Fatalf("native target model=%v", body["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chat-ok","object":"chat.completion","model":"upstream-chat","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer chat.Close()
+
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p-responses": {ID: "p-responses", Name: "Responses", BaseURL: responses.URL, Enabled: true, ResponsesEnabled: true},
+			"p-chat":      {ID: "p-chat", Name: "Chat", BaseURL: chat.URL, Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "client-chat", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t-convert", ProviderID: "p-responses", ModelName: "upstream-responses", MaxRetries: 0, Enabled: true},
+			{ID: "t-native", ProviderID: "p-chat", ModelName: "upstream-chat", MaxRetries: 0, Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+		modelCapabilities: []model.ModelCapability{
+			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: true, Source: "manual"},
+			{ProviderID: "p-chat", ModelName: "upstream-chat", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: true, Source: "manual"},
+			{ProviderID: "p-chat", ModelName: "upstream-chat", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"client-chat","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || len(calls) != 2 || calls[0] != "responses" || calls[1] != "chat" {
+		t.Fatalf("status=%d calls=%v body=%s", rec.Code, calls, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := response["choices"]; !ok {
+		t.Fatalf("expected final Chat response, got %s", rec.Body.String())
+	}
+	if _, ok := response["output"]; ok {
+		t.Fatalf("final response unexpectedly remained Responses protocol: %s", rec.Body.String())
+	}
+}
+
+func TestHybridFailover_NativeResponsesToChatConversion(t *testing.T) {
+	var calls []string
+	responses := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, "responses")
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("native target path=%q", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "upstream-responses" {
+			t.Fatalf("native target model=%v", body["model"])
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"retryable"}`)
+	}))
+	defer responses.Close()
+
+	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, "chat")
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("conversion target path=%q", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "upstream-chat" {
+			t.Fatalf("conversion target model=%v", body["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chat-ok","object":"chat.completion","model":"upstream-chat","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer chat.Close()
+
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p-responses": {ID: "p-responses", Name: "Responses", BaseURL: responses.URL, Enabled: true, ResponsesEnabled: true},
+			"p-chat":      {ID: "p-chat", Name: "Chat", BaseURL: chat.URL, Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "client-responses", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t-native", ProviderID: "p-responses", ModelName: "upstream-responses", MaxRetries: 0, Enabled: true},
+			{ID: "t-convert", ProviderID: "p-chat", ModelName: "upstream-chat", MaxRetries: 0, Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+		modelCapabilities: []model.ModelCapability{
+			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: true, Source: "manual"},
+			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+			{ProviderID: "p-chat", ModelName: "upstream-chat", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
+			{ProviderID: "p-chat", ModelName: "upstream-chat", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: true, Source: "manual"},
+		},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"client-responses","input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || len(calls) != 2 || calls[0] != "responses" || calls[1] != "chat" {
+		t.Fatalf("status=%d calls=%v body=%s", rec.Code, calls, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != "completed" {
+		t.Fatalf("expected final Responses response, got %s", rec.Body.String())
+	}
+	if _, ok := response["output"]; !ok {
+		t.Fatalf("expected converted Responses output, got %s", rec.Body.String())
+	}
+}
+
 // TestFailover_RetryBoundedSucceedsWithinBudget verifies that a target with
 // maxRetries=2 is retried on CategoryRetryable errors and that a successful
 // attempt within the retry budget produces hit_count=1, failure_count=(failed

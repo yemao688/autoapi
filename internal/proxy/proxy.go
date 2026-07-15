@@ -762,18 +762,7 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	}
 	candidates, err := selectCandidates(req, rules, breakers, lookup, capabilities)
 	if err != nil {
-		// Conversion fallback is defined by the static conversion-edge registry.
-		if req.Protocol != ProtocolAnthropicMessages && req.Protocol != ProtocolOpenAIResponses && req.Protocol != ProtocolOpenAIChat {
-			return nil, err
-		}
-		conversionCandidates, conversionErr := selectConversionCandidates(req, rules, breakers, lookup, capabilities)
-		if conversionErr != nil {
-			if errors.Is(conversionErr, errUnsupportedFeature) {
-				return nil, conversionErr
-			}
-			return nil, fmt.Errorf("%w (no conversion fallback: %v)", err, conversionErr)
-		}
-		candidates = conversionCandidates
+		return nil, err
 	}
 	// Price snapshots are needed by execution and request-log accounting for
 	// every strategy, including priority_first. Only planCandidates may skip
