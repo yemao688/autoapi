@@ -98,6 +98,22 @@ func TestCostFirstUnknownZeroIsNotFree(t *testing.T) {
 	}
 }
 
+func TestCostFirstZeroMixedMissingAndEqualPricesStable(t *testing.T) {
+	zero := candidate("zero", 0, 1, 0)
+	priced := candidate("priced", 0, 1, 2)
+	missing := candidate("missing", 0, 1, 0)
+	missing.EffectiveCost = model.DefaultEffectiveCost()
+	equal := candidate("equal", 0, 1, 2)
+	in := []CandidatePlanInput{missing, equal, priced, zero}
+	for i := range in {
+		in[i].OriginalIndex = i
+	}
+	p := BuildCandidatePlan(in, CostFirst, Policy{})
+	if want := []string{"zero", "equal", "priced", "missing"}; !reflect.DeepEqual(p.PlannedOrder, want) {
+		t.Fatalf("got %v want %v", p.PlannedOrder, want)
+	}
+}
+
 func TestDuplicateIDsScoreSwapChangesPlan(t *testing.T) {
 	in := []CandidatePlanInput{candidate("same", 0, 1, 1), candidate("same", 0, 2, 2)}
 	for i := range in {

@@ -28,8 +28,22 @@ func metricKey(c candidate, endpoint string) model.TargetMetricKey {
 	return model.TargetMetricKey{TargetID: c.targetID, ProviderID: c.provider.ID, ModelName: c.modelName, Endpoint: endpoint}
 }
 
+func routeModeKey(c candidate) model.RouteModeKey {
+	targetID := c.targetID
+	if strings.TrimSpace(targetID) == "" && c.provider != nil {
+		// Production model-rule targets always have a persisted ID. This
+		// fallback only keeps legacy hand-built test fixtures attributable.
+		targetID = c.provider.ID
+	}
+	upstream := string(c.protocol)
+	if c.convertTo != "" {
+		upstream = string(c.convertTo)
+	}
+	return model.RouteModeKey{TargetID: targetID, InboundProtocol: string(c.protocol), UpstreamProtocol: upstream}
+}
+
 func (p *Proxy) emitAttempt(c candidate, endpoint, requestID string, outcome model.AttemptOutcome, status int, committed bool, firstByte, ttft int64) {
-	e := metrics.AttributeAttempt(metricKey(c, endpoint), outcome, status, committed, firstByte, ttft)
+	e := metrics.AttributeAttempt(metricKey(c, endpoint), routeModeKey(c), outcome, status, committed, firstByte, ttft)
 	e.RequestID, e.AttemptID, e.At = requestID, store.NewUUID(), time.Now().UTC()
 	p.submitMetric(e)
 }

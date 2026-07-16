@@ -10,17 +10,32 @@ import (
 
 func TestRegistryFailureHealthMatrix(t *testing.T) {
 	r := New(8, time.Hour)
-	k := model.TargetMetricKey{ProviderID: "p", ModelName: "m", Endpoint: "/v1/chat/completions"}
-	classes := []model.MetricFailureClass{model.MetricFailureHTTPNonRetryable, model.MetricFailureDownstream, model.MetricFailure429, model.MetricFailureClientAbort, model.MetricFailure5xx, model.MetricFailureTransport, model.MetricFailureUpstreamTrunc}
+	k := model.TargetMetricKey{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "/v1/chat/completions"}
+	classes := []model.MetricFailureClass{model.MetricFailureHTTPNonRetryable, model.MetricFailureDownstream, model.MetricFailureConversionLocal, model.MetricFailure429, model.MetricFailureClientAbort, model.MetricFailure5xx, model.MetricFailureTransport, model.MetricFailureUpstreamTrunc}
 	for _, class := range classes {
-		r.Submit(model.TargetMetricEvent{Key: k, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeNonRetryable, FailureClass: class, At: time.Now()})
+		r.Submit(model.TargetMetricEvent{Key: k, RouteMode: model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_chat"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeNonRetryable, FailureClass: class, At: time.Now()})
 	}
 	s := r.Snapshot(k, time.Now())
-	if s.Failures != 3 {
-		t.Fatalf("health failures=%d, want 3", s.Failures)
+	if s.Failures != 4 {
+		t.Fatalf("health failures=%d, want 4", s.Failures)
 	}
 	if s.Downstream != 1 {
 		t.Fatalf("downstream=%d, want 1", s.Downstream)
+	}
+}
+
+func TestRegistryRequestDoesNotAddLatencySamples(t *testing.T) {
+	r := New(4, time.Hour)
+	k := key("request-only")
+	e := ev(k, model.MetricEventRequest, time.Now())
+	e.FirstByteMs = 40
+	e.TTFTMs = 25
+	if !r.Submit(e) {
+		t.Fatal("request event rejected")
+	}
+	s := r.Snapshot(k, time.Now())
+	if len(s.FirstByteMs) != 0 || len(s.TTFTMs) != 0 || s.Requests != 1 {
+		t.Fatalf("request latency contaminated target samples: %+v", s)
 	}
 }
 
@@ -28,17 +43,21 @@ func key(id string) model.TargetMetricKey {
 	return model.TargetMetricKey{TargetID: id, ProviderID: "p", ModelName: "m", Endpoint: "u"}
 }
 func ev(k model.TargetMetricKey, kind model.MetricEventKind, at time.Time) model.TargetMetricEvent {
-	return model.TargetMetricEvent{Key: k, Kind: kind, At: at, AttemptOutcome: model.AttemptOutcomeSuccess, RequestOutcome: model.RequestOutcomeSuccess}
+	e := model.TargetMetricEvent{Key: k, Kind: kind, At: at, AttemptOutcome: model.AttemptOutcomeSuccess, RequestOutcome: model.RequestOutcomeSuccess}
+	if kind == model.MetricEventAttempt {
+		e.RouteMode = model.RouteModeKey{TargetID: k.TargetID, InboundProtocol: "openai_chat", UpstreamProtocol: "openai_chat"}
+	}
+	return e
 }
 
 func TestRegistrySemantics(t *testing.T) {
-	r := New(10, time.Hour)
 	k := key("t")
 	now := time.Unix(100, 0)
-	a := AttributeAttempt(k, model.AttemptOutcomeRetryable, 429, false, 12, 20)
+	r := New(10, time.Hour, WithClock(func() time.Time { return now }))
+	a := AttributeAttempt(k, ev(k, model.MetricEventAttempt, now).RouteMode, model.AttemptOutcomeRetryable, 429, false, 12, 20)
 	a.At = now
 	r.Submit(a)
-	b := AttributeAttempt(k, model.AttemptOutcomeClientAbort, 0, true, 0, 0)
+	b := AttributeAttempt(k, ev(k, model.MetricEventAttempt, now).RouteMode, model.AttemptOutcomeClientAbort, 0, true, 0, 0)
 	b.At = now
 	r.Submit(b)
 	c := ev(k, model.MetricEventRequest, now)
@@ -50,9 +69,11 @@ func TestRegistrySemantics(t *testing.T) {
 }
 
 func TestRegistryBoundedDetachedTTLAndCapacity(t *testing.T) {
-	r := New(1, time.Second)
+	clock := time.Unix(1, 0)
+	r := New(1, time.Second, WithClock(func() time.Time { return clock }))
 	k := key("t")
 	for i := int64(1); i <= defaultSamples+10; i++ {
+		clock = time.Unix(i, 0)
 		e := ev(k, model.MetricEventAttempt, time.Unix(i, 0))
 		e.FirstByteMs = i
 		r.Submit(e)
@@ -69,6 +90,7 @@ func TestRegistryBoundedDetachedTTLAndCapacity(t *testing.T) {
 		t.Fatal("TTL failed")
 	}
 	at := time.Unix(2000, 0)
+	clock = at
 	e := ev(k, model.MetricEventRequest, at)
 	r.Submit(e)
 	e.Key = key("other")
@@ -118,7 +140,7 @@ func TestAttributionBranches(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			e := AttributeAttempt(k, tc.outcome, tc.status, tc.committed, 0, 0)
+			e := AttributeAttempt(k, model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_chat"}, tc.outcome, tc.status, tc.committed, 0, 0)
 			if e.FailureClass != tc.class {
 				t.Fatalf("class=%q want %q", e.FailureClass, tc.class)
 			}
@@ -127,7 +149,7 @@ func TestAttributionBranches(t *testing.T) {
 			}
 		})
 	}
-	invalid := AttributeAttempt(k, model.AttemptOutcome("invalid"), 0, false, 0, 0)
+	invalid := AttributeAttempt(k, model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_chat"}, model.AttemptOutcome("invalid"), 0, false, 0, 0)
 	if invalid.Valid() {
 		t.Fatal("invalid outcome became valid event")
 	}
@@ -172,5 +194,118 @@ func TestFutureEventRejected(t *testing.T) {
 	zero := ev(key("zero"), model.MetricEventAttempt, time.Time{})
 	if !zero.Valid() || !r.Submit(zero) {
 		t.Fatal("zero timestamp should be filled by registry")
+	}
+}
+
+func TestRouteRecentStoreCapHorizonAndClock(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r := New(4, time.Hour, WithClock(func() time.Time { return now }))
+	k := model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_responses"}
+	for i := int64(0); i < defaultSamples+1; i++ {
+		e := model.TargetMetricEvent{Key: key("t"), RouteMode: k, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, FirstByteMs: i + 1, At: now.Add(-time.Duration(defaultSamples-i) * time.Second)}
+		if !r.Submit(e) {
+			t.Fatal("route event rejected")
+		}
+	}
+	s := r.CurrentRouteSnapshot(k)
+	if s.Attempts != defaultSamples || len(s.FirstByteMs) != defaultSamples || s.FirstByteMs[0] != 2 {
+		t.Fatalf("route cap wrong: %+v", s)
+	}
+	boundary := model.TargetMetricEvent{Key: key("t"), RouteMode: k, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeRetryable, FailureClass: model.MetricFailure5xx, At: now.Add(-routeHorizon)}
+	r.Submit(boundary)
+	if got := r.CurrentRouteSnapshot(k); got.Attempts != defaultSamples {
+		t.Fatalf("boundary sample was not retained/capped: %+v", got)
+	}
+	now = now.Add(routeHorizon + time.Nanosecond)
+	if got := r.CurrentRouteSnapshot(k); got.Attempts != 0 {
+		t.Fatalf("expired route samples remain: %+v", got)
+	}
+}
+
+func TestRouteRecentStoreIsolationCategoriesRequestAndRestore(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r := New(4, time.Hour, WithClock(func() time.Time { return now }))
+	native := model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_chat"}
+	conversion := model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_responses"}
+	classes := []model.MetricFailureClass{model.MetricFailure429, model.MetricFailure5xx, model.MetricFailureTransport, model.MetricFailureUpstreamTrunc, model.MetricFailureConversionLocal, model.MetricFailureClientAbort, model.MetricFailureDownstream}
+	for _, class := range classes {
+		r.Submit(model.TargetMetricEvent{Key: key("t"), RouteMode: conversion, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeRetryable, FailureClass: class, At: now})
+	}
+	r.Submit(model.TargetMetricEvent{Key: key("t"), RouteMode: native, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: now})
+	r.Submit(model.TargetMetricEvent{Key: key("t"), Kind: model.MetricEventRequest, RequestOutcome: model.RequestOutcomeFailure, At: now})
+	got := r.CurrentRouteSnapshot(conversion)
+	if got.Attempts != int64(len(classes)) || got.Failures != 4 || got.Status429 != 1 || got.Status5xx != 1 || got.Transport != 1 || got.Truncated != 1 || got.ConversionLocal != 1 || got.ClientAborts != 1 || got.Downstream != 1 {
+		t.Fatalf("route category accounting wrong: %+v", got)
+	}
+	if nativeGot := r.CurrentRouteSnapshot(native); nativeGot.Attempts != 1 || nativeGot.Successes != 1 {
+		t.Fatalf("native/conversion route modes not isolated: %+v", nativeGot)
+	}
+	r.Restore([]model.TargetRuntimeSummary{{Key: key("t"), Attempts: 10, Failures: 10, LastUsed: now, UpdatedAt: now}}, now)
+	if got := r.CurrentRouteSnapshot(conversion); got.Attempts != 0 {
+		t.Fatalf("restore recreated route recent state: %+v", got)
+	}
+	if got := r.Snapshot(key("t"), now); got.Attempts != 10 {
+		t.Fatalf("restore lost target cumulative summary: %+v", got)
+	}
+}
+
+func TestRouteCapacityDeterministicEvictionIsIndependentOfTargetCapacity(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r := New(2, time.Hour, WithClock(func() time.Time { return now }))
+	targetKey := model.TargetMetricKey{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "u"}
+	makeEvent := func(upstream string) model.TargetMetricEvent {
+		return model.TargetMetricEvent{Key: targetKey, RouteMode: model.RouteModeKey{TargetID: "t", InboundProtocol: "chat", UpstreamProtocol: upstream}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: now}
+	}
+	r.Submit(makeEvent("a"))
+	r.Submit(makeEvent("b"))
+	r.Submit(makeEvent("c"))
+	if r.CurrentRouteSnapshot(makeEvent("a").RouteMode).Attempts != 0 || r.CurrentRouteSnapshot(makeEvent("b").RouteMode).Attempts != 1 || r.CurrentRouteSnapshot(makeEvent("c").RouteMode).Attempts != 1 {
+		t.Fatal("route capacity did not deterministically evict lexicographically oldest key")
+	}
+
+	// A target-key eviction must not remove a recent route sample for the same
+	// TargetID. The route store has its own capacity and horizon.
+	r = New(1, time.Hour, WithClock(func() time.Time { return now }))
+	key1 := model.TargetMetricKey{TargetID: "t", ProviderID: "p1", ModelName: "m1", Endpoint: "e1"}
+	key2 := model.TargetMetricKey{TargetID: "t", ProviderID: "p2", ModelName: "m2", Endpoint: "e2"}
+	r.Submit(model.TargetMetricEvent{Key: key1, RouteMode: model.RouteModeKey{TargetID: "t", InboundProtocol: "chat", UpstreamProtocol: "native1"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: now})
+	r.Submit(model.TargetMetricEvent{Key: key2, Kind: model.MetricEventRequest, RequestOutcome: model.RequestOutcomeSuccess, At: now})
+	kept := model.RouteModeKey{TargetID: "t", InboundProtocol: "chat", UpstreamProtocol: "native1"}
+	if r.CurrentRouteSnapshot(kept).Attempts != 1 {
+		t.Fatal("target capacity eviction incorrectly removed same-TargetID route state")
+	}
+	r.Submit(model.TargetMetricEvent{Key: key2, RouteMode: model.RouteModeKey{TargetID: "t", InboundProtocol: "chat", UpstreamProtocol: "native2"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: now})
+	if r.CurrentRouteSnapshot(kept).Attempts != 0 {
+		t.Fatal("route capacity did not independently evict the oldest route key")
+	}
+
+}
+
+func TestTargetTTLEvictionPreservesRecentSameTargetRoute(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r := New(2, time.Second, WithClock(func() time.Time { return now }))
+	key1 := model.TargetMetricKey{TargetID: "t", ProviderID: "p1", ModelName: "m1", Endpoint: "e1"}
+	key2 := model.TargetMetricKey{TargetID: "t", ProviderID: "p2", ModelName: "m2", Endpoint: "e2"}
+	r.Submit(model.TargetMetricEvent{Key: key1, RouteMode: model.RouteModeKey{TargetID: "t", InboundProtocol: "chat", UpstreamProtocol: "native"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: now.Add(-time.Minute)})
+	now = now.Add(2 * time.Second)
+	r.Submit(model.TargetMetricEvent{Key: key2, Kind: model.MetricEventRequest, RequestOutcome: model.RequestOutcomeSuccess, At: now})
+	if got := r.CurrentRouteSnapshot(model.RouteModeKey{TargetID: "t", InboundProtocol: "chat", UpstreamProtocol: "native"}); got.Attempts != 1 {
+		t.Fatalf("target TTL eviction incorrectly removed recent route: %+v", got)
+	}
+}
+
+func TestRegistryIngestOrderAndTargetTimesAreMonotonic(t *testing.T) {
+	clock := time.Unix(1000, 0)
+	r := New(1, time.Hour, WithClock(func() time.Time { return clock }))
+	k := key("ordered")
+	r.Submit(model.TargetMetricEvent{Key: k, RouteMode: model.RouteModeKey{TargetID: "ordered", InboundProtocol: "chat", UpstreamProtocol: "chat"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: clock})
+	clock = clock.Add(time.Second)
+	r.Submit(model.TargetMetricEvent{Key: k, RouteMode: model.RouteModeKey{TargetID: "ordered", InboundProtocol: "chat", UpstreamProtocol: "chat"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeRetryable, FailureClass: model.MetricFailure5xx, At: clock.Add(-time.Hour)})
+	s := r.Snapshot(k, clock)
+	if !s.LastUsed.Equal(time.Unix(1000, 0)) || !s.LastSuccess.Equal(time.Unix(1000, 0)) || !s.LastFailure.Before(s.LastUsed) {
+		t.Fatalf("target timestamps regressed or violated ordering: %+v", s)
+	}
+	if got := r.CurrentRouteSnapshot(model.RouteModeKey{TargetID: "ordered", InboundProtocol: "chat", UpstreamProtocol: "chat"}); got.Attempts != 2 || !got.LastUsed.Equal(clock) {
+		t.Fatalf("route did not use ingest order: %+v", got)
 	}
 }

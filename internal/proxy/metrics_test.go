@@ -48,7 +48,7 @@ func TestRequestOutcomeStreamStates(t *testing.T) {
 func TestMetricEmissionIsOneEventPerCall(t *testing.T) {
 	spy := &metricSpy{}
 	p := &Proxy{metricSink: spy}
-	c := candidate{provider: &model.Provider{ID: "provider-1"}, modelName: "model-1", targetID: "target-1"}
+	c := candidate{provider: &model.Provider{ID: "provider-1"}, modelName: "model-1", targetID: "target-1", protocol: ProtocolOpenAIChat}
 	p.emitAttempt(c, "/v1/chat/completions", "request-1", model.AttemptOutcomeRetryable, 429, false, 0, 0)
 	p.emitAttempt(c, "/v1/chat/completions", "request-1", model.AttemptOutcomeSuccess, 200, false, 8, 8)
 	p.emitRequest(&model.RequestLog{ID: "request-1", ProviderID: "provider-1", Model: "model-1", StatusCode: 200}, "/v1/chat/completions")
@@ -62,8 +62,25 @@ func TestMetricEmissionIsOneEventPerCall(t *testing.T) {
 	if spy.events[0].FailureClass != model.MetricFailure429 {
 		t.Fatalf("429 attempt failure class = %q", spy.events[0].FailureClass)
 	}
+	if spy.events[0].RouteMode != (model.RouteModeKey{TargetID: "target-1", InboundProtocol: string(ProtocolOpenAIChat), UpstreamProtocol: string(ProtocolOpenAIChat)}) {
+		t.Fatalf("native route mode=%+v", spy.events[0].RouteMode)
+	}
 	if spy.events[2].Kind != model.MetricEventRequest || spy.events[2].RequestOutcome != model.RequestOutcomeSuccess {
 		t.Fatalf("last event should be successful request: %#v", spy.events[2])
+	}
+}
+
+func TestMetricEmissionConversionRouteMode(t *testing.T) {
+	spy := &metricSpy{}
+	p := &Proxy{metricSink: spy}
+	c := candidate{provider: &model.Provider{ID: "provider-1"}, modelName: "model-1", targetID: "target-1", protocol: ProtocolOpenAIChat, convertTo: ProtocolOpenAIResponses}
+	p.emitAttempt(c, "/v1/chat/completions", "request-1", model.AttemptOutcomeConversionError, 200, false, 0, 0)
+	if len(spy.events) != 1 || spy.events[0].FailureClass != model.MetricFailureConversionLocal {
+		t.Fatalf("conversion event=%+v", spy.events)
+	}
+	want := model.RouteModeKey{TargetID: "target-1", InboundProtocol: string(ProtocolOpenAIChat), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	if spy.events[0].RouteMode != want {
+		t.Fatalf("conversion route mode=%+v want=%+v", spy.events[0].RouteMode, want)
 	}
 }
 

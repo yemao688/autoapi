@@ -40,6 +40,22 @@ type TargetMetricKey struct {
 	Endpoint   string `json:"endpoint"`
 }
 
+// RouteModeKey identifies the exact wire mode used by an upstream attempt.
+// It is runtime-only attribution data and is not part of persisted summaries.
+type RouteModeKey struct {
+	TargetID         string `json:"target_id"`
+	InboundProtocol  string `json:"inbound_protocol"`
+	UpstreamProtocol string `json:"upstream_protocol"`
+}
+
+func (k RouteModeKey) Valid() bool {
+	return strings.TrimSpace(k.TargetID) != "" && strings.TrimSpace(k.InboundProtocol) != "" && strings.TrimSpace(k.UpstreamProtocol) != ""
+}
+
+func (k RouteModeKey) Normalized() RouteModeKey {
+	return RouteModeKey{TargetID: strings.TrimSpace(k.TargetID), InboundProtocol: strings.TrimSpace(k.InboundProtocol), UpstreamProtocol: strings.TrimSpace(k.UpstreamProtocol)}
+}
+
 const (
 	MetricProviderClient    = "__client__"
 	MetricProviderPreflight = "__preflight__"
@@ -90,7 +106,24 @@ const (
 	MetricFailureUpstreamTrunc    MetricFailureClass = "upstream_truncated"
 	MetricFailureHTTPNonRetryable MetricFailureClass = "http_non_retryable"
 	MetricFailureDownstream       MetricFailureClass = "downstream"
+	MetricFailureConversionLocal  MetricFailureClass = "conversion_local"
 )
+
+func (c MetricFailureClass) Valid() bool {
+	switch c {
+	case "", MetricFailureNone, MetricFailure429, MetricFailure5xx, MetricFailureTransport, MetricFailureClientAbort, MetricFailureUpstreamTrunc, MetricFailureHTTPNonRetryable, MetricFailureDownstream, MetricFailureConversionLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c MetricFailureClass) Normalized() MetricFailureClass {
+	if c.Valid() {
+		return c
+	}
+	return MetricFailureNone
+}
 
 // TargetMetricEvent is an immutable, JSON-compatible runtime observation.
 // Durations are milliseconds; timestamps are UTC wall-clock time. Only one
@@ -98,6 +131,7 @@ const (
 // success counts.
 type TargetMetricEvent struct {
 	Key             TargetMetricKey    `json:"key"`
+	RouteMode       RouteModeKey       `json:"route_mode,omitempty"`
 	Kind            MetricEventKind    `json:"kind"`
 	RequestID       string             `json:"request_id,omitempty"`
 	AttemptID       string             `json:"attempt_id,omitempty"`
@@ -166,10 +200,13 @@ func (e TargetMetricEvent) Valid() bool {
 	if e.Kind == MetricEventAttempt && !e.AttemptOutcome.Valid() {
 		return false
 	}
+	if e.Kind == MetricEventAttempt && !e.RouteMode.Valid() {
+		return false
+	}
 	if e.Kind == MetricEventRequest && !e.RequestOutcome.Valid() {
 		return false
 	}
-	if e.FailureClass != "" && e.FailureClass != MetricFailureNone && e.FailureClass != MetricFailure429 && e.FailureClass != MetricFailure5xx && e.FailureClass != MetricFailureTransport && e.FailureClass != MetricFailureClientAbort && e.FailureClass != MetricFailureUpstreamTrunc && e.FailureClass != MetricFailureHTTPNonRetryable && e.FailureClass != MetricFailureDownstream {
+	if !e.FailureClass.Valid() {
 		return false
 	}
 	return true

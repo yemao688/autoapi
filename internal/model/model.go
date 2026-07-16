@@ -334,6 +334,7 @@ const (
 	AttemptOutcomeClientAbort     AttemptOutcome = "client_abort"
 	AttemptOutcomeTruncated       AttemptOutcome = "truncated"
 	AttemptOutcomeDownstreamError AttemptOutcome = "downstream_error"
+	AttemptOutcomeConversionError AttemptOutcome = "conversion_error"
 	AttemptOutcomeUnknown         AttemptOutcome = "unknown"
 
 	// Legacy aliases (kept for compatibility with existing proxy code and tests).
@@ -348,7 +349,7 @@ func (o AttemptOutcome) Valid() bool {
 	switch o {
 	case AttemptOutcomeSuccess, AttemptOutcomeRetryable, AttemptOutcomeNonRetryable,
 		AttemptOutcomeCircuitOpen, AttemptOutcomePreflightError, AttemptOutcomeClientAbort,
-		AttemptOutcomeTruncated, AttemptOutcomeDownstreamError, AttemptOutcomeUnknown:
+		AttemptOutcomeTruncated, AttemptOutcomeDownstreamError, AttemptOutcomeConversionError, AttemptOutcomeUnknown:
 		return true
 	}
 	return false

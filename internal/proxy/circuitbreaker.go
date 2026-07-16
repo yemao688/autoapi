@@ -33,12 +33,21 @@ const (
 // CircuitBreaker guards a single provider.
 type CircuitBreaker struct {
 	state               State
+	generation          uint64
 	consecutiveFailures int
+	failureThreshold    int
 	openedAt            time.Time
 	pendingProbe        bool
 	recoveryTimeout     time.Duration
 	nowFn               func() time.Time
 	mutex               sync.Mutex
+}
+
+// BreakerLease is an opaque permission issued by Acquire. Its fields are
+// intentionally private so callers cannot manufacture a valid lease.
+type BreakerLease struct {
+	generation uint64
+	halfOpen   bool
 }
 
 // StringStatus is a detached, read-only breaker view for diagnostics.
@@ -48,11 +57,21 @@ type BreakerStatus struct {
 
 // NewCircuitBreaker creates a closed circuit breaker with default settings.
 func NewCircuitBreaker() *CircuitBreaker {
+	return newCircuitBreaker(failureThreshold, recoveryTimeout)
+}
+
+func newCircuitBreaker(threshold int, timeout time.Duration) *CircuitBreaker {
 	return &CircuitBreaker{
-		state:           StateClosed,
-		recoveryTimeout: recoveryTimeout,
-		nowFn:           time.Now,
+		state:            StateClosed,
+		generation:       1,
+		failureThreshold: threshold,
+		recoveryTimeout:  timeout,
+		nowFn:            time.Now,
 	}
+}
+
+func NewRouteModeCircuitBreaker() *CircuitBreaker {
+	return newCircuitBreaker(3, 30*time.Second)
 }
 
 // CurrentState returns the breaker state for tests/debugging. It does not
@@ -63,30 +82,130 @@ func (cb *CircuitBreaker) CurrentState() State {
 	return cb.state
 }
 
-// Allow reports whether a request may be sent to the provider. It also performs
-// the open→half-open transition when the recovery timeout has elapsed.
-func (cb *CircuitBreaker) Allow() bool {
+func (cb *CircuitBreaker) ConsecutiveFailures() int {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	return cb.consecutiveFailures
+}
+
+func (cb *CircuitBreaker) Generation() uint64 {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	return cb.generation
+}
+
+// Acquire claims permission for one candidate execution. ownsHalfOpen is true
+// when this call owns the single half-open probe lease.
+func (cb *CircuitBreaker) Acquire() (bool, BreakerLease) {
+	return cb.acquireLease()
+}
+
+func (cb *CircuitBreaker) acquireLease() (bool, BreakerLease) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
 	switch cb.state {
 	case StateClosed:
-		return true
+		return true, BreakerLease{generation: cb.generation}
 	case StateOpen:
 		if cb.nowFn().Sub(cb.openedAt) >= cb.recoveryTimeout {
 			cb.state = StateHalfOpen
 			cb.pendingProbe = true
-			return true
+			cb.generation++
+			return true, BreakerLease{generation: cb.generation, halfOpen: true}
 		}
-		return false
+		return false, BreakerLease{}
 	case StateHalfOpen:
 		if cb.pendingProbe {
-			return false
+			return false, BreakerLease{}
 		}
 		cb.pendingProbe = true
-		return true
+		cb.generation++
+		return true, BreakerLease{generation: cb.generation, halfOpen: true}
 	default:
+		return false, BreakerLease{}
+	}
+}
+
+// Allow is the compatibility wrapper for callers that do not need lease
+// ownership information.
+func (cb *CircuitBreaker) Allow() bool {
+	allowed, _ := cb.acquireLease()
+	return allowed
+}
+
+func (cb *CircuitBreaker) canContinue(lease BreakerLease) bool {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	if lease.generation == 0 || lease.generation != cb.generation {
 		return false
+	}
+	if lease.halfOpen {
+		return cb.state == StateHalfOpen && cb.pendingProbe
+	}
+	return cb.state == StateClosed
+}
+
+func (cb *CircuitBreaker) settle(lease BreakerLease, success bool) bool {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	if lease.generation == 0 || lease.generation != cb.generation {
+		return false
+	}
+	if lease.halfOpen {
+		if cb.state != StateHalfOpen || !cb.pendingProbe {
+			return false
+		}
+		oldState := cb.state
+		cb.pendingProbe = false
+		if success {
+			cb.state = StateClosed
+			cb.consecutiveFailures = 0
+		} else {
+			cb.state = StateOpen
+			cb.openedAt = cb.nowFn()
+			cb.consecutiveFailures++
+		}
+		cb.generation++
+		cb.logTransition(oldState, success)
+		return true
+	}
+	if cb.state != StateClosed {
+		return false
+	}
+	if success {
+		cb.consecutiveFailures = 0
+		return true
+	}
+	cb.consecutiveFailures++
+	threshold := cb.failureThreshold
+	if threshold <= 0 {
+		threshold = failureThreshold
+	}
+	if cb.consecutiveFailures >= threshold {
+		cb.state = StateOpen
+		cb.openedAt = cb.nowFn()
+		cb.generation++
+		cb.logTransition(StateClosed, false)
+	}
+	return true
+}
+
+func (cb *CircuitBreaker) settleCancel(lease BreakerLease) bool {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	if lease.generation == 0 || lease.generation != cb.generation || !lease.halfOpen || cb.state != StateHalfOpen || !cb.pendingProbe {
+		return false
+	}
+	cb.pendingProbe = false
+	cb.state = StateOpen
+	cb.generation++
+	return true
+}
+
+func (cb *CircuitBreaker) logTransition(oldState State, success bool) {
+	if oldState != cb.state {
+		slog.Info("proxy: circuit breaker state changed", "from", oldState, "to", cb.state, "success", success, "consecutiveFailures", cb.consecutiveFailures)
 	}
 }
 
@@ -125,9 +244,14 @@ func (cb *CircuitBreaker) Record(success bool) {
 			cb.consecutiveFailures = 0
 		} else {
 			cb.consecutiveFailures++
-			if cb.consecutiveFailures >= failureThreshold {
+			threshold := cb.failureThreshold
+			if threshold <= 0 {
+				threshold = failureThreshold
+			}
+			if cb.consecutiveFailures >= threshold {
 				cb.state = StateOpen
 				cb.openedAt = cb.nowFn()
+				cb.generation++
 			}
 		}
 	case StateHalfOpen:
@@ -135,20 +259,36 @@ func (cb *CircuitBreaker) Record(success bool) {
 		if success {
 			cb.state = StateClosed
 			cb.consecutiveFailures = 0
+			cb.generation++
 		} else {
 			cb.state = StateOpen
 			cb.openedAt = cb.nowFn()
 			cb.consecutiveFailures++
+			cb.generation++
 		}
 	case StateOpen:
 		if success {
 			cb.state = StateClosed
 			cb.consecutiveFailures = 0
+			cb.generation++
 		}
 	}
 
 	if oldState != cb.state {
 		slog.Info("proxy: circuit breaker state changed", "from", oldState, "to", cb.state, "success", success, "consecutiveFailures", cb.consecutiveFailures)
+	}
+}
+
+// CancelProbe releases a claimed half-open probe without changing the
+// cooldown start time. It is neutral: closed breakers and non-pending probes
+// are left untouched.
+func (cb *CircuitBreaker) CancelProbe() {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+	if cb.state == StateHalfOpen && cb.pendingProbe {
+		cb.pendingProbe = false
+		cb.state = StateOpen
+		cb.generation++
 	}
 }
 

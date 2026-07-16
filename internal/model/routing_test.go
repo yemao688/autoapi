@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -63,6 +64,25 @@ func TestTargetMetricKey(t *testing.T) {
 	}
 }
 
+func TestRouteModeKeyValidNormalizedAndJSON(t *testing.T) {
+	key := RouteModeKey{TargetID: " t1 ", InboundProtocol: " openai_chat ", UpstreamProtocol: " openai_responses "}
+	if !key.Valid() {
+		t.Fatal("valid route mode rejected")
+	}
+	if got := key.Normalized(); got != (RouteModeKey{TargetID: "t1", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_responses"}) {
+		t.Fatalf("normalized=%+v", got)
+	}
+	b, err := json.Marshal(key)
+	if err != nil || string(b) != `{"target_id":" t1 ","inbound_protocol":" openai_chat ","upstream_protocol":" openai_responses "}` {
+		t.Fatalf("json=%s err=%v", b, err)
+	}
+	for _, invalid := range []RouteModeKey{{InboundProtocol: "chat", UpstreamProtocol: "chat"}, {TargetID: "t", UpstreamProtocol: "chat"}, {TargetID: "t", InboundProtocol: "chat"}} {
+		if invalid.Valid() {
+			t.Fatalf("invalid route mode accepted: %+v", invalid)
+		}
+	}
+}
+
 func TestRequestMetricKeyAllowsPreflightButAttemptRequiresProvider(t *testing.T) {
 	request := TargetMetricEvent{Key: TargetMetricKey{ProviderID: MetricProviderPreflight, ModelName: MetricProviderClient, Endpoint: "/v1/chat/completions"}, Kind: MetricEventRequest, RequestOutcome: RequestOutcomeFailure}
 	if !request.Valid() {
@@ -78,7 +98,7 @@ func TestAttemptOutcome(t *testing.T) {
 	for _, o := range []AttemptOutcome{
 		AttemptOutcomeSuccess, AttemptOutcomeRetryable, AttemptOutcomeNonRetryable,
 		AttemptOutcomeCircuitOpen, AttemptOutcomePreflightError, AttemptOutcomeClientAbort,
-		AttemptOutcomeTruncated, AttemptOutcomeDownstreamError, AttemptOutcomeUnknown,
+		AttemptOutcomeTruncated, AttemptOutcomeDownstreamError, AttemptOutcomeConversionError, AttemptOutcomeUnknown,
 		OutcomeSuccess, OutcomeTruncated, OutcomeDownstreamError, OutcomeClientAbort,
 	} {
 		if !o.Valid() {
@@ -106,6 +126,7 @@ func TestAttemptOutcomeJSONValues(t *testing.T) {
 		AttemptOutcomeClientAbort:     "client_abort",
 		AttemptOutcomeTruncated:       "truncated",
 		AttemptOutcomeDownstreamError: "downstream_error",
+		AttemptOutcomeConversionError: "conversion_error",
 		AttemptOutcomeUnknown:         "unknown",
 	}
 	for o, expected := range want {

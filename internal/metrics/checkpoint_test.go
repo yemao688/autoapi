@@ -56,7 +56,7 @@ func (s *checkpointSink) enteredSignal() <-chan struct{} {
 }
 func checkpointRegistry() *Registry {
 	r := New(4, time.Hour)
-	r.Submit(model.TargetMetricEvent{Key: model.TargetMetricKey{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "e"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: time.Now()})
+	r.Submit(model.TargetMetricEvent{Key: model.TargetMetricKey{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "e"}, RouteMode: model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_chat", UpstreamProtocol: "openai_chat"}, Kind: model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess, At: time.Now()})
 	return r
 }
 

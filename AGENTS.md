@@ -78,6 +78,11 @@ wails build
 - **Response converters are fail-closed**: unknown output items, content blocks, delta types, and unsupported semantics (reasoning, refusal, annotations, audio, legacy function_call) always return conversion errors, never silently drop.
 - **Protocol adapters**: `internal/proxy/adapter.go` dispatches per `(from, to)` pair. Native adapter rewrites model name only. Conversion adapter rewrites request body, sets upstream path, and provides `ConvertResponse` (non-streaming) or `NewStreamConverter` (streaming).
 - **Request body**: handlers read into `[]byte` once, inspect it, then pass to `resolveCandidates` → `forwardWithFailover` → `adapter.PrepareAttempt(body)`. Native passthrough never modifies the original body beyond model name rewrite.
+- **Active routing strategies**: `priority_first` preserves configured order. `score_within_tier` and `cost_first` reorder only within a tier. Cost means one next upstream attempt; missing/invalid/non-USD prices sort after known prices and never disable health scoring.
+- **Route-mode runtime identity**: every real upstream attempt carries `(target_id, inbound_protocol, upstream_protocol)`. Active scoring uses only that exact route mode's in-memory recent window (10 minutes, 64 attempts); persisted target summaries are observability-only and do not seed active scores after restart.
+- **Breaker isolation**: provider breakers handle network/timeout/5xx failures. Response conversion failures use an in-memory route-mode breaker (3 consecutive failures, 30-second cooldown, one generation-token half-open probe) and never mark the provider unhealthy. Successful Restart clears route breakers and exploration state; failed Restart retains them.
+- **Retry scope**: retry backoff and `Retry-After` are candidate-local. Cross-target failover is immediate, while the global attempt cap and rule first-byte deadline remain request-wide.
+- **Deterministic exploration**: only `score_within_tier` explores, only in the highest executable tier, at most every 20th qualified request and no more often than every 30 seconds per `(rule_id, tier)`. It never bypasses capabilities or breakers.
 
 ## Data & state paths
 

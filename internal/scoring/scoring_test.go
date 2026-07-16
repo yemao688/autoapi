@@ -35,6 +35,16 @@ func TestScoreTargetHealthCapacityAndFailureClasses(t *testing.T) {
 	}
 }
 
+func TestScoreTargetConversionLocalIsProviderHealthFailure(t *testing.T) {
+	clean := target("clean", 0)
+	local := clean
+	local.Metrics.ConversionLocal = 10
+	local.Metrics.Attempts = 10
+	if ScoreTarget(local, ScoreContext{}, .01).Reliability >= ScoreTarget(clean, ScoreContext{}, .01).Reliability {
+		t.Fatal("conversion-local failures must reduce exact route reliability")
+	}
+}
+
 func TestScoreTargetColdStartLatencyPriceAndHardState(t *testing.T) {
 	cold := target("cold", 2)
 	s := ScoreTarget(cold, ScoreContext{Stream: true}, .01)

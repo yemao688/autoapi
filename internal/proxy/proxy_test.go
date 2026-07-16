@@ -287,6 +287,11 @@ func TestRestartOccupiedPortKeepsOldServerLive(t *testing.T) {
 	}
 	oldURL := p.URL()
 	assertHTTPAvailable(t, oldURL)
+	key := model.RouteModeKey{TargetID: "t", InboundProtocol: string(ProtocolOpenAIChat), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	cb := p.routeBreakerFor(key)
+	for i := 0; i < 3; i++ {
+		cb.Record(false)
+	}
 
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -304,6 +309,9 @@ func TestRestartOccupiedPortKeepsOldServerLive(t *testing.T) {
 		t.Fatalf("old listener changed: running=%v url=%q want=%q", p.IsRunning(), p.URL(), oldURL)
 	}
 	assertHTTPAvailable(t, oldURL)
+	if p.routeModeWouldAllow(candidate{targetID: "t", provider: &model.Provider{ID: "p"}, protocol: ProtocolOpenAIChat, convertTo: ProtocolOpenAIResponses}) {
+		t.Fatal("failed restart cleared route breaker state")
+	}
 }
 
 func TestRestartSuccessfullySwitchesListener(t *testing.T) {
@@ -342,6 +350,23 @@ func TestRestartSameAddressIsNoOp(t *testing.T) {
 	defer p.mu.RUnlock()
 	if p.listener != oldListener || p.server != oldServer {
 		t.Fatal("same-address restart replaced listener or server")
+	}
+	p.explorationMu.Lock()
+	p.exploration[explorationKey{ruleID: "r", tier: 0}] = &explorationState{qualified: 19}
+	p.explorationMu.Unlock()
+	key := model.RouteModeKey{TargetID: "t", InboundProtocol: string(ProtocolOpenAIChat), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	cb := p.routeBreakerFor(key)
+	for i := 0; i < 3; i++ {
+		cb.Record(false)
+	}
+	if err := p.Restart(); err != nil {
+		t.Fatalf("same-address restart after route failure: %v", err)
+	}
+	if _, ok := p.routeBreakerState(key); ok {
+		t.Fatal("successful no-op restart did not clear route breakers")
+	}
+	if len(p.exploration) != 0 {
+		t.Fatal("successful no-op restart did not clear exploration scheduler")
 	}
 }
 
@@ -400,11 +425,20 @@ func TestRestartSamePortBindFailureRestoresOldListener(t *testing.T) {
 		return net.Listen(network, address)
 	}
 	settings = &model.Settings{Server: model.ServerSettings{Port: port, BindAddress: "0.0.0.0"}}
+	p.explorationMu.Lock()
+	p.exploration[explorationKey{ruleID: "r", tier: 0}] = &explorationState{qualified: 19}
+	p.explorationMu.Unlock()
 	if err := p.Restart(); !errors.Is(err, wantErr) {
 		t.Fatalf("Restart error = %v, want %v", err, wantErr)
 	}
 	if !p.IsRunning() || p.URL() != fmt.Sprintf("http://127.0.0.1:%d", port) {
 		t.Fatalf("old listener not restored: running=%v url=%q", p.IsRunning(), p.URL())
+	}
+	p.explorationMu.Lock()
+	_, explorationRetained := p.exploration[explorationKey{ruleID: "r", tier: 0}]
+	p.explorationMu.Unlock()
+	if !explorationRetained {
+		t.Fatal("failed restart discarded exploration scheduler state")
 	}
 	p.mu.RLock()
 	active := p.activeSettings
@@ -753,6 +787,8 @@ func TestMessagesClientFallsBackToResponsesProvider(t *testing.T) {
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
+	spy := &metricSpy{}
+	p.metricSink = spy
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	rec := httptest.NewRecorder()
@@ -1037,6 +1073,8 @@ func TestChatToResponsesNonStreamingE2E(t *testing.T) {
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
+	spy := &metricSpy{}
+	p.metricSink = spy
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	rec := httptest.NewRecorder()
@@ -1127,6 +1165,8 @@ func TestChatResponseConversionErrorFailsOverToNextCandidate(t *testing.T) {
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
+	spy := &metricSpy{}
+	p.metricSink = spy
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	rec := httptest.NewRecorder()
@@ -1138,8 +1178,75 @@ func TestChatResponseConversionErrorFailsOverToNextCandidate(t *testing.T) {
 	if len(log.Chain) < 2 || log.Chain[0].Status != "conversion_error" || log.Chain[1].Status != string(model.OutcomeSuccess) {
 		t.Fatalf("chain=%+v", log.Chain)
 	}
-	if st.statsDeltas["t0"].fail == 0 || st.statsDeltas["t1"].hit == 0 || st.providers["p0"].Status != model.ProviderStatusError {
+	p0, _ := st.GetProvider("p0")
+	p1, _ := st.GetProvider("p1")
+	if st.statsDeltas["t0"].fail == 0 || st.statsDeltas["t1"].hit == 0 || p0.Status == model.ProviderStatusError || p1.Status != model.ProviderStatusConnected {
 		t.Fatalf("failure accounting stats=%+v providers=%+v", st.statsDeltas, st.providers)
+	}
+	events := spy.Events()
+	if len(events) != 3 || events[0].Kind != model.MetricEventAttempt || events[1].Kind != model.MetricEventAttempt || events[2].Kind != model.MetricEventRequest {
+		t.Fatalf("conversion failover metric cardinality=%+v", events)
+	}
+	if events[0].StatusCode != 200 || events[0].AttemptOutcome != model.AttemptOutcomeConversionError || events[0].FailureClass != model.MetricFailureConversionLocal || !events[0].RouteMode.Valid() {
+		t.Fatalf("conversion failure event=%+v", events[0])
+	}
+	if events[1].AttemptOutcome != model.AttemptOutcomeSuccess || events[1].StatusCode != 200 {
+		t.Fatalf("success attempt event=%+v", events[1])
+	}
+}
+
+func TestConversionRouteBreakerFiltersAfterThreeFailuresWithoutAffectingNative(t *testing.T) {
+	var badHits, nativeHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["model"] == "bad-upstream" {
+			badHits++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `not-json`)
+			return
+		}
+		nativeHits++
+		_, _ = io.WriteString(w, `{"id":"native-ok","object":"chat.completion","model":"native-upstream","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules: []model.ModelRule{{ID: "r", Name: "client", Enabled: true, Strategy: string(routing.PriorityFirst), Targets: []model.ModelRuleTarget{
+			{ID: "t-conversion", ProviderID: "p", ModelName: "bad-upstream", Enabled: true},
+			{ID: "t-native", ProviderID: "p", ModelName: "native-upstream", Enabled: true},
+		}}},
+		modelCapabilities: []model.ModelCapability{
+			{ProviderID: "p", ModelName: "bad-upstream", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+			{ProviderID: "p", ModelName: "bad-upstream", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: true, Source: "manual"},
+			{ProviderID: "p", ModelName: "native-upstream", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: true, Source: "manual"},
+			{ProviderID: "p", ModelName: "native-upstream", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"client","messages":[]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		rec := httptest.NewRecorder()
+		p.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "native-ok") {
+			t.Fatalf("request %d status=%d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	if badHits != 3 || nativeHits != 4 {
+		t.Fatalf("route filtering calls bad=%d native=%d, want 3/4", badHits, nativeHits)
+	}
+	if state, ok := p.routeBreakerState(model.RouteModeKey{TargetID: "t-conversion", InboundProtocol: string(ProtocolOpenAIChat), UpstreamProtocol: string(ProtocolOpenAIResponses)}); !ok || state != StateOpen {
+		t.Fatalf("conversion route state=%v exists=%v, want open", state, ok)
+	}
+	if p.breakerFor("p").CurrentState() != StateClosed {
+		t.Fatalf("provider breaker=%v, conversion-local failures must not open it", p.breakerFor("p").CurrentState())
+	}
+	provider, _ := st.GetProvider("p")
+	if provider.Status == model.ProviderStatusError {
+		t.Fatal("conversion-local failures marked provider health error")
 	}
 }
 
@@ -1284,7 +1391,7 @@ func TestResponsesClientStreamsFromMessagesProvider(t *testing.T) {
 	}
 }
 
-func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
+func TestProtocolConversionErrorLogsChainWithoutProviderBreaker(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, "not-json")
@@ -1298,6 +1405,13 @@ func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
+	providerCB := p.breakerFor("p")
+	now := time.Unix(100, 0)
+	providerCB.nowFn = func() time.Time { return now }
+	providerCB.state = StateHalfOpen
+	providerCB.pendingProbe = false
+	openedAt := now.Add(-time.Minute)
+	providerCB.openedAt = openedAt
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	rec := httptest.NewRecorder()
@@ -1313,18 +1427,13 @@ func TestProtocolConversionErrorLogsChainAndTripsBreaker(t *testing.T) {
 	if log.Chain[0].LatencyMs < 0 {
 		t.Fatalf("conversion error latency=%d, want non-negative", log.Chain[0].LatencyMs)
 	}
-	if p.breakerFor("p").CurrentState() != StateClosed {
-		t.Fatalf("breaker opened after one failure; threshold should not be reached")
+	if providerCB.CurrentState() != StateOpen || providerCB.pendingProbe || !providerCB.openedAt.Equal(openedAt) {
+		t.Fatalf("conversion-local provider probe leaked: state=%v pending=%v openedAt=%v", providerCB.CurrentState(), providerCB.pendingProbe, providerCB.openedAt)
 	}
-	for i := 0; i < failureThreshold-1; i++ {
-		req = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
-		req.Header.Set("Authorization", "Bearer key1")
-		rec = httptest.NewRecorder()
-		p.router.ServeHTTP(rec, req)
+	if !providerCB.Allow() {
+		t.Fatal("conversion-local cancellation stranded next provider probe")
 	}
-	if p.breakerFor("p").CurrentState() != StateOpen {
-		t.Fatalf("breaker state=%v, want open after %d conversion failures", p.breakerFor("p").CurrentState(), failureThreshold)
-	}
+	providerCB.CancelProbe()
 }
 
 func TestMessagesClientToResponsesProviderStreamingUpstreamErrorIsReached(t *testing.T) {
@@ -1378,6 +1487,8 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
+	spy := &metricSpy{}
+	p.metricSink = spy
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","stream":true,"messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	req.Header.Set("Content-Type", "application/json")
@@ -1390,8 +1501,8 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 		t.Fatalf("client received unexpected converted stream: %s", rec.Body.String())
 	}
 	log := waitForLog(t, st)
-	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
-		t.Fatalf("chain=%+v, want retryable -> success", log.Chain)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeConversionError) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v, want conversion_error -> success", log.Chain)
 	}
 	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
 		t.Fatalf("pre-commit conversion failure stats=(%d,%d), want target failure +1 and no hit", hit, fail)
@@ -1401,6 +1512,17 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 	}
 	if provider, _ := st.GetProvider("p0"); provider.Status == model.ProviderStatusError {
 		t.Fatal("pre-commit conversion failure penalized provider health")
+	}
+	events := spy.Events()
+	if len(events) != 3 || events[0].Kind != model.MetricEventAttempt || events[1].Kind != model.MetricEventAttempt || events[2].Kind != model.MetricEventRequest {
+		t.Fatalf("pre-commit conversion metric cardinality=%+v", events)
+	}
+	wantRoute := model.RouteModeKey{TargetID: "t0", InboundProtocol: string(ProtocolAnthropicMessages), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	if events[0].StatusCode != 200 || events[0].AttemptOutcome != model.AttemptOutcomeConversionError || events[0].FailureClass != model.MetricFailureConversionLocal || events[0].StreamCommitted || events[0].RouteMode != wantRoute {
+		t.Fatalf("pre-commit conversion event=%+v want route=%+v", events[0], wantRoute)
+	}
+	if events[1].AttemptOutcome != model.AttemptOutcomeSuccess || events[1].StatusCode != 200 {
+		t.Fatalf("pre-commit fallback success event=%+v", events[1])
 	}
 }
 
@@ -1440,6 +1562,8 @@ func TestStreamingConversionPartialByteStallDeadlineFailover(t *testing.T) {
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
+	spy := &metricSpy{}
+	p.metricSink = spy
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","stream":true,"messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	req.Header.Set("Content-Type", "application/json")
@@ -1462,6 +1586,25 @@ func TestStreamingConversionPartialByteStallDeadlineFailover(t *testing.T) {
 	}
 	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
 		t.Fatalf("P0 target stats=(%d,%d), want (0,1)", hit, fail)
+	}
+	events := spy.Events()
+	var bAttempts, requests int
+	for _, event := range events {
+		if event.Kind == model.MetricEventRequest {
+			requests++
+		}
+		if event.Kind == model.MetricEventAttempt && event.RouteMode.TargetID == "t1" {
+			bAttempts++
+			if event.TTFTMs != int64(log.Chain[1].FirstTokenMs) {
+				t.Fatalf("B TTFT sample=%+v, want its own chain TTFT=%d", event, log.Chain[1].FirstTokenMs)
+			}
+		}
+	}
+	if bAttempts != 1 || requests != 1 {
+		t.Fatalf("stream metric attribution events=%+v, B attempts=%d requests=%d", events, bAttempts, requests)
+	}
+	if log.FirstTokenMs <= log.Chain[1].FirstTokenMs {
+		t.Fatalf("request TTFT=%d should include A delay beyond B attempt TTFT=%d", log.FirstTokenMs, log.Chain[1].FirstTokenMs)
 	}
 }
 
@@ -1577,7 +1720,9 @@ func TestStreamingConversionPostCommitFailure(t *testing.T) {
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
-	before := p.breakerFor("p0").consecutiveFailures
+	spy := &metricSpy{}
+	p.metricSink = spy
+	before := p.breakerFor("p0").ConsecutiveFailures()
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","stream":true,"messages":[]}`))
 	req.Header.Set("Authorization", "Bearer key1")
 	req.Header.Set("Content-Type", "application/json")
@@ -1601,15 +1746,22 @@ func TestStreamingConversionPostCommitFailure(t *testing.T) {
 		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
 	}
 	log := waitForLog(t, st)
-	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.AttemptOutcomeTruncated) {
-		t.Fatalf("chain=%+v, want one truncated entry", log.Chain)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.AttemptOutcomeConversionError) {
+		t.Fatalf("chain=%+v, want one conversion_error entry", log.Chain)
 	}
-	if p.breakerFor("p0").consecutiveFailures <= before {
-		t.Fatal("post-commit conversion failure did not penalize breaker")
+	if p.breakerFor("p0").consecutiveFailures != before {
+		t.Fatal("post-commit conversion failure penalized breaker")
 	}
 	prov, _ := st.GetProvider("p0")
-	if prov.Status != model.ProviderStatusError {
-		t.Fatalf("provider status=%q, want error", prov.Status)
+	if prov.Status == model.ProviderStatusError {
+		t.Fatalf("provider status=%q, conversion failure must remain local", prov.Status)
+	}
+	events := spy.Events()
+	if len(events) != 2 || events[0].Kind != model.MetricEventAttempt || events[1].Kind != model.MetricEventRequest {
+		t.Fatalf("post-commit conversion metric cardinality=%+v", events)
+	}
+	if events[0].StatusCode != 200 || events[0].AttemptOutcome != model.AttemptOutcomeConversionError || events[0].FailureClass != model.MetricFailureConversionLocal || !events[0].StreamCommitted || !events[0].RouteMode.Valid() {
+		t.Fatalf("post-commit conversion event=%+v", events[0])
 	}
 }
 
@@ -4228,6 +4380,67 @@ func TestFailover_GlobalAttemptCap(t *testing.T) {
 	}
 }
 
+func TestStreamHalfOpenTopTerminationReleasesBothProbes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+		cap    bool
+	}{
+		{name: "global_cap", cap: true},
+		{name: "budget", budget: time.Nanosecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(100, 0)
+			hits := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer srv.Close()
+			st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, FirstByteTimeoutSeconds: 1, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", MaxRetries: 1, Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+			p := New(st, &mockService{}, 0, nil)
+			defer p.Shutdown()
+			providerCB := p.breakerFor("p")
+			providerCB.nowFn = func() time.Time { return now }
+			providerCB.state = StateOpen
+			providerCB.openedAt = now.Add(-time.Minute)
+			c := candidate{targetID: "t", provider: st.providers["p"], modelName: "m", protocol: ProtocolOpenAIChat, convertTo: ProtocolOpenAIResponses, maxRetries: 1, firstByteBudget: tc.budget}
+			routeCB := p.routeBreakerFor(routeModeKeyForCandidate(c))
+			routeCB.nowFn = func() time.Time { return now }
+			routeCB.state = StateOpen
+			routeCB.openedAt = now.Add(-time.Minute)
+			candidates := []candidate{c}
+			if tc.cap {
+				// Consume the request-wide cap with eight preceding candidates;
+				// the final candidate then claims its half-open probes and hits
+				// the real forwardStream loop-top cap before an upstream call.
+				candidates = make([]candidate, 0, maxTotalAttempts+1)
+				for i := 0; i < maxTotalAttempts; i++ {
+					provider := &model.Provider{ID: fmt.Sprintf("prior-%d", i), Name: "prior", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}
+					candidates = append(candidates, candidate{targetID: fmt.Sprintf("prior-%d", i), provider: provider, modelName: "m", protocol: ProtocolOpenAIChat, maxRetries: 0, firstByteBudget: time.Hour})
+				}
+				candidates = append(candidates, c)
+			}
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","stream":true,"messages":[]}`))
+			rec := httptest.NewRecorder()
+			p.forwardStream(rec, req, []byte(`{"model":"x","stream":true,"messages":[]}`), candidates, 0, &model.RequestLog{})
+			if hits == 0 && tc.cap {
+				t.Fatal("stream cap test did not reach upstream")
+			}
+			if providerCB.pendingProbe || providerCB.CurrentState() != StateOpen || !providerCB.openedAt.Equal(now.Add(-time.Minute)) {
+				t.Fatalf("provider probe not neutrally settled: state=%v pending=%v openedAt=%v", providerCB.CurrentState(), providerCB.pendingProbe, providerCB.openedAt)
+			}
+			if routeCB.pendingProbe || routeCB.CurrentState() != StateOpen || !routeCB.openedAt.Equal(now.Add(-time.Minute)) || routeCB.ConsecutiveFailures() != 0 {
+				t.Fatalf("route probe was penalized or leaked: state=%v pending=%v failures=%d", routeCB.CurrentState(), routeCB.pendingProbe, routeCB.ConsecutiveFailures())
+			}
+			if !providerCB.Allow() {
+				t.Fatal("provider next half-open probe could not claim")
+			}
+			providerCB.CancelProbe()
+		})
+	}
+}
+
 // TestFailover_BackoffBetweenRetries verifies the exponential backoff
 // with jitter between retry attempts on a single target. Setup: 1
 // target with MaxRetries=2, all attempts return 500. Without backoff
@@ -4304,6 +4517,166 @@ func TestFailover_BackoffBetweenRetries(t *testing.T) {
 	// Response should be 5xx (all attempts failed).
 	if resp.StatusCode < 500 {
 		t.Fatalf("expected 5xx after all attempts failed, got %d", resp.StatusCode)
+	}
+}
+
+func TestFailover_CandidateLocalBackoffNonStreaming(t *testing.T) {
+	var aHits, bHits int
+	var bTimes []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/a/"):
+			aHits++
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasPrefix(r.URL.Path, "/b/"):
+			bHits++
+			bTimes = append(bTimes, time.Now())
+			if bHits == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = io.WriteString(w, `{"id":"b-ok","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+		}
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"a": {ID: "a", Name: "A", BaseURL: srv.URL + "/a", Enabled: true},
+			"b": {ID: "b", Name: "B", BaseURL: srv.URL + "/b", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "local-backoff", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "ta", ProviderID: "a", MaxRetries: 3, Enabled: true},
+			{ID: "tb", ProviderID: "b", MaxRetries: 1, Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"local-backoff","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || aHits != 4 || bHits != 2 || len(bTimes) != 2 {
+		t.Fatalf("status=%d a=%d b=%d times=%v body=%s", rec.Code, aHits, bHits, bTimes, rec.Body.String())
+	}
+	gap := bTimes[1].Sub(bTimes[0])
+	if gap < 150*time.Millisecond || gap > 600*time.Millisecond {
+		t.Fatalf("B first retry used non-local backoff: gap=%v", gap)
+	}
+}
+
+func TestFailover_CandidateLocalBackoffStreaming(t *testing.T) {
+	var aHits, bHits int
+	var bTimes []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/a/"):
+			aHits++
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasPrefix(r.URL.Path, "/b/"):
+			bHits++
+			bTimes = append(bTimes, time.Now())
+			if bHits == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = io.WriteString(w, "data: {\"id\":\"b-ok\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+		}
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"a": {ID: "a", Name: "A", BaseURL: srv.URL + "/a", Enabled: true},
+			"b": {ID: "b", Name: "B", BaseURL: srv.URL + "/b", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "local-stream-backoff", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "ta", ProviderID: "a", MaxRetries: 3, Enabled: true},
+			{ID: "tb", ProviderID: "b", MaxRetries: 1, Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"local-stream-backoff","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || aHits != 4 || bHits != 2 || len(bTimes) != 2 {
+		t.Fatalf("status=%d a=%d b=%d times=%v body=%s", rec.Code, aHits, bHits, bTimes, rec.Body.String())
+	}
+	gap := bTimes[1].Sub(bTimes[0])
+	if gap < 150*time.Millisecond || gap > 600*time.Millisecond {
+		t.Fatalf("B stream retry used non-local backoff: gap=%v", gap)
+	}
+}
+
+func TestFailover_RetryAfterHonoredWithinCandidate(t *testing.T) {
+	var hits int
+	var times []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		times = append(times, time.Now())
+		if hits == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "retry-after-local", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", MaxRetries: 1, Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"retry-after-local","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || hits != 2 || len(times) != 2 {
+		t.Fatalf("status=%d hits=%d times=%v body=%s", rec.Code, hits, times, rec.Body.String())
+	}
+	if gap := times[1].Sub(times[0]); gap < 900*time.Millisecond || gap > 2*time.Second {
+		t.Fatalf("Retry-After was not honored within candidate: gap=%v", gap)
+	}
+}
+
+func TestFailover_IgnoresRetryAfterAcrossTargetsStreaming(t *testing.T) {
+	var p0Time, p1Time time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Time = time.Now()
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		p1Time = time.Now()
+		_, _ = io.WriteString(w, "data: {\"id\":\"p1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "stream-retry-after", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", MaxRetries: 0, Enabled: true},
+			{ID: "t1", ProviderID: "p1", MaxRetries: 0, Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"stream-retry-after","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || p1Time.Sub(p0Time) >= 500*time.Millisecond {
+		t.Fatalf("Retry-After leaked across stream targets: status=%d gap=%v body=%s", rec.Code, p1Time.Sub(p0Time), rec.Body.String())
 	}
 }
 
@@ -4399,18 +4772,14 @@ func TestFailover_UnknownStatusFailover(t *testing.T) {
 	}
 }
 
-// TestFailover_RespectsRetryAfter verifies that the proxy honors an
-// upstream Retry-After header on a 429/503 response: instead of the
-// computed exponential backoff, the next attempt (on a different
-// target) is delayed by at least the Retry-After value.
+// TestFailover_IgnoresRetryAfterAcrossTargets verifies that Retry-After is
+// local to a candidate retry loop and never delays the next target.
 //
 // Setup: P0 returns 429 with Retry-After: 2 (delta-seconds). P1
-// returns 200. Asserts the request succeeds via P1 and that the
-// wall-clock delay between the P0 attempt and the P1 attempt is
-// >= 2s (Retry-After honored).
-func TestFailover_RespectsRetryAfter(t *testing.T) {
+// returns 200. MaxRetries=0 means P1 starts immediately after P0 fails.
+func TestFailover_IgnoresRetryAfterAcrossTargets(t *testing.T) {
 	var p0Hits, p1Hits int
-	var p0Time time.Time
+	var p0Time, p1Time time.Time
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/p0/") {
 			p0Hits++
@@ -4422,6 +4791,7 @@ func TestFailover_RespectsRetryAfter(t *testing.T) {
 			return
 		}
 		p1Hits++
+		p1Time = time.Now()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -4470,20 +4840,8 @@ func TestFailover_RespectsRetryAfter(t *testing.T) {
 	if p1Hits != 1 {
 		t.Fatalf("expected P1 hit once after failover, got %d", p1Hits)
 	}
-	// P0 returned at p0Time. P1 should have been called >= 2s after
-	// that (Retry-After: 2). We measure from p0Time to elapsed; a
-	// little slack for clock noise.
-	p1Delay := elapsed - start.Sub(p0Time)
-	// elapsed is time-since-start; p0Time-start is negative. So
-	// elapsed - (p0Time-start) is actually (now-start) - (p0Time-start) =
-	// now-p0Time = delay between p0 and now (which is when p1 returned,
-	// slightly after p1 was hit). Approximate.
-	_ = p1Delay
-	// The simpler assertion: elapsed (full request time) must be at
-	// least 2s because the Retry-After delay is between the two
-	// upstream calls.
-	if elapsed < 1900*time.Millisecond {
-		t.Fatalf("expected elapsed >= 1900ms (proves Retry-After honored), got %v", elapsed)
+	if p1Time.Sub(p0Time) >= 500*time.Millisecond || elapsed >= time.Second {
+		t.Fatalf("expected immediate target switch, p0->p1=%v elapsed=%v", p1Time.Sub(p0Time), elapsed)
 	}
 	// Sanity ceiling: with Retry-After: 2 and no other sleeps, the
 	// request should complete well under 5s.
@@ -4544,6 +4902,14 @@ func TestFailover_RuleFirstByteBudgetExceeded(t *testing.T) {
 	if rec.Code < 500 {
 		t.Fatalf("expected 5xx when budget exceeded, got %d: %s", rec.Code, rec.Body.String())
 	}
+	var envelope struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || envelope.Error.Type == "" {
+		t.Fatalf("expected standard error envelope, body=%s err=%v", rec.Body.String(), err)
+	}
 	// The request must have completed reasonably close to the
 	// 1s budget, NOT after the full MaxRetries+1 = 6 attempts
 	// × 200ms each (1.2s) + backoff. Allow generous upper bound.
@@ -4554,6 +4920,152 @@ func TestFailover_RuleFirstByteBudgetExceeded(t *testing.T) {
 	// before the budget fired.
 	if hits < 1 {
 		t.Fatalf("expected at least 1 upstream hit before budget fired, got %d", hits)
+	}
+}
+
+func TestFailover_StreamRuleFirstByteBudgetExceeded(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "stream-budget", Enabled: true, FirstByteTimeoutSeconds: 1, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 5, Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"stream-budget","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code < 500 || hits < 1 {
+		t.Fatalf("expected stream budget 5xx with upstream hit, status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
+	}
+	var envelope struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || envelope.Error.Type == "" {
+		t.Fatalf("expected standard stream error envelope, body=%s err=%v", rec.Body.String(), err)
+	}
+}
+
+func TestProviderHalfOpenLeaseIsReusedAcrossRetries(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stream     bool
+		statuses   []int
+		wantClosed bool
+	}{
+		{name: "nonstream_fail", statuses: []int{500, 500}},
+		{name: "nonstream_success", statuses: []int{500, 200}, wantClosed: true},
+		{name: "stream_fail", stream: true, statuses: []int{500, 500}},
+		{name: "stream_success", stream: true, statuses: []int{500, 200}, wantClosed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hits := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				status := tc.statuses[hits]
+				hits++
+				if status >= 500 {
+					w.WriteHeader(status)
+					return
+				}
+				if tc.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, "data: {\"id\":\"ok\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"ok","choices":[]}`)
+			}))
+			defer srv.Close()
+			st := &mockStore{
+				providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+				rules:     []model.ModelRule{{ID: "r", Name: "lease", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", MaxRetries: 1, Enabled: true}}}},
+				apiKeys:   []model.ApiKey{{ID: "key1"}},
+			}
+			p := New(st, &mockService{}, 0, nil)
+			defer p.Shutdown()
+			cb := p.breakerFor("p")
+			now := time.Unix(100, 0)
+			cb.nowFn = func() time.Time { return now }
+			cb.state = StateOpen
+			cb.openedAt = now.Add(-time.Minute)
+			reqBody := `{"model":"lease","messages":[]}`
+			if tc.stream {
+				reqBody = `{"model":"lease","stream":true,"messages":[]}`
+			}
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+			req.Header.Set("Authorization", "Bearer key1")
+			rec := httptest.NewRecorder()
+			p.router.ServeHTTP(rec, req)
+			if hits != 2 {
+				t.Fatalf("upstream attempts=%d, want 2; status=%d body=%s", hits, rec.Code, rec.Body.String())
+			}
+			if cb.pendingProbe {
+				t.Fatal("provider half-open probe remains pending")
+			}
+			if tc.wantClosed {
+				if cb.CurrentState() != StateClosed || cb.ConsecutiveFailures() != 0 {
+					t.Fatalf("success did not close provider breaker: state=%v failures=%d", cb.CurrentState(), cb.ConsecutiveFailures())
+				}
+			} else if cb.CurrentState() != StateOpen || !cb.openedAt.Equal(now) {
+				t.Fatalf("final failure did not refresh provider breaker: state=%v openedAt=%v want=%v", cb.CurrentState(), cb.openedAt, now)
+			}
+		})
+	}
+}
+
+func TestHalfOpenProvider501DoesNotPenalizeConversionRoute(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "nonstream", true: "stream"}[stream], func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotImplemented)
+			}))
+			defer srv.Close()
+			st := &mockStore{
+				providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+				rules:     []model.ModelRule{{ID: "r", Name: "route", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", Enabled: true}}}},
+				apiKeys:   []model.ApiKey{{ID: "key1"}},
+			}
+			p := New(st, &mockService{}, 0, nil)
+			defer p.Shutdown()
+			now := time.Unix(100, 0)
+			providerCB := p.breakerFor("p")
+			providerCB.nowFn = func() time.Time { return now }
+			providerCB.state = StateOpen
+			providerCB.openedAt = now.Add(-time.Minute)
+			c := candidate{targetID: "t", provider: st.providers["p"], modelName: "m", protocol: ProtocolAnthropicMessages, convertTo: ProtocolOpenAIResponses}
+			routeCB := p.routeBreakerFor(routeModeKeyForCandidate(c))
+			routeCB.nowFn = func() time.Time { return now }
+			routeOpenedAt := now.Add(-2 * time.Minute)
+			routeCB.state = StateOpen
+			routeCB.openedAt = routeOpenedAt
+			body := `{"model":"route","max_tokens":1,"messages":[]}`
+			if stream {
+				body = `{"model":"route","stream":true,"max_tokens":1,"messages":[]}`
+			}
+			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer key1")
+			rec := httptest.NewRecorder()
+			p.router.ServeHTTP(rec, req)
+			if rec.Code < 500 {
+				t.Fatalf("expected 5xx for 501, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if providerCB.CurrentState() != StateOpen || providerCB.pendingProbe || !providerCB.openedAt.Equal(now) {
+				t.Fatalf("provider 501 settlement wrong: state=%v pending=%v openedAt=%v", providerCB.CurrentState(), providerCB.pendingProbe, providerCB.openedAt)
+			}
+			if routeCB.CurrentState() != StateOpen || routeCB.pendingProbe || !routeCB.openedAt.Equal(routeOpenedAt) || routeCB.ConsecutiveFailures() != 0 {
+				t.Fatalf("route 501 settlement penalized route: state=%v pending=%v openedAt=%v failures=%d", routeCB.CurrentState(), routeCB.pendingProbe, routeCB.openedAt, routeCB.ConsecutiveFailures())
+			}
+		})
 	}
 }
 
@@ -5188,17 +5700,17 @@ func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
 	deadline, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	for {
-		if got := p.breakerFor("p0").consecutiveFailures; got > before {
+		if got := p.breakerFor("p0").ConsecutiveFailures(); got > before {
 			break
 		}
 		select {
 		case <-deadline.Done():
-			t.Fatalf("timed out waiting for truncated stream handling before shutdown; consecutiveFailures=%d", p.breakerFor("p0").consecutiveFailures)
+			t.Fatalf("timed out waiting for truncated stream handling before shutdown; consecutiveFailures=%d", p.breakerFor("p0").ConsecutiveFailures())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	_ = p.Shutdown()
-	if got := p.breakerFor("p0").consecutiveFailures; got <= before {
+	if got := p.breakerFor("p0").ConsecutiveFailures(); got <= before {
 		t.Fatalf("expected breaker consecutiveFailures to increase, before=%d after=%d", before, got)
 	}
 	log := waitForLog(t, store)
@@ -6013,7 +6525,7 @@ func TestChatToResponsesStreamingPreCommitFailover(t *testing.T) {
 		t.Fatalf("client received unexpected stream: %s", rec.Body.String())
 	}
 	log := waitForLog(t, st)
-	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeConversionError) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
 		t.Fatalf("chain=%+v", log.Chain)
 	}
 	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
@@ -6066,7 +6578,7 @@ func TestResponsesToChatStreamingPreCommitFailover(t *testing.T) {
 		t.Fatalf("client received unexpected stream: %s", rec.Body.String())
 	}
 	log := waitForLog(t, st)
-	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeConversionError) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
 		t.Fatalf("chain=%+v", log.Chain)
 	}
 	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {

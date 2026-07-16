@@ -8,7 +8,7 @@
 
 - **🔧 多上游聚合** — 一端点接入 OpenAI、Anthropic、DeepSeek、Moonshot、智谱 GLM 及任意 OpenAI 兼容服务。
 - **🔌 多协议网关** — 支持 Chat Completions、Responses、Anthropic Messages 和 Gemini 原生入站协议，以及可保真的单跳协议转换。
-- **🔀 智能模型路由** — 为每个客户端模型定义映射规则；每个目标独立选择原生或转换协议，并按 Tier、策略和顺序故障转移。
+- **🔀 智能模型路由** — 为每个客户端模型定义映射规则；每个目标独立选择原生或转换协议，并按 Tier、优先级、近期健康、延迟或单次请求价格进行故障转移。
 - **🔐 密钥安全** — 本地 AES-256-GCM 加密，主密码派生 Argon2id；上游密钥永不明文存储。
 - **📊 实时统计** — Token 用量、请求日志、Provider 占比、模型排行、延迟直方图，支持 CSV/JSON 导出。
 - **🖥️ 后台运行** — 关闭窗口自动收入托盘，代理持续运行；macOS Dock 智能隐藏。
@@ -87,6 +87,20 @@ wails build -platform linux/amd64 -clean         # Linux
 | T2 | DeepSeek | deepseek-chat | 15s |
 
 客户端请求 `gpt-4o` 时，Autoapi 按目标顺序为每个 Target 选择原生协议或最佳单跳转换；T1 超时或发生可重试失败后自动切换 T2。原生目标和转换目标可以出现在同一故障转移链中。
+
+每条模型规则可选择路由策略：
+
+- **优先级优先**（`priority_first`）：严格保持同 Tier 内的配置顺序。
+- **同层级按评分**（`score_within_tier`）：仅在同一 Tier 内，按最近 10 分钟、最多 64 次 upstream attempt 的可靠性、首字延迟、容量压力和价格评分排序；不同原生/转换协议分别统计。
+- **成本优先**（`cost_first`）：仅在同一 Tier 内按下一次 upstream attempt 的有效 USD 价格排序；未知价格排在已知价格之后，最大重试次数不计入排序价格。
+
+评分策略会对冷路由进行受限探索：仅在最高可执行 Tier、仅限 `score_within_tier`，每 20 个合格请求最多一次，且两次探索至少间隔 30 秒。探索不会绕过协议能力、断路器或 Tier 边界。
+
+故障处理遵循以下边界：
+
+- `Retry-After` 和指数退避只影响同一 Target 的本地重试；切换到后备 Target 时立即尝试。
+- 网络错误、超时和上游 5xx 进入 Provider 断路器；协议转换失败只进入对应 `(Target, 入站协议, 上游协议)` 路由断路器，不影响同 Provider 的原生路由或其他转换边。
+- 活跃评分窗口仅驻留内存，应用重启后从中性评分开始；SQLite 中的累计摘要继续用于统计与诊断。
 
 ### 4. 生成 API 密钥
 
@@ -268,7 +282,7 @@ curl -X POST http://localhost:8344/v1/chat/completions \
 
 - **Provider 管理**：添加/测试 OpenAI、Anthropic、DeepSeek、Moonshot、智谱 GLM 及自定义上游；支持为每个模型覆盖 Chat、Responses、Messages、Gemini 原生接口能力。
 - **API 密钥**：本地 AES-256-GCM 加密存储，主密码解锁；支持按 Provider/环境筛选。
-- **模型规则**：基于模型、任务、estimated_tokens、header、时间等条件按优先级匹配，命中目标 Provider + 目标模型；支持 `matches`/`equals`/`lt`/`gt`/`between`/`in` 操作符。
+- **模型规则**：配置客户端模型到上游目标的 Tier、顺序与 `priority_first` / `score_within_tier` / `cost_first` 策略；同一故障转移链可混合原生协议和受控单跳转换。
 - **使用统计**：实时 Token 用量、请求日志、Provider 占比、模型排行、P95 延迟。
 - **本地代理**：`0.0.0.0:8344` 提供 Chat Completions、Responses、Anthropic Messages、Gemini、embeddings 和 models 接口；支持原生透传、受控单跳转换、SSE 流式转换和请求日志落库。
 - **设置**：常规/外观/路由/API 服务/数据/高级/关于，支持数据导出（JSON/CSV）和日志清理。

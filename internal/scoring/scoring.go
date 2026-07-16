@@ -120,7 +120,7 @@ func ScoreTarget(in TargetInput, context ScoreContext, referenceCost float64) Ta
 	confidence := clamp(safeDiv(float64(s.SampleCount), float64(s.SampleCount)+priorSamples), 0, 1)
 	s.Confidence = confidence * 100
 
-	healthFailures := in.Metrics.Status5xx + in.Metrics.Transport + in.Metrics.Truncated
+	healthFailures := in.Metrics.Status5xx + in.Metrics.Transport + in.Metrics.Truncated + in.Metrics.ConversionLocal
 	healthRate := safeDiv(float64(healthFailures), float64(max64(1, in.Metrics.Attempts)))
 	s.Reliability = clamp(100*(0.90-0.80*healthRate), 0, 100)
 	// 429 is capacity pressure, not provider health. A convex square curve is
