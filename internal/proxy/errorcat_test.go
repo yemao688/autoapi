@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"syscall"
 	"testing"
@@ -85,5 +86,11 @@ func TestIsCircuitBreakerFailure(t *testing.T) {
 	}
 	if isCircuitBreakerFailure(nil, 400) {
 		t.Fatal("expected 400 not to be a breaker failure")
+	}
+	if !isCircuitBreakerFailure(io.ErrUnexpectedEOF, 400) || !isCircuitBreakerFailure(syscall.ECONNRESET, 200) {
+		t.Fatal("expected premature termination and connection reset to be provider failures")
+	}
+	if isCircuitBreakerFailure(context.Canceled, 0) {
+		t.Fatal("client cancellation must remain breaker-neutral")
 	}
 }

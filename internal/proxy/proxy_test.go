@@ -932,6 +932,8 @@ func TestConversionPreservationAvailabilityE2E(t *testing.T) {
 			}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
+			spy := &metricSpy{}
+			p.metricSink = spy
 			if tc.breakerOpen {
 				cb := p.breakerFor("p")
 				cb.mutex.Lock()
@@ -1182,6 +1184,13 @@ func TestChatResponseConversionErrorFailsOverToNextCandidate(t *testing.T) {
 	p1, _ := st.GetProvider("p1")
 	if st.statsDeltas["t0"].fail == 0 || st.statsDeltas["t1"].hit == 0 || p0.Status == model.ProviderStatusError || p1.Status != model.ProviderStatusConnected {
 		t.Fatalf("failure accounting stats=%+v providers=%+v", st.statsDeltas, st.providers)
+	}
+	conversionRoute := model.RouteModeKey{TargetID: "t0", InboundProtocol: string(ProtocolOpenAIChat), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	if routeCB := p.routeBreakerFor(conversionRoute); routeCB.CurrentState() != StateClosed || routeCB.ConsecutiveFailures() != 1 {
+		t.Fatalf("conversion route breaker=%v failures=%d, want one local failure", routeCB.CurrentState(), routeCB.ConsecutiveFailures())
+	}
+	if providerCB := p.breakerFor("p0"); providerCB.CurrentState() != StateClosed || providerCB.ConsecutiveFailures() != 0 {
+		t.Fatalf("provider breaker changed after conversion failure: state=%v failures=%d", providerCB.CurrentState(), providerCB.ConsecutiveFailures())
 	}
 	events := spy.Events()
 	if len(events) != 3 || events[0].Kind != model.MetricEventAttempt || events[1].Kind != model.MetricEventAttempt || events[2].Kind != model.MetricEventRequest {
@@ -1507,6 +1516,10 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
 		t.Fatalf("pre-commit conversion failure stats=(%d,%d), want target failure +1 and no hit", hit, fail)
 	}
+	conversionRoute := model.RouteModeKey{TargetID: "t0", InboundProtocol: string(ProtocolAnthropicMessages), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	if routeCB := p.routeBreakerFor(conversionRoute); routeCB.CurrentState() != StateClosed || routeCB.ConsecutiveFailures() != 1 {
+		t.Fatalf("pre-commit conversion route breaker=%v failures=%d, want one local failure", routeCB.CurrentState(), routeCB.ConsecutiveFailures())
+	}
 	if p.breakerFor("p0").consecutiveFailures != 0 {
 		t.Fatalf("pre-commit conversion failure penalized breaker: %d", p.breakerFor("p0").consecutiveFailures)
 	}
@@ -1517,7 +1530,7 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 	if len(events) != 3 || events[0].Kind != model.MetricEventAttempt || events[1].Kind != model.MetricEventAttempt || events[2].Kind != model.MetricEventRequest {
 		t.Fatalf("pre-commit conversion metric cardinality=%+v", events)
 	}
-	wantRoute := model.RouteModeKey{TargetID: "t0", InboundProtocol: string(ProtocolAnthropicMessages), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	wantRoute := conversionRoute
 	if events[0].StatusCode != 200 || events[0].AttemptOutcome != model.AttemptOutcomeConversionError || events[0].FailureClass != model.MetricFailureConversionLocal || events[0].StreamCommitted || events[0].RouteMode != wantRoute {
 		t.Fatalf("pre-commit conversion event=%+v want route=%+v", events[0], wantRoute)
 	}
@@ -1700,6 +1713,7 @@ func TestStreamingConversionPostCommitFailure(t *testing.T) {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
+			time.Sleep(5 * time.Millisecond)
 			_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {malformed}\n\n")
 			return
 		}
@@ -1751,6 +1765,10 @@ func TestStreamingConversionPostCommitFailure(t *testing.T) {
 	}
 	if p.breakerFor("p0").consecutiveFailures != before {
 		t.Fatal("post-commit conversion failure penalized breaker")
+	}
+	conversionRoute := model.RouteModeKey{TargetID: "t0", InboundProtocol: string(ProtocolAnthropicMessages), UpstreamProtocol: string(ProtocolOpenAIResponses)}
+	if routeCB := p.routeBreakerFor(conversionRoute); routeCB.CurrentState() != StateClosed || routeCB.ConsecutiveFailures() != 1 {
+		t.Fatalf("post-commit conversion route breaker=%v failures=%d, want one local failure", routeCB.CurrentState(), routeCB.ConsecutiveFailures())
 	}
 	prov, _ := st.GetProvider("p0")
 	if prov.Status == model.ProviderStatusError {
@@ -4400,15 +4418,19 @@ func TestStreamHalfOpenTopTerminationReleasesBothProbes(t *testing.T) {
 			st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, FirstByteTimeoutSeconds: 1, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", MaxRetries: 1, Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
+			spy := &metricSpy{}
+			p.metricSink = spy
 			providerCB := p.breakerFor("p")
 			providerCB.nowFn = func() time.Time { return now }
 			providerCB.state = StateOpen
 			providerCB.openedAt = now.Add(-time.Minute)
+			providerGeneration := providerCB.Generation()
 			c := candidate{targetID: "t", provider: st.providers["p"], modelName: "m", protocol: ProtocolOpenAIChat, convertTo: ProtocolOpenAIResponses, maxRetries: 1, firstByteBudget: tc.budget}
 			routeCB := p.routeBreakerFor(routeModeKeyForCandidate(c))
 			routeCB.nowFn = func() time.Time { return now }
 			routeCB.state = StateOpen
 			routeCB.openedAt = now.Add(-time.Minute)
+			routeGeneration := routeCB.Generation()
 			candidates := []candidate{c}
 			if tc.cap {
 				// Consume the request-wide cap with eight preceding candidates;
@@ -4423,7 +4445,19 @@ func TestStreamHalfOpenTopTerminationReleasesBothProbes(t *testing.T) {
 			}
 			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","stream":true,"messages":[]}`))
 			rec := httptest.NewRecorder()
-			p.forwardStream(rec, req, []byte(`{"model":"x","stream":true,"messages":[]}`), candidates, 0, &model.RequestLog{})
+			logEntry := &model.RequestLog{}
+			p.forwardStream(rec, req, []byte(`{"model":"x","stream":true,"messages":[]}`), candidates, 0, logEntry)
+			if !tc.cap {
+				if rec.Code != http.StatusServiceUnavailable || hits != 0 || len(spy.Events()) != 0 {
+					t.Fatalf("budget caller result status=%d hits=%d events=%d", rec.Code, hits, len(spy.Events()))
+				}
+				if hit, fail := st.statsFor("t"); hit != 0 || fail != 0 {
+					t.Fatalf("budget caller changed target stats: hit=%d fail=%d", hit, fail)
+				}
+				if len(logEntry.Chain) != 1 || logEntry.Chain[0].Status != "budget_exceeded" || logEntry.Chain[0].UpstreamStarted {
+					t.Fatalf("budget caller chain=%+v", logEntry.Chain)
+				}
+			}
 			if hits == 0 && tc.cap {
 				t.Fatal("stream cap test did not reach upstream")
 			}
@@ -4433,11 +4467,157 @@ func TestStreamHalfOpenTopTerminationReleasesBothProbes(t *testing.T) {
 			if routeCB.pendingProbe || routeCB.CurrentState() != StateOpen || !routeCB.openedAt.Equal(now.Add(-time.Minute)) || routeCB.ConsecutiveFailures() != 0 {
 				t.Fatalf("route probe was penalized or leaked: state=%v pending=%v failures=%d", routeCB.CurrentState(), routeCB.pendingProbe, routeCB.ConsecutiveFailures())
 			}
+			if providerCB.Generation() != providerGeneration+2 || routeCB.Generation() != routeGeneration+2 {
+				t.Fatalf("neutral half-open settlement generation mismatch: provider=%d route=%d", providerCB.Generation(), routeCB.Generation())
+			}
 			if !providerCB.Allow() {
 				t.Fatal("provider next half-open probe could not claim")
 			}
 			providerCB.CancelProbe()
 		})
+	}
+}
+
+func TestStreamAttemptExpiredBudgetDoesNotStartAttempt(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer srv.Close()
+	spy := &metricSpy{}
+	store := &mockStore{}
+	p := New(store, &mockService{}, 0, nil)
+	p.metricSink = spy
+	c := candidate{targetID: "t", provider: &model.Provider{ID: "p", Name: "P", BaseURL: srv.URL}, modelName: "m", protocol: ProtocolOpenAIChat, firstByteBudget: time.Second}
+	deadline := time.Now().Add(-time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
+	prep := AttemptPreparation{Body: []byte(`{"model":"m","messages":[]}`), Path: "/v1/chat/completions"}
+	upstreamURL, err := url.Parse(srv.URL + "/v1/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logEntry := &model.RequestLog{}
+	result, _ := p.streamAttempt(ctx, httptest.NewRecorder(), req, c, "key", prep.Body, upstreamURL, prep, 0, 0, logEntry)
+	if !result.BudgetExceeded || result.AttemptStarted {
+		t.Fatalf("expired budget result=%+v", result)
+	}
+	if hits != 0 || len(spy.Events()) != 0 {
+		t.Fatalf("expired budget started work: hits=%d events=%d", hits, len(spy.Events()))
+	}
+	for _, entry := range logEntry.Chain {
+		if entry.UpstreamStarted {
+			t.Fatalf("expired budget emitted started chain entry: %+v", entry)
+		}
+	}
+	if hit, fail := store.statsFor("t"); hit != 0 || fail != 0 {
+		t.Fatalf("expired budget changed target stats: hit=%d fail=%d", hit, fail)
+	}
+}
+
+func TestStreamingExhaustedProviderTransportFailuresOpenBreaker(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		baseURL func(*testing.T) string
+		c       func(string, *model.Provider) candidate
+	}{
+		{name: "client_do_network", baseURL: func(t *testing.T) string {
+			s := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			addr := s.Listener.Addr().String()
+			s.Close()
+			return "http://" + addr
+		}, c: func(base string, provider *model.Provider) candidate {
+			return candidate{targetID: "t", provider: provider, modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions", firstByteBudget: time.Second}
+		}},
+		{name: "first_body_timeout", baseURL: func(t *testing.T) string {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(20 * time.Millisecond)
+			}))
+			return s.URL
+		}, c: func(base string, provider *model.Provider) candidate {
+			return candidate{targetID: "t", provider: provider, modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions", firstByteBudget: time.Second, targetFirstBodyByteTimeout: time.Millisecond}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseURL := tc.baseURL(t)
+			provider := &model.Provider{ID: "p", Name: "P", BaseURL: baseURL, Enabled: true}
+			p := New(&mockStore{}, &mockService{}, 0, nil)
+			defer p.Shutdown()
+			c := tc.c(baseURL, provider)
+			for i := 0; i < failureThreshold; i++ {
+				req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[]}`))
+				p.forwardStream(httptest.NewRecorder(), req, []byte(`{"model":"m","stream":true,"messages":[]}`), []candidate{c}, 0, &model.RequestLog{})
+			}
+			cb := p.breakerFor("p")
+			if cb.CurrentState() != StateOpen || cb.ConsecutiveFailures() < failureThreshold {
+				t.Fatalf("%s did not open provider breaker: state=%v failures=%d", tc.name, cb.CurrentState(), cb.ConsecutiveFailures())
+			}
+		})
+	}
+}
+
+func TestStreamingPrematureNon2xxBodyIsProviderTransportFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("hijacker unavailable")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 100\r\n\r\nx"))
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+	p := New(&mockStore{}, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	provider := &model.Provider{ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}
+	c := candidate{targetID: "t", provider: provider, modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions", firstByteBudget: time.Second}
+	for i := 0; i < failureThreshold; i++ {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[]}`))
+		p.forwardStream(httptest.NewRecorder(), req, []byte(`{"model":"m","stream":true,"messages":[]}`), []candidate{c}, 0, &model.RequestLog{})
+	}
+	if cb := p.breakerFor("p"); cb.CurrentState() != StateOpen || cb.ConsecutiveFailures() < failureThreshold {
+		t.Fatalf("premature non-2xx body did not open provider breaker: state=%v failures=%d", cb.CurrentState(), cb.ConsecutiveFailures())
+	}
+}
+
+func TestStreamingFinalStatusOnly429ClearsEarlierNetworkCause(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("hijacker unavailable")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limited"}`))
+	}))
+	defer srv.Close()
+	p := New(&mockStore{}, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	provider := &model.Provider{ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}
+	c := candidate{targetID: "t", provider: provider, modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions", firstByteBudget: time.Second, maxRetries: 1}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"messages":[]}`))
+	p.forwardStream(httptest.NewRecorder(), req, []byte(`{"model":"m","stream":true,"messages":[]}`), []candidate{c}, 0, &model.RequestLog{})
+	if hits != 2 {
+		t.Fatalf("expected network retry followed by 429, hits=%d", hits)
+	}
+	if cb := p.breakerFor("p"); cb.CurrentState() != StateClosed || cb.ConsecutiveFailures() != 0 {
+		t.Fatalf("stale network cause leaked into final status-only 429: state=%v failures=%d", cb.CurrentState(), cb.ConsecutiveFailures())
 	}
 }
 

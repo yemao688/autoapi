@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"syscall"
@@ -69,6 +70,12 @@ func CategorizeError(err error, statusCode int) ErrorCategory {
 // upstream responses open the breaker; 4xx client errors do not.
 func isCircuitBreakerFailure(err error, statusCode int) bool {
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return false
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) || isConnReset(err) {
+			return true
+		}
 		return isNetError(err)
 	}
 	return statusCode >= 500

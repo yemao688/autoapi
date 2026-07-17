@@ -1852,6 +1852,7 @@ outer:
 		// Retry-After is local to this candidate; the next target starts
 		// immediately when this target has no retry remaining.
 		retryAfter := time.Duration(0)
+		var finalCause error
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
 			// Global attempt cap: stops the N×(M+1) explosion when
 			// many candidates each have a high MaxRetries.
@@ -1965,8 +1966,6 @@ outer:
 				case <-time.After(delay):
 				}
 			}
-			totalAttempts++
-
 			if attempt > 0 && !providerProbe.canContinue() {
 				providerProbe.cancel()
 				slog.Debug("proxy: stream circuit opened mid-retry, falling through", "provider", c.provider.Name, "attempt", attempt)
@@ -1987,6 +1986,30 @@ outer:
 
 			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, prep, attemptOrder, inputEstimate, logEntry)
 			attemptOrder = newOrder
+			if result.BudgetExceeded {
+				providerProbe.cancel()
+				routeProbe.cancel()
+				attemptOrder++
+				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+					AttemptOrder: attemptOrder,
+					ProviderID:   c.provider.ID,
+					ProviderName: c.provider.Name,
+					ModelName:    c.modelName,
+					TargetID:     c.targetID,
+					Status:       "budget_exceeded",
+					StatusCode:   0,
+					Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
+					LatencyMs:    0,
+				})
+				lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
+				lastStatus = http.StatusServiceUnavailable
+				attemptsCapped = true
+				break outer
+			}
+			if result.AttemptStarted {
+				totalAttempts++
+			}
+			finalCause = result.Cause
 
 			switch result.Status {
 			case model.OutcomeSuccess:
@@ -2106,14 +2129,7 @@ outer:
 		// Exhausted retries on this candidate (or breaker opened
 		// mid-retry). Record breaker once on the final outcome, then
 		// fall through to the next candidate.
-		if isCircuitBreakerFailure(nil, lastStatus) {
-			providerProbe.failure()
-			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
-				slog.Error("proxy: update provider health", "err", err)
-			}
-		} else if lastStatus == 0 && lastErr != nil && isNetError(lastErr) {
-			// Pure transport failure (refused, timeout) — counts as
-			// circuit-breaker failure but with no HTTP status code.
+		if isCircuitBreakerFailure(finalCause, lastStatus) {
 			providerProbe.failure()
 			if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, lastErr.Error()); err != nil {
 				slog.Error("proxy: update provider health", "err", err)
@@ -2178,7 +2194,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	emitted := false
 	committed := false
 	defer func() {
-		if emitted {
+		if emitted || !result.AttemptStarted {
 			return
 		}
 		emitted = true
@@ -2212,7 +2228,9 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		timeout = c.targetFirstBodyByteTimeout
 	}
 	if dl, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(dl); remaining > 0 && remaining < timeout {
+		if remaining := time.Until(dl); remaining <= 0 {
+			return streamAttemptResult{Status: model.AttemptOutcomeRetryable, BudgetExceeded: true}, order
+		} else if remaining < timeout {
 			timeout = remaining
 		}
 	}
@@ -2253,6 +2271,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	defer transport.CloseIdleConnections()
 
 	attemptStart := time.Now()
+	result.AttemptStarted = true
 	resp, doErr := client.Do(attemptReq)
 
 	if doErr != nil {
@@ -2289,11 +2308,13 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				LatencyMs:            latencyMs,
 			})
 			return streamAttemptResult{
-				Status:     "client_abort",
-				StatusCode: statusClientClosed,
-				Error:      "client disconnected: " + doErr.Error(),
-				LatencyMs:  latencyMs,
-				Committed:  false,
+				Status:         "client_abort",
+				AttemptStarted: true,
+				StatusCode:     statusClientClosed,
+				Error:          "client disconnected: " + doErr.Error(),
+				Cause:          doErr,
+				LatencyMs:      latencyMs,
+				Committed:      false,
 			}, attemptOrder
 		case CategoryNonRetryable:
 			p.writeError(w, http.StatusBadGateway, "upstream_error", doErr.Error())
@@ -2313,11 +2334,13 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				LatencyMs:            latencyMs,
 			})
 			return streamAttemptResult{
-				Status:     "non_retryable",
-				StatusCode: http.StatusBadGateway,
-				Error:      doErr.Error(),
-				LatencyMs:  latencyMs,
-				Committed:  true,
+				Status:         "non_retryable",
+				AttemptStarted: true,
+				StatusCode:     http.StatusBadGateway,
+				Error:          doErr.Error(),
+				Cause:          doErr,
+				LatencyMs:      latencyMs,
+				Committed:      true,
 			}, attemptOrder
 		case CategoryRetryable:
 			fallthrough
@@ -2338,10 +2361,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				LatencyMs:            latencyMs,
 			})
 			return streamAttemptResult{
-				Status:    "retryable",
-				Error:     doErr.Error(),
-				LatencyMs: latencyMs,
-				Committed: false,
+				Status:         "retryable",
+				AttemptStarted: true,
+				Error:          doErr.Error(),
+				Cause:          doErr,
+				LatencyMs:      latencyMs,
+				Committed:      false,
 			}, attemptOrder
 		}
 	}
@@ -2391,11 +2416,13 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				"status", upstreamStatus,
 				"err", readErr)
 			return streamAttemptResult{
-				Status:     "retryable",
-				StatusCode: upstreamStatus,
-				Error:      readErr.Error(),
-				LatencyMs:  latencyMs,
-				Committed:  false,
+				Status:         "retryable",
+				AttemptStarted: true,
+				StatusCode:     upstreamStatus,
+				Error:          readErr.Error(),
+				Cause:          readErr,
+				LatencyMs:      latencyMs,
+				Committed:      false,
 			}, attemptOrder
 		}
 
@@ -2414,11 +2441,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				}
 			}
 			return streamAttemptResult{
-				Status:     "non_retryable",
-				StatusCode: upstreamStatus,
-				Error:      errStr,
-				LatencyMs:  latencyMs,
-				Committed:  true,
+				Status:         "non_retryable",
+				AttemptStarted: true,
+				StatusCode:     upstreamStatus,
+				Error:          errStr,
+				LatencyMs:      latencyMs,
+				Committed:      true,
 			}, attemptOrder
 		}
 
@@ -2450,11 +2478,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 		}
 		return streamAttemptResult{
-			Status:     "retryable",
-			StatusCode: upstreamStatus,
-			Error:      errStr,
-			LatencyMs:  latencyMs,
-			RetryAfter: retryAfter,
+			Status:         "retryable",
+			AttemptStarted: true,
+			StatusCode:     upstreamStatus,
+			Error:          errStr,
+			LatencyMs:      latencyMs,
+			RetryAfter:     retryAfter,
 		}, attemptOrder
 	}
 
@@ -2485,7 +2514,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			status = model.AttemptOutcomeNonRetryable
 		}
 		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: string(status), Error: initialErr.Error(), LatencyMs: latencyMs, UpstreamStarted: true, RequestCost: c.requestPrice, RequestCostAvailable: c.requestPriceAvailable})
-		return streamAttemptResult{Status: status, Error: initialErr.Error(), LatencyMs: latencyMs, StatusCode: 0, Committed: false}, attemptOrder
+		return streamAttemptResult{Status: status, Error: initialErr.Error(), Cause: initialErr, AttemptStarted: true, LatencyMs: latencyMs, StatusCode: 0, Committed: false}, attemptOrder
 	}
 
 	ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
@@ -2528,13 +2557,10 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 	}
 	writeConverted := func(input []byte) error {
-		out := input
-		var err error
-		if converter != nil {
-			out, err = converter.Write(input)
-			if err != nil {
-				conversionErr = err
-			}
+		out, err := convertStreamChunk(converter, input)
+		if err != nil {
+			conversionErr = err
+			return err
 		}
 		if len(out) == 0 {
 			return err
@@ -2666,12 +2692,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				}
 			}
 			logEntry.Chain = append(logEntry.Chain, chainEntry)
-			return streamAttemptResult{Status: model.AttemptOutcomeConversionError, StatusCode: upstreamStatus, Error: chainEntry.Error, LatencyMs: attemptLatencyMs, StreamErr: conversionErr, Committed: false}, attemptOrder
+			return streamAttemptResult{Status: model.AttemptOutcomeConversionError, StatusCode: upstreamStatus, Error: chainEntry.Error, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: conversionErr, Committed: false}, attemptOrder
 		}
 		chainEntry.Status = "retryable"
 		chainEntry.Error = streamErr.Error()
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
-		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: 0, Error: chainEntry.Error, LatencyMs: attemptLatencyMs, StreamErr: streamErr, Committed: false}, attemptOrder
+		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: 0, Error: chainEntry.Error, Cause: streamErr, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: streamErr, Committed: false}, attemptOrder
 	}
 
 	switch {
@@ -2685,7 +2711,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = chainEntry.Error
-		return streamAttemptResult{Status: model.AttemptOutcomeConversionError, StatusCode: upstreamStatus, Error: chainEntry.Error, LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()), StreamErr: conversionErr, Committed: committed}, attemptOrder
+		return streamAttemptResult{Status: model.AttemptOutcomeConversionError, StatusCode: upstreamStatus, Error: chainEntry.Error, AttemptStarted: true, LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()), StreamErr: conversionErr, Committed: committed}, attemptOrder
 	case writeErr != nil && isClientDisconnect(writeErr):
 		// Client disconnected mid-stream. Do NOT penalize provider.
 		chainEntry.Status = "client_abort"
@@ -2697,13 +2723,14 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			"model", c.modelName,
 			"err", writeErr.Error())
 		return streamAttemptResult{
-			Status:       "client_abort",
-			StatusCode:   statusClientClosed,
-			Error:        "client disconnected: " + writeErr.Error(),
-			LatencyMs:    attemptLatencyMs,
-			FirstTokenMs: int(firstByteTime.Milliseconds()),
-			StreamErr:    writeErr,
-			Committed:    true,
+			Status:         "client_abort",
+			AttemptStarted: true,
+			StatusCode:     statusClientClosed,
+			Error:          "client disconnected: " + writeErr.Error(),
+			LatencyMs:      attemptLatencyMs,
+			FirstTokenMs:   int(firstByteTime.Milliseconds()),
+			StreamErr:      writeErr,
+			Committed:      true,
 		}, attemptOrder
 	case writeErr != nil:
 		// Other write error (e.g. response writer closed).
@@ -2712,13 +2739,14 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = writeErr.Error()
 		return streamAttemptResult{
-			Status:       "downstream_error",
-			StatusCode:   upstreamStatus,
-			Error:        writeErr.Error(),
-			LatencyMs:    attemptLatencyMs,
-			FirstTokenMs: int(firstByteTime.Milliseconds()),
-			StreamErr:    writeErr,
-			Committed:    true,
+			Status:         "downstream_error",
+			AttemptStarted: true,
+			StatusCode:     upstreamStatus,
+			Error:          writeErr.Error(),
+			LatencyMs:      attemptLatencyMs,
+			FirstTokenMs:   int(firstByteTime.Milliseconds()),
+			StreamErr:      writeErr,
+			Committed:      true,
 		}, attemptOrder
 	case streamErr != nil:
 		// If the stream already observed [DONE], the response was
@@ -2730,11 +2758,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			p.recordStreamSuccess(c)
 			logEntry.Chain = append(logEntry.Chain, chainEntry)
 			return streamAttemptResult{
-				Status:       "success",
-				StatusCode:   upstreamStatus,
-				LatencyMs:    attemptLatencyMs,
-				FirstTokenMs: int(firstByteTime.Milliseconds()),
-				Committed:    true,
+				Status:         "success",
+				AttemptStarted: true,
+				StatusCode:     upstreamStatus,
+				LatencyMs:      attemptLatencyMs,
+				FirstTokenMs:   int(firstByteTime.Milliseconds()),
+				Committed:      true,
 			}, attemptOrder
 		}
 		// Mid-stream read error BEFORE [DONE]. Distinguish upstream
@@ -2766,13 +2795,15 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = chainEntry.Error
 		return streamAttemptResult{
-			Status:       model.AttemptOutcome(chainEntry.Status),
-			StatusCode:   upstreamStatus,
-			Error:        chainEntry.Error,
-			LatencyMs:    attemptLatencyMs,
-			FirstTokenMs: int(firstByteTime.Milliseconds()),
-			StreamErr:    streamErr,
-			Committed:    true,
+			Status:         model.AttemptOutcome(chainEntry.Status),
+			Cause:          streamErr,
+			AttemptStarted: true,
+			StatusCode:     upstreamStatus,
+			Error:          chainEntry.Error,
+			LatencyMs:      attemptLatencyMs,
+			FirstTokenMs:   int(firstByteTime.Milliseconds()),
+			StreamErr:      streamErr,
+			Committed:      true,
 		}, attemptOrder
 	default:
 		// Clean EOF. If [DONE] was not seen, this is a mid-stream
@@ -2793,13 +2824,25 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		return streamAttemptResult{
-			Status:       model.AttemptOutcome(chainEntry.Status),
-			StatusCode:   upstreamStatus,
-			LatencyMs:    attemptLatencyMs,
-			FirstTokenMs: int(firstByteTime.Milliseconds()),
-			Committed:    committed,
+			Status:         model.AttemptOutcome(chainEntry.Status),
+			AttemptStarted: true,
+			StatusCode:     upstreamStatus,
+			LatencyMs:      attemptLatencyMs,
+			FirstTokenMs:   int(firstByteTime.Milliseconds()),
+			Committed:      committed,
 		}, attemptOrder
 	}
+}
+
+func convertStreamChunk(converter StreamConverter, input []byte) ([]byte, error) {
+	if converter == nil {
+		return input, nil
+	}
+	out, err := converter.Write(input)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // recordStreamSuccess records a successful streaming attempt: hit counter and
@@ -3001,12 +3044,15 @@ func (bp *bufferPool) Put(b []byte) { bp.pool.Put(b) }
 // build the top-level log entry, decide retry vs. failover, and compute
 // cumulative latency.
 type streamAttemptResult struct {
-	Status       model.AttemptOutcome
-	StatusCode   int
-	Error        string
-	LatencyMs    int // attempt wall-clock (for retryable entries; sum from caller)
-	FirstTokenMs int // success only: time from attemptStart to first body byte
-	Committed    bool
+	Status         model.AttemptOutcome
+	StatusCode     int
+	Error          string
+	Cause          error
+	AttemptStarted bool
+	BudgetExceeded bool
+	LatencyMs      int // attempt wall-clock (for retryable entries; sum from caller)
+	FirstTokenMs   int // success only: time from attemptStart to first body byte
+	Committed      bool
 
 	// RetryAfter is the upstream's Retry-After header value (parsed
 	// via parseRetryAfter) for retryable 429/503 responses. Non-zero
