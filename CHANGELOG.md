@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-07-18
+
+### Added
+
+- **Multi-protocol gateway**: native pass-through for OpenAI Responses (`/v1/responses`), Anthropic Messages (`/v1/messages`), and Gemini (`/v1beta/models/{model}:{action}`) endpoints, alongside Chat Completions.
+- **Single-hop protocol conversion**: Messages↔Responses and Chat↔Responses request/response conversion, streaming and non-streaming, with fail-closed converters that reject unmappable semantics instead of silently dropping them.
+- **Feature-based routing**: request feature inspection gates candidate selection; provider-level and per-model capability overrides resolve in three layers (model > provider > default), with observe/enforce modes.
+- **Scored routing strategies**: `score_within_tier` and `cost_first` reorder candidates within a tier using per-route-mode recent performance windows, with deterministic exploration for `score_within_tier`.
+- **Per-model protocol routing**: rule targets can declare inbound→upstream protocol conversion per model.
+- **Routing diagnostics**: replay score panel, shadow strategy comparisons, and per-route-mode runtime sample windows (10 minutes, 64 attempts) exposed through the diagnostics API.
+
+### Changed
+
+- **Model pricing** moved from rules to provider models; missing or invalid prices sort after known prices without disabling health scoring.
+- **Routing strategy copy** now states that strategies affect the production routing order; the Shadow panel is labeled as read-only diagnostics.
+
+### Fixed
+
+- **Streaming failure routing**: typed failure causes; first-byte budget expiry performs zero dials, metrics, or stats; converter byte+error outputs are discarded; failures after commit abort instead of failing over.
+- Truncated downstream streams abort the connection instead of presenting a clean EOF.
+- Model rule names are now unique at the database level; migration detects existing duplicates and fails loudly.
+- Targets whose provider was deleted are skipped so remaining targets still fail over; observe mode now allows unconfigured features on conversion paths, matching native behavior.
+- Client disconnects before the first upstream byte now log the chosen provider, model, and route instead of empty fields.
+- Model test handles array-form content, higher `max_tokens`, and `finish_reason: length` diagnostics.
+- Replay score details and shadow comparisons are localized and easier to read.
+
 ## [0.5.1] - 2026-07-12
 
 ### Added
