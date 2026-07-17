@@ -486,7 +486,7 @@ func (s *Service) TestModelChat(providerID, modelName string, stream bool) (*mod
 	requestBody := map[string]interface{}{
 		"model":      modelName,
 		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 32,
+		"max_tokens": 512,
 		"stream":     stream,
 	}
 	bodyBytes, err := json.Marshal(requestBody)
@@ -551,7 +551,7 @@ func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.Mo
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -572,26 +572,61 @@ func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.Mo
 		}
 	}
 
-	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	response := chatTestContentText(chatResp.Choices[0].Message.Content)
 	finishReason := chatResp.Choices[0].FinishReason
-	if content == "" {
-		errMsg := "empty response content"
-		if finishReason != "" {
-			errMsg = fmt.Sprintf("empty response content (finish_reason: %s)", finishReason)
-		}
+	if strings.TrimSpace(response) == "" {
 		return &model.ModelChatTestResult{
 			OK:           false,
-			Error:        errMsg,
+			Error:        emptyChatTestContentError(finishReason),
 			LatencyMs:    latencyMs(),
 			FinishReason: finishReason,
 		}
 	}
 	return &model.ModelChatTestResult{
 		OK:           true,
-		Response:     chatResp.Choices[0].Message.Content,
+		Response:     response,
 		LatencyMs:    latencyMs(),
 		FinishReason: finishReason,
 	}
+}
+
+// chatTestContentText extracts visible text from OpenAI-compatible message
+// content. Some gateways return content as structured parts instead of a
+// plain string; treat those parts as first-class successful test output.
+func chatTestContentText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, part := range parts {
+		var value string
+		if textRaw, ok := part["text"]; ok && json.Unmarshal(textRaw, &value) == nil {
+			builder.WriteString(value)
+			continue
+		}
+		if contentRaw, ok := part["content"]; ok && json.Unmarshal(contentRaw, &value) == nil {
+			builder.WriteString(value)
+		}
+	}
+	return builder.String()
+}
+
+func emptyChatTestContentError(finishReason string) string {
+	if finishReason == "length" {
+		return "model reached the max_tokens limit before producing visible content (usually consumed by reasoning); increase the model test token limit"
+	}
+	if finishReason != "" {
+		return fmt.Sprintf("empty response content (finish_reason: %s)", finishReason)
+	}
+	return "empty response content"
 }
 
 type countingReader struct {
@@ -659,7 +694,7 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content string `json:"content"`
+					Content json.RawMessage `json:"content"`
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
@@ -673,7 +708,7 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 		}
 
 		if len(chunk.Choices) > 0 {
-			delta := chunk.Choices[0].Delta.Content
+			delta := chatTestContentText(chunk.Choices[0].Delta.Content)
 			if chunk.Choices[0].FinishReason != "" {
 				finishReason = chunk.Choices[0].FinishReason
 			}
@@ -703,13 +738,9 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 		}
 	}
 	if content == "" {
-		errMsg := "empty response content"
-		if finishReason != "" {
-			errMsg = fmt.Sprintf("empty response content (finish_reason: %s)", finishReason)
-		}
 		return &model.ModelChatTestResult{
 			OK:           false,
-			Error:        errMsg,
+			Error:        emptyChatTestContentError(finishReason),
 			LatencyMs:    latencyMs(),
 			FinishReason: finishReason,
 		}
