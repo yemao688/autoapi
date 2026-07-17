@@ -3,6 +3,8 @@
 package metrics
 
 import (
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -379,6 +381,35 @@ func (r *Registry) CurrentSnapshot(k model.TargetMetricKey) Snapshot {
 
 func (r *Registry) CurrentRouteSnapshot(k model.RouteModeKey) RouteSnapshot {
 	return r.RouteSnapshot(k, r.clock())
+}
+
+// CurrentRouteSnapshots returns detached recent snapshots for all route modes
+// belonging to targetID. It applies the same monotonic clock and ten-minute
+// horizon as CurrentRouteSnapshot, and returns route modes in stable key order.
+func (r *Registry) CurrentRouteSnapshots(targetID string) []RouteSnapshot {
+	now := r.clock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if now.Before(r.lastIngest) {
+		now = r.lastIngest
+	}
+	targetID = strings.TrimSpace(targetID)
+	keys := make([]model.RouteModeKey, 0)
+	for key := range r.routeEntries {
+		if key.TargetID != targetID {
+			continue
+		}
+		r.pruneRouteKeyLocked(key, now)
+		if _, ok := r.routeEntries[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return routeKeyLess(keys[i], keys[j]) })
+	out := make([]RouteSnapshot, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, r.routeSnapshotLocked(key, now))
+	}
+	return out
 }
 
 func (r *Registry) RouteSnapshot(k model.RouteModeKey, now time.Time) RouteSnapshot {

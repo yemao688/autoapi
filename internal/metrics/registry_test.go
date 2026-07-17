@@ -309,3 +309,44 @@ func TestRegistryIngestOrderAndTargetTimesAreMonotonic(t *testing.T) {
 		t.Fatalf("route did not use ingest order: %+v", got)
 	}
 }
+
+func TestCurrentRouteSnapshotsByTargetFiltersSortsPrunesAndDetaches(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r := New(8, time.Hour, WithClock(func() time.Time { return now }))
+	add := func(target, inbound, upstream string, at time.Time, firstByte int64) {
+		if !r.Submit(model.TargetMetricEvent{
+			Key:       model.TargetMetricKey{TargetID: target, ProviderID: "p", ModelName: "m"},
+			RouteMode: model.RouteModeKey{TargetID: target, InboundProtocol: inbound, UpstreamProtocol: upstream},
+			Kind:      model.MetricEventAttempt, AttemptOutcome: model.AttemptOutcomeSuccess,
+			FirstByteMs: firstByte, At: at,
+		}) {
+			t.Fatal("route event rejected")
+		}
+	}
+	add("target", "openai_responses", "openai_chat", now, 2)
+	add("target", "openai_chat", "openai_chat", now, 1)
+	add("target", "anthropic_messages", "openai_responses", now, 3)
+	now = now.Add(routeHorizon + time.Nanosecond)
+	add("target", "openai_responses", "openai_chat", now, 2)
+	add("target", "openai_chat", "openai_chat", now, 1)
+	add("other", "openai_chat", "openai_chat", now, 99)
+
+	got := r.CurrentRouteSnapshots("target")
+	if len(got) != 2 {
+		t.Fatalf("filtered/pruned routes = %#v", got)
+	}
+	if got[0].Key.InboundProtocol != "openai_chat" || got[1].Key.InboundProtocol != "openai_responses" {
+		t.Fatalf("route order = %#v", got)
+	}
+	if got[0].FirstByteMs[0] != 1 {
+		t.Fatalf("first route samples = %#v", got[0].FirstByteMs)
+	}
+	got[0].FirstByteMs[0] = 999
+	again := r.CurrentRouteSnapshots("target")
+	if again[0].FirstByteMs[0] != 1 {
+		t.Fatalf("returned samples alias registry state: %#v", again[0].FirstByteMs)
+	}
+	if len(r.CurrentRouteSnapshots("other")) != 1 {
+		t.Fatal("target filtering changed other target state")
+	}
+}

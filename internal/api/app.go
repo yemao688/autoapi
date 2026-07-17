@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	stdruntime "runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,13 @@ type Deps struct {
 
 type MetricsRegistry interface {
 	CurrentSnapshot(model.TargetMetricKey) metrics.Snapshot
+}
+
+// routeSnapshotsByTarget is optional so existing API test doubles and
+// integrations remain source-compatible. Route-aware registries provide all
+// exact route modes for a target without making the API guess a protocol.
+type routeSnapshotsByTarget interface {
+	CurrentRouteSnapshots(targetID string) []metrics.RouteSnapshot
 }
 
 // StoreService is the persistence interface implemented by internal/store.
@@ -210,7 +218,7 @@ func (a *App) GetTargetDiagnostics() ([]model.TargetShadowScore, error) {
 			providerBad := pErr != nil || p == nil
 			endpoint := "/v1/chat/completions"
 			key := model.TargetMetricKey{TargetID: target.ID, ProviderID: target.ProviderID, ModelName: target.ModelName, Endpoint: endpoint}
-			ms := a.deps.Metrics.CurrentSnapshot(key)
+			ms, routeModes, routeFresh := diagnosticMetrics(a.deps.Metrics, key)
 			m, priceErr := a.deps.Store.GetModel(target.ProviderID, target.ModelName)
 			priceBad := priceErr != nil || m == nil
 			cost := requestCost(m, 1+target.MaxRetries)
@@ -227,7 +235,11 @@ func (a *App) GetTargetDiagnostics() ([]model.TargetShadowScore, error) {
 			if p != nil {
 				name = p.Name
 			}
-			meta = append(meta, model.TargetShadowScore{TargetID: target.ID, RuleID: rule.ID, RuleName: rule.Name, ProviderID: target.ProviderID, ProviderName: name, ModelName: target.ModelName, CircuitState: breakerState(breakers, target.ProviderID)})
+			basis := "legacy_target_snapshot"
+			if routeFresh {
+				basis = "runtime_route_window"
+			}
+			meta = append(meta, model.TargetShadowScore{TargetID: target.ID, RuleID: rule.ID, RuleName: rule.Name, ProviderID: target.ProviderID, ProviderName: name, ModelName: target.ModelName, CircuitState: breakerState(breakers, target.ProviderID), SampleBasis: basis, RouteModes: routeModes})
 			providerUnavailable = append(providerUnavailable, providerBad)
 			priceUnavailable = append(priceUnavailable, priceBad)
 		}
@@ -240,6 +252,13 @@ func (a *App) GetTargetDiagnostics() ([]model.TargetShadowScore, error) {
 		v.Tier = converted.Tier
 		v.Metrics = converted.Metrics
 		v.MetricsFresh = converted.MetricsFresh
+		v.SampleBasis = meta[i].SampleBasis
+		v.RouteModes = meta[i].RouteModes
+		if v.SampleBasis == "runtime_route_window" {
+			// Route freshness is defined by an attempt count, not by the
+			// optional timestamp carried by a detached snapshot.
+			v.MetricsFresh = inputs[i].Metrics.Attempts > 0
+		}
 		v.Endpoint = converted.Endpoint
 		v.EndpointAssumed = converted.EndpointAssumed
 		v.Reliability = converted.Reliability
@@ -292,7 +311,7 @@ func (a *App) GetModelRuleShadowComparisons() ([]model.ModelRuleShadowComparison
 			key := model.TargetMetricKey{TargetID: target.ID, ProviderID: target.ProviderID, ModelName: target.ModelName, Endpoint: endpoint}
 			var snapshot metrics.Snapshot
 			if a.deps.Metrics != nil {
-				snapshot = a.deps.Metrics.CurrentSnapshot(key)
+				snapshot, _, _ = diagnosticMetrics(a.deps.Metrics, key)
 			}
 			p, pErr := a.deps.Store.GetProvider(target.ProviderID)
 			providerOK := pErr == nil && p != nil && p.Enabled
@@ -345,6 +364,67 @@ func breakerState(m map[string]proxy.BreakerStatus, id string) string {
 		return b.State.String()
 	}
 	return "closed"
+}
+
+// diagnosticMetrics prefers live exact route-mode windows and falls back to
+// the historical target snapshot for registries that predate route metrics.
+// Runtime samples are real upstream attempts in the in-memory exact route
+// window (10 minutes, max 64 samples per route), not request-log rows or
+// restored cumulative history.
+func diagnosticMetrics(reg MetricsRegistry, key model.TargetMetricKey) (metrics.Snapshot, []string, bool) {
+	if reg == nil {
+		return metrics.Snapshot{}, nil, false
+	}
+	legacy := reg.CurrentSnapshot(key)
+	var routes []metrics.RouteSnapshot
+	routeCapable := false
+	if all, ok := reg.(routeSnapshotsByTarget); ok {
+		routeCapable = true
+		routes = all.CurrentRouteSnapshots(key.TargetID)
+	}
+	if len(routes) == 0 {
+		if routeCapable {
+			// A route-aware registry deliberately does not treat a restored
+			// cumulative target summary as a current runtime sample.
+			return metrics.Snapshot{Key: key}, nil, false
+		}
+		return legacy, nil, false
+	}
+	// Optional aggregate providers may return route entries in map order.
+	sort.Slice(routes, func(i, j int) bool {
+		return routeLabel(routes[i].Key) < routeLabel(routes[j].Key)
+	})
+	out := metrics.Snapshot{Key: key}
+	modes := make([]string, 0, len(routes))
+	for _, r := range routes {
+		out.Attempts += r.Attempts
+		out.Successes += r.Successes
+		out.Failures += r.Failures
+		out.Status429 += r.Status429
+		out.Status5xx += r.Status5xx
+		out.Transport += r.Transport
+		out.Truncated += r.Truncated
+		out.ConversionLocal += r.ConversionLocal
+		out.ClientAborts += r.ClientAborts
+		out.Downstream += r.Downstream
+		out.FirstByteMs = append(out.FirstByteMs, r.FirstByteMs...)
+		out.TTFTMs = append(out.TTFTMs, r.TTFTMs...)
+		if r.LastUsed.After(out.LastUsed) {
+			out.LastUsed = r.LastUsed
+		}
+		if r.LastSuccess.After(out.LastSuccess) {
+			out.LastSuccess = r.LastSuccess
+		}
+		if r.LastFailure.After(out.LastFailure) {
+			out.LastFailure = r.LastFailure
+		}
+		modes = append(modes, routeLabel(r.Key))
+	}
+	return out, modes, out.Attempts > 0
+}
+
+func routeLabel(k model.RouteModeKey) string {
+	return k.InboundProtocol + " -> " + k.UpstreamProtocol
 }
 
 // SetInitialVisibility records Wails' StartHidden option before startup.

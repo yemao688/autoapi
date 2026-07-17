@@ -1099,6 +1099,8 @@ export namespace model {
 	    tier: number;
 	    metrics: TargetRuntimeSummary;
 	    metrics_fresh: boolean;
+	    sample_basis?: string;
+	    route_modes?: string[];
 	    endpoint: string;
 	    endpoint_assumed: boolean;
 	    reliability: number;
@@ -1131,6 +1133,8 @@ export namespace model {
 	        this.tier = source["tier"];
 	        this.metrics = this.convertValues(source["metrics"], TargetRuntimeSummary);
 	        this.metrics_fresh = source["metrics_fresh"];
+	        this.sample_basis = source["sample_basis"];
+	        this.route_modes = source["route_modes"];
 	        this.endpoint = source["endpoint"];
 	        this.endpoint_assumed = source["endpoint_assumed"];
 	        this.reliability = source["reliability"];

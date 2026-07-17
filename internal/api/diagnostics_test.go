@@ -32,6 +32,7 @@ func (s *diagnosticsStore) GetModel(providerID, modelName string) (*model.Model,
 type diagnosticsService struct{ BusinessService }
 type diagnosticsMetrics struct {
 	snapshots map[model.TargetMetricKey]metrics.Snapshot
+	routes    map[model.RouteModeKey]metrics.RouteSnapshot
 }
 
 type shadowProxy struct {
@@ -43,6 +44,16 @@ func (p shadowProxy) BreakerStatuses() map[string]proxy.BreakerStatus { return p
 
 func (m diagnosticsMetrics) CurrentSnapshot(k model.TargetMetricKey) metrics.Snapshot {
 	return m.snapshots[k]
+}
+
+func (m diagnosticsMetrics) CurrentRouteSnapshots(targetID string) []metrics.RouteSnapshot {
+	out := make([]metrics.RouteSnapshot, 0)
+	for k, v := range m.routes {
+		if k.TargetID == targetID {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func diagnosticApp(s *diagnosticsStore, m diagnosticsMetrics) *App {
@@ -127,5 +138,33 @@ func TestGetTargetDiagnosticsLocalProviderFailureDoesNotAbortBatch(t *testing.T)
 	}
 	if out[1].Availability == "unavailable" || out[1].ProviderName != "good" {
 		t.Fatalf("good target = %#v", out[1])
+	}
+}
+
+func TestGetTargetDiagnosticsUsesRecentRouteSample(t *testing.T) {
+	target := model.ModelRuleTarget{ID: "t", ProviderID: "p", ModelName: "m", Enabled: true}
+	s := &diagnosticsStore{rules: []model.ModelRule{{ID: "r", Name: "rule", Enabled: true, Targets: []model.ModelRuleTarget{target}}}, providers: map[string]*model.Provider{"p": {ID: "p", Name: "provider"}}, models: map[string]*model.Model{"p:m": {Name: "m"}}}
+	route := model.RouteModeKey{TargetID: "t", InboundProtocol: "openai_responses", UpstreamProtocol: "openai_chat"}
+	out, err := diagnosticApp(s, diagnosticsMetrics{snapshots: map[model.TargetMetricKey]metrics.Snapshot{}, routes: map[model.RouteModeKey]metrics.RouteSnapshot{route: {Key: route, Attempts: 2, Successes: 1}}}).GetTargetDiagnostics()
+	if err != nil || len(out) != 1 {
+		t.Fatalf("diagnostics = %#v, err=%v", out, err)
+	}
+	if !out[0].MetricsFresh || out[0].SampleCount != 2 {
+		t.Fatalf("route sample was not exposed: %#v", out[0])
+	}
+	if out[0].SampleBasis != "runtime_route_window" || len(out[0].RouteModes) != 1 || out[0].RouteModes[0] != "openai_responses -> openai_chat" {
+		t.Fatalf("route sample explanation = %#v", out[0])
+	}
+}
+
+func TestGetTargetDiagnosticsWithoutRouteSampleRemainsNoSample(t *testing.T) {
+	target := model.ModelRuleTarget{ID: "t", ProviderID: "p", ModelName: "m", Enabled: true}
+	s := &diagnosticsStore{rules: []model.ModelRule{{ID: "r", Enabled: true, Targets: []model.ModelRuleTarget{target}}}, providers: map[string]*model.Provider{"p": {ID: "p"}}, models: map[string]*model.Model{"p:m": {Name: "m"}}}
+	out, err := diagnosticApp(s, diagnosticsMetrics{snapshots: map[model.TargetMetricKey]metrics.Snapshot{}, routes: map[model.RouteModeKey]metrics.RouteSnapshot{}}).GetTargetDiagnostics()
+	if err != nil || len(out) != 1 {
+		t.Fatalf("diagnostics = %#v, err=%v", out, err)
+	}
+	if out[0].MetricsFresh || out[0].SampleCount != 0 {
+		t.Fatalf("unexpected sample: %#v", out[0])
 	}
 }
