@@ -163,6 +163,74 @@ function targetProviderName(target: model.ModelRuleTarget): string {
   return providerNameMap.value[target.provider_id] || t('common.unknown')
 }
 
+function shadowTarget(rule: model.ModelRule, targetId: string): model.ModelRuleTarget | undefined {
+  return rule.targets.find((target) => target.id === targetId)
+}
+
+function shortTargetId(targetId: string): string {
+  return targetId ? targetId.slice(0, 8) : '—'
+}
+
+function shadowTargetLabel(rule: model.ModelRule, targetId: string, tier?: number): string {
+  const target = shadowTarget(rule, targetId)
+  if (!target) return t('modelRules.shadow.unknownTarget', { id: shortTargetId(targetId) })
+  const name = [targetProviderName(target), target.model_name || t('modelRules.targetDefault')].join(' / ')
+  const targetTier = typeof tier === 'number' ? tier : target.tier
+  return `${name} · T${targetTier > 0 ? targetTier : 1}`
+}
+
+function shadowStrategyLabel(strategy: string | undefined): string {
+  switch (strategy) {
+    case 'priority_first': return t('modelRules.shadow.strategyPriority')
+    case 'score_within_tier': return t('modelRules.shadow.strategyScore')
+    case 'cost_first': return t('modelRules.shadow.strategyCost')
+    default: return strategy ? t('modelRules.shadow.strategyOther', { value: readableShadowValue(strategy) }) : '—'
+  }
+}
+
+function shadowAvailabilityLabel(candidate: model.ShadowPlanCandidate): string {
+  if (candidate.available) return t('modelRules.shadow.available')
+  return shadowReasonLabel(candidate.reason)
+}
+
+function shadowReasonLabel(reason: string | undefined): string {
+  switch (reason) {
+    case 'unavailable': return t('modelRules.shadow.unavailable')
+    case 'disabled': return t('modelRules.shadow.reasonDisabled')
+    case 'circuit_open': return t('modelRules.shadow.reasonCircuitOpen')
+    case 'cooldown': return t('modelRules.shadow.reasonCooldown')
+    default: return reason ? t('modelRules.shadow.reasonOther', { value: readableShadowValue(reason) }) : t('modelRules.shadow.unavailable')
+  }
+}
+
+function shadowCircuitLabel(state: string | undefined): string {
+  switch (state) {
+    case 'closed': return t('modelRules.shadow.circuitClosed')
+    case 'open': return t('modelRules.shadow.circuitOpen')
+    case 'half_open': return t('modelRules.shadow.circuitHalfOpen')
+    default: return state ? t('modelRules.shadow.circuitOther', { value: readableShadowValue(state) }) : ''
+  }
+}
+
+function readableShadowValue(value: string): string {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function shadowAssumptionLabel(assumption: string): string {
+  switch (assumption) {
+    case 'capabilities_assumed_satisfied': return t('modelRules.shadow.assumeCapabilities')
+    case 'budget_assumed_satisfied': return t('modelRules.shadow.assumeBudget')
+    case 'cooldown_state_assumed_inactive': return t('modelRules.shadow.assumeCooldown')
+    case 'retry_and_stream_unchanged': return t('modelRules.shadow.assumeRetryStream')
+    case 'circuit_state_assumed_closed/unavailable': return t('modelRules.shadow.assumeCircuit')
+    default:
+      if (assumption.startsWith('circuit_state_observed:')) return t('modelRules.shadow.assumeCircuitObserved', { state: shadowCircuitLabel(assumption.slice('circuit_state_observed:'.length)) })
+      if (assumption.startsWith('provider_error:')) return t('modelRules.shadow.assumeProviderError')
+      if (assumption.startsWith('price_error:')) return t('modelRules.shadow.assumePriceError')
+      return t('modelRules.shadow.assumeOther', { value: readableShadowValue(assumption) })
+  }
+}
+
 function formatHits(n: number): string {
   return n.toLocaleString()
 }
@@ -219,7 +287,7 @@ function diagnosticStatus(rule: model.ModelRule, target: model.ModelRuleTarget):
   if (diagnosticsLoading.value) return t('modelRules.diagnostics.loading')
   if (diagnosticsError.value) return t('modelRules.diagnostics.unavailable')
   const diagnostic = diagnosticFor(rule, target)
-  if (!diagnostic || !diagnostic.metrics_fresh) return t('modelRules.diagnostics.noSamples')
+  if (!diagnostic || !diagnostic.metrics_fresh) return t('modelRules.diagnostics.noSamplesDetail')
   return ''
 }
 
@@ -919,7 +987,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                           <span>{{ t('modelRules.diagnostics.capacity') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.capacity) }}</span>
                           <span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.cost_efficiency) }}</span>
                           <span>{{ t('modelRules.diagnostics.estimatedCost') }} {{ diagnosticNumber(targetDiagnostic(rule, target)?.estimated_cost, ' USD') }}</span>
-                          <span class="diag-samples">{{ t('modelRules.diagnostics.samples') }} {{ diagnosticNumber(diagnosticSampleCount(targetDiagnostic(rule, target))) }} · {{ t('modelRules.diagnostics.confidence') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.confidence) }}</span>
+                          <span class="diag-samples" :title="t('modelRules.diagnostics.sampleBasis')">{{ t('modelRules.diagnostics.samples') }} {{ diagnosticNumber(diagnosticSampleCount(targetDiagnostic(rule, target))) }} · {{ t('modelRules.diagnostics.confidence') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.confidence) }}</span>
                           <span v-if="diagnosticCostStatus(targetDiagnostic(rule, target))" class="diag-note">{{ diagnosticCostStatus(targetDiagnostic(rule, target)) }}</span>
                         </template>
                         <span v-else class="diag-note">{{ diagnosticStatus(rule, target) }}</span>
@@ -973,10 +1041,12 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                     <div v-else-if="shadowError" class="diag-note">{{ t('modelRules.shadow.error') }}</div>
                     <div v-else-if="!shadowFor(rule)" class="text-muted">{{ t('modelRules.shadow.empty') }}</div>
                     <template v-else>
-                      <div class="shadow-meta"><span>{{ t('modelRules.shadow.strategy') }}: {{ shadowFor(rule)?.strategy || '—' }}</span><span>{{ t('modelRules.shadow.original') }}: {{ shadowArray(shadowFor(rule)?.original_order).join(' → ') || '—' }}</span><span>{{ t('modelRules.shadow.planned') }}: {{ shadowArray(shadowFor(rule)?.planned_order).join(' → ') || '—' }}</span></div>
-                      <div v-if="shadowArray(shadowFor(rule)?.candidates).length" class="shadow-list"><strong>{{ t('modelRules.shadow.candidates') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.candidates)" :key="candidate.target_id">{{ candidate.target_id }} · T{{ candidate.tier }} · {{ candidate.available ? t('modelRules.shadow.available') : candidate.reason || t('modelRules.shadow.unavailable') }}<em v-if="candidate.circuit_state"> · {{ candidate.circuit_state }}</em></span></div>
-                      <div v-if="shadowArray(shadowFor(rule)?.rejected).length" class="shadow-list"><strong>{{ t('modelRules.shadow.rejected') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.rejected)" :key="candidate.target_id">{{ candidate.target_id }} · {{ candidate.reason || t('modelRules.shadow.unavailable') }}<em v-if="candidate.circuit_state"> · {{ candidate.circuit_state }}</em></span></div>
-                      <div v-if="shadowArray(shadowFor(rule)?.assumptions).length" class="shadow-list"><strong>{{ t('modelRules.shadow.assumptions') }}</strong><span v-for="assumption in shadowArray(shadowFor(rule)?.assumptions)" :key="assumption">{{ assumption }}</span></div>
+                      <div class="shadow-meta"><span>{{ t('modelRules.shadow.strategy') }}: {{ shadowStrategyLabel(shadowFor(rule)?.strategy) }}</span></div>
+                      <div class="shadow-order"><strong>{{ t('modelRules.shadow.original') }}</strong><div class="shadow-sequence"><span v-for="targetId in shadowArray(shadowFor(rule)?.original_order)" :key="targetId" class="shadow-chip" :title="targetId">{{ shadowTargetLabel(rule, targetId) }}</span><span v-if="!shadowArray(shadowFor(rule)?.original_order).length" class="text-muted">—</span></div></div>
+                      <div class="shadow-order"><strong>{{ t('modelRules.shadow.planned') }}</strong><div class="shadow-sequence"><span v-for="targetId in shadowArray(shadowFor(rule)?.planned_order)" :key="targetId" class="shadow-chip shadow-chip-planned" :title="targetId">{{ shadowTargetLabel(rule, targetId) }}</span><span v-if="!shadowArray(shadowFor(rule)?.planned_order).length" class="text-muted">—</span></div></div>
+                      <div v-if="shadowArray(shadowFor(rule)?.candidates).length" class="shadow-list"><strong>{{ t('modelRules.shadow.candidates') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.candidates)" :key="candidate.target_id" class="shadow-candidate"><span class="shadow-candidate-name" :title="candidate.target_id">{{ shadowTargetLabel(rule, candidate.target_id, candidate.tier) }}</span><span>{{ shadowAvailabilityLabel(candidate) }}</span><em v-if="candidate.circuit_state">{{ shadowCircuitLabel(candidate.circuit_state) }}</em></span></div>
+                      <div v-if="shadowArray(shadowFor(rule)?.rejected).length" class="shadow-list"><strong>{{ t('modelRules.shadow.rejected') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.rejected)" :key="candidate.target_id" class="shadow-candidate"><span class="shadow-candidate-name" :title="candidate.target_id">{{ shadowTargetLabel(rule, candidate.target_id, candidate.tier) }}</span><span>{{ shadowReasonLabel(candidate.reason) }}</span><em v-if="candidate.circuit_state">{{ shadowCircuitLabel(candidate.circuit_state) }}</em></span></div>
+                      <div v-if="shadowArray(shadowFor(rule)?.assumptions).length" class="shadow-list"><strong>{{ t('modelRules.shadow.assumptions') }}</strong><span v-for="assumption in shadowArray(shadowFor(rule)?.assumptions)" :key="assumption">{{ shadowAssumptionLabel(assumption) }}</span></div>
                     </template>
                   </div>
                 </section>
@@ -1246,10 +1316,17 @@ html[data-theme="dark"] .rule-drag-handle:hover {
 .shadow-comparison-toggle .shadow-chevron { margin-left: auto; font-size: 16px; transition: transform 120ms ease; transform: rotate(90deg); }
 .shadow-comparison-open .shadow-chevron { transform: rotate(-90deg); }
 .shadow-comparison-body { display: flex; flex-direction: column; gap: 8px; padding: 5px 0 3px; color: var(--muted); font-size: 11px; }
-.shadow-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-family: var(--font-mono); font-size: 10.5px; }
+.shadow-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 10.5px; }
+.shadow-order { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.shadow-order > strong { flex: 0 0 82px; color: var(--fg); font-weight: 600; }
+.shadow-sequence { display: flex; flex: 1 1 280px; flex-wrap: wrap; gap: 4px; }
+.shadow-chip { display: inline-flex; max-width: 100%; padding: 3px 6px; border: 1px solid var(--border, rgba(0, 0, 0, 0.08)); border-radius: 5px; background: var(--bg, rgba(0, 0, 0, 0.02)); color: var(--fg); font-size: 10.5px; overflow-wrap: anywhere; }
+.shadow-chip-planned { border-color: color-mix(in srgb, var(--accent, #0071e3) 30%, var(--border, rgba(0, 0, 0, 0.08))); }
 .shadow-list { display: flex; flex-direction: column; gap: 3px; }
 .shadow-list strong { color: var(--fg); font-weight: 600; }
-.shadow-list span { padding-left: 8px; overflow-wrap: anywhere; }
+.shadow-list > span { padding-left: 8px; overflow-wrap: anywhere; }
+.shadow-candidate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.shadow-candidate-name { color: var(--fg); }
 .shadow-list em { color: var(--warning); font-style: normal; }
 .target-provider {
   font-size: 13px;
