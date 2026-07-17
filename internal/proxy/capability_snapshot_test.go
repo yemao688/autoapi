@@ -151,9 +151,17 @@ func TestConversionToolsRequireExplicitCapability(t *testing.T) {
 	}}
 	providers := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
 	caps := newCapabilitySnapshot(nil, providers)
-	req := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools}}}
+	// Observe mode allows an unknown feature on a conversion target, matching
+	// native routing. It remains eligible when no capability row is configured.
+	req := &InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages, Enforcement: model.FeatureCapabilityEnforcementObserve, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools}}}
+	if candidates, err := selectCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps); err != nil || len(candidates) != 1 {
+		t.Fatalf("unknown tools feature should be allowed in observe mode, candidates=%+v err=%v", candidates, err)
+	}
+
+	// Enforce mode still rejects the same unknown feature.
+	req.Enforcement = model.FeatureCapabilityEnforcementEnforce
 	if _, err := selectCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, caps); err == nil || !errors.Is(err, errUnsupportedFeature) {
-		t.Fatalf("tools without explicit capability should be rejected, got %v", err)
+		t.Fatalf("unknown tools feature should be rejected in enforce mode, got %v", err)
 	}
 
 	caps = newCapabilitySnapshot([]model.ProviderCapability{
@@ -165,6 +173,17 @@ func TestConversionToolsRequireExplicitCapability(t *testing.T) {
 	}
 	if len(conv) != 1 {
 		t.Fatalf("expected one conversion candidate, got %d", len(conv))
+	}
+
+	// An explicit false capability is authoritative in both modes.
+	falseCaps := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
+	}, providers)
+	for _, enforcement := range []string{model.FeatureCapabilityEnforcementObserve, model.FeatureCapabilityEnforcementEnforce} {
+		req.Enforcement = enforcement
+		if _, err := selectCandidates(req, rule, nil, func(id string) (*model.Provider, error) { return providers[id], nil }, falseCaps); err == nil || !errors.Is(err, errUnsupportedFeature) {
+			t.Fatalf("explicitly disabled tools feature should be rejected in %s mode, got %v", enforcement, err)
+		}
 	}
 }
 
@@ -518,11 +537,25 @@ func TestResolveCandidatesUsesBulkSnapshotsWithoutProviderFallback(t *testing.T)
 	st.bulkProviderErr = nil
 	st.bulkCapabilityErr = nil
 	st.providers = map[string]*model.Provider{}
-	if _, err := p.resolveCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIChat}); err == nil || st.getProviderCalls != 0 || !strings.Contains(err.Error(), "matched provider not found") {
+	if _, err := p.resolveCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIChat}); err == nil || st.getProviderCalls != 0 || !strings.Contains(err.Error(), "no available provider") {
 		t.Fatalf("missing provider fallback/error: err=%v get=%d", err, st.getProviderCalls)
 	}
 	if len(st.bulkProviderIDs) != 1 || st.bulkProviderIDs[0] != "p" {
 		t.Fatalf("provider IDs were not deduplicated: %v", st.bulkProviderIDs)
+	}
+}
+
+func TestSelectCandidatesMissingProviderSkipsToValidTarget(t *testing.T) {
+	providers := map[string]*model.Provider{"valid": {ID: "valid", Enabled: true}}
+	rule := []model.ModelRule{{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{
+		{ProviderID: "missing", ModelName: "m", Enabled: true},
+		{ProviderID: "valid", ModelName: "m", Enabled: true},
+	}}}
+	candidates, err := selectCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIChat}, rule, nil, func(id string) (*model.Provider, error) {
+		return providers[id], nil
+	})
+	if err != nil || len(candidates) != 1 || candidates[0].provider.ID != "valid" {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
 	}
 }
 

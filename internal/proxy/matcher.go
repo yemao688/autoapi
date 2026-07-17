@@ -169,7 +169,10 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		}
 		p, err := getProvider(t.ProviderID)
 		if err != nil {
-			return nil, fmt.Errorf("matched provider not found")
+			continue
+		}
+		if p == nil {
+			continue
 		}
 		// Disabled providers cause every target that references them to be
 		// skipped, regardless of circuit-breaker state.
@@ -281,11 +284,12 @@ func edgeSupportsRequest(req *InboundRequest, edge conversionEdge, capabilities 
 	if req.Requirements == nil {
 		return true
 	}
+	enforce := req.Enforcement == model.FeatureCapabilityEnforcementEnforce
 	for _, feature := range req.Requirements.Features {
 		if feature == model.FeatureStreaming && !edge.SupportsStream {
 			return false
 		}
-		supported, _ := capabilities.featureEnabled(providerID, modelName, edge.To, string(feature), true)
+		supported, _ := capabilities.featureEnabled(providerID, modelName, edge.To, string(feature), enforce)
 		if !supported {
 			return false
 		}
