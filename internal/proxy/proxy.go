@@ -2272,6 +2272,14 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 
 	attemptStart := time.Now()
 	result.AttemptStarted = true
+	// Set provider/model fields NOW (in case of pre-response abort,
+	// mid-stream abort, or panic) so the log entry always carries the
+	// chosen provider on every terminal path.
+	logEntry.ProviderID = c.provider.ID
+	logEntry.ProviderName = c.provider.Name
+	logEntry.Model = c.modelName
+	logEntry.RouteID = c.ruleID
+	logEntry.RouteLabel = c.ruleLabel
 	resp, doErr := client.Do(attemptReq)
 
 	if doErr != nil {
@@ -2374,14 +2382,6 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	// We have a response. Defer Close so every path (success, fail,
 	// panic) releases the upstream connection.
 	defer resp.Body.Close()
-
-	// Set provider/model fields NOW (in case of mid-stream abort or
-	// panic) so the log entry always carries the chosen provider.
-	logEntry.ProviderID = c.provider.ID
-	logEntry.ProviderName = c.provider.Name
-	logEntry.Model = c.modelName
-	logEntry.RouteID = c.ruleID
-	logEntry.RouteLabel = c.ruleLabel
 
 	upstreamStatus := resp.StatusCode
 

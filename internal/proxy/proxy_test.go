@@ -4130,6 +4130,112 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 	}
 }
 
+// TestStreaming_ClientDisconnectBeforeFirstByte_RecordsProviderIdentity is a
+// regression test for the production gap where a client disconnect BEFORE the
+// upstream sent response headers (Do error, context canceled) logged status
+// 499 with EMPTY top-level provider/model/route fields, even though the
+// attempt had genuinely hit the upstream (chain_json showed the provider).
+//
+// Setup:
+//   - Upstream hangs without writing response headers.
+//   - Client cancels while the proxy is blocked in client.Do.
+//
+// Expectations:
+//   - Final log has StatusCode 499, one chain entry with
+//     Status == "client_abort".
+//   - Top-level ProviderID/ProviderName/Model/RouteID/RouteLabel carry the
+//     chosen candidate (not the handler-initialized client-facing values).
+func TestStreaming_ClientDisconnectBeforeFirstByte_RecordsProviderIdentity(t *testing.T) {
+	hangCh := make(chan struct{})
+	var upstreamHits int
+	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		// Never write headers; block until the proxy's transport
+		// tears down the connection after the client disconnects.
+		select {
+		case <-hangCh:
+		case <-r.Context().Done():
+		}
+	}))
+	defer hangSrv.Close()
+	defer close(hangCh)
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: hangSrv.URL, Enabled: true},
+		},
+		rules: []model.ModelRule{
+			{
+				ID: "r1", Name: "x", Enabled: true,
+				Targets: []model.ModelRuleTarget{
+					{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+				},
+			},
+		},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	clientCtx, clientCancel := context.WithCancel(context.Background())
+	defer clientCancel()
+
+	req, _ := http.NewRequestWithContext(clientCtx, "POST",
+		proxySrv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"x","messages":[],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+
+	// The request blocks in Do because the upstream never responds;
+	// cancel after the proxy has dialed the upstream.
+	respCh := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		respCh <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if upstreamHits != 1 {
+		t.Fatalf("expected upstream to be hit before cancel, got %d", upstreamHits)
+	}
+	clientCancel()
+	<-respCh
+
+	// Give the proxy time to observe the disconnect, then drain the
+	// async log writer.
+	time.Sleep(300 * time.Millisecond)
+	p.Shutdown()
+
+	log, ok := store.LastLog()
+	if !ok {
+		t.Fatalf("expected log entry")
+	}
+	if log.StatusCode != statusClientClosed {
+		t.Fatalf("expected status 499, got %d (err=%q)", log.StatusCode, log.Error)
+	}
+	if log.ProviderID != "p0" || log.ProviderName != "P0" {
+		t.Fatalf("expected provider identity p0/P0, got %q/%q", log.ProviderID, log.ProviderName)
+	}
+	if log.Model != "m0" {
+		t.Fatalf("expected upstream model m0, got %q", log.Model)
+	}
+	if log.RouteID != "r1" {
+		t.Fatalf("expected route id r1, got %q", log.RouteID)
+	}
+	if len(log.Chain) != 1 {
+		t.Fatalf("expected 1 chain entry, got %d: %+v", len(log.Chain), log.Chain)
+	}
+	if log.Chain[0].Status != "client_abort" {
+		t.Fatalf("expected chain status=client_abort, got %q (err=%q)",
+			log.Chain[0].Status, log.Chain[0].Error)
+	}
+}
+
 // TestStreaming_DoneThenClientCancel_IsSuccess is a regression test for the
 // bug observed in production logs: a streaming request that completes
 // SUCCESSFULLY (full SSE body including the [DONE] marker is delivered to
