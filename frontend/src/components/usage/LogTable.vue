@@ -6,7 +6,7 @@ import { api } from '@/api/bridge'
 
 import { useProviderStyle } from '@/composables/useProviderStyle'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 interface Props {
   logs: model.RequestLog[]
@@ -53,6 +53,74 @@ async function replay(log: model.RequestLog) {
 
 function replayScore(value: number): string {
   return Number.isFinite(value) ? value.toFixed(0) : '—'
+}
+
+function replayOutcomeLabel(outcome: string | undefined): string {
+  switch (outcome) {
+    case 'success': return t('usage.logTable.replayOutcomeSuccess')
+    case 'partial':
+    case 'partial_success': return t('usage.logTable.replayOutcomePartial')
+    case 'failure':
+    case 'failed': return t('usage.logTable.replayOutcomeFailed')
+    default: return outcome ? t('usage.logTable.replayOutcomeOther', { value: readableInternalValue(outcome) }) : t('usage.logTable.replayUnknown')
+  }
+}
+
+function availabilityLabel(availability: string | undefined): string {
+  switch (availability) {
+    case 'available': return t('usage.logTable.replayAvailable')
+    case 'unavailable': return t('usage.logTable.replayUnavailableStatus')
+    default: return availability ? t('usage.logTable.replayStatusOther', { value: readableInternalValue(availability) }) : t('usage.logTable.replayUnknown')
+  }
+}
+
+function readableInternalValue(value: string): string {
+  if (locale.value.startsWith('zh')) return value
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
+}
+
+function replayReasonLabel(reason: string | undefined): string {
+  switch (reason) {
+    case 'disabled': return t('usage.logTable.replayReasonDisabled')
+    case 'circuit_open': return t('usage.logTable.replayReasonCircuitOpen')
+    case 'cooldown': return t('usage.logTable.replayReasonCooldown')
+    default: return reason ? t('usage.logTable.replayReasonOther', { value: readableInternalValue(reason) }) : ''
+  }
+}
+
+function replayLimitationLabel(value: string): string {
+  if (value.includes('historical breaker state unavailable')) return t('usage.logTable.replayHistoricalBreakerUnavailable')
+  return t('usage.logTable.replayLimitationValue', { value: readableInternalValue(value) })
+}
+
+function replayWarningLabel(value: string): string {
+  if (value.includes('historical breaker state unavailable')) return t('usage.logTable.replayHistoricalBreakerUnavailable')
+  return t('usage.logTable.replayWarningValue', { value: readableInternalValue(value) })
+}
+
+function replaySelectedAttempt(result: model.ReplayResult): model.ReplayAttemptScore | undefined {
+  return result.attempts?.find(attempt => attempt.target_id === result.selected_target)
+}
+
+function replayTargetLabel(result: model.ReplayResult | undefined): string {
+  if (!result) return t('usage.logTable.replayUnknown')
+  const selected = replaySelectedAttempt(result)
+  const provider = selected?.attempt?.provider_name || selected?.provider_id
+  const modelName = selected?.model_name || selected?.attempt?.model_name
+  if (provider || modelName) return [provider, modelName].filter(Boolean).join(' / ')
+  return result.selected_target ? t('usage.logTable.replayTargetShort', { value: result.selected_target.slice(0, 8) }) : t('usage.logTable.replayUnknown')
+}
+
+function replayAttemptProvider(replayAttempt: model.ReplayAttemptScore): string {
+  return replayAttempt.attempt?.provider_name || replayAttempt.provider_id || t('usage.logTable.replayUnknown')
+}
+
+function replayAttemptModel(replayAttempt: model.ReplayAttemptScore): string {
+  return replayAttempt.model_name || replayAttempt.attempt?.model_name || t('usage.logTable.replayUnknown')
+}
+
+function replayAttemptTargetId(replayAttempt: model.ReplayAttemptScore): string {
+  return replayAttempt.target_id ? replayAttempt.target_id.slice(0, 8) : '—'
 }
 
 function costLabel(value: number, available: boolean | undefined, decimals: number): string {
@@ -418,9 +486,10 @@ function hitModel(log: model.RequestLog): { provider: string; model: string } | 
                   <div>
                     <div class="log-detail-label">{{ t('usage.logTable.replay') }}</div>
                     <div v-if="replayFor(log)" class="replay-summary">
-                      <span>{{ t('usage.logTable.replayOutcome') }}: {{ replayFor(log)?.request_outcome || t('usage.logTable.replayUnknown') }}</span>
-                      <span>{{ t('usage.logTable.replaySelectedTarget') }}: {{ replayFor(log)?.selected_target || '—' }}</span>
+                      <strong class="replay-conclusion">{{ replayOutcomeLabel(replayFor(log)?.request_outcome) }}</strong>
+                      <span>{{ t('usage.logTable.replaySelectedTarget') }}: {{ replayTargetLabel(replayFor(log)) }}</span>
                       <span>{{ t('usage.logTable.replayRule') }}: {{ replayFor(log)?.rule_name || t('usage.logTable.replayNoRule') }}</span>
+                      <span>{{ t('usage.logTable.replayEndpoint') }}: {{ replayFor(log)?.endpoint || '—' }}</span>
                       <span v-if="replayFor(log)?.endpoint_assumed" class="replay-note">{{ t('usage.logTable.replayEndpointAssumed') }}</span>
                     </div>
                   </div>
@@ -428,13 +497,13 @@ function hitModel(log: model.RequestLog): { provider: string; model: string } | 
                 </div>
                 <div v-if="replayErrors.has(log.id)" class="replay-error">{{ t('usage.logTable.replayUnavailable') }}</div>
                 <template v-else-if="replayFor(log)">
-                  <div v-if="replayFor(log)?.warnings?.length" class="replay-warnings"><strong>{{ t('usage.logTable.replayWarnings') }}</strong><span v-for="warning in replayFor(log)?.warnings" :key="warning">{{ warning }}</span></div>
+                  <div v-if="replayFor(log)?.warnings?.length" class="replay-warnings"><strong>{{ t('usage.logTable.replayWarnings') }}</strong><span v-for="warning in replayFor(log)?.warnings" :key="warning">{{ replayWarningLabel(warning) }}</span></div>
                   <div v-if="replayFor(log)?.attempts?.length" class="replay-attempts">
                     <div class="replay-attempts-title">{{ t('usage.logTable.replayAttempts') }} · {{ t('usage.logTable.replayScores') }}</div>
                     <div v-for="(replayAttempt, index) in replayFor(log)?.attempts" :key="replayAttempt.attempt.attempt_order || index" class="replay-attempt">
-                      <div class="replay-attempt-main"><span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: replayAttemptEntry(replayAttempt).attempt_order }) }}</span><span>{{ replayAttempt.provider_id || replayAttemptEntry(replayAttempt).provider_name || '—' }}</span><span class="text-mono text-muted">{{ replayAttempt.model_name || replayAttemptEntry(replayAttempt).model_name || '—' }}</span><span class="text-muted">{{ t('usage.logTable.replayTarget') }}: {{ replayAttempt.target_id || '—' }}</span><span class="badge" :class="chainStatusClass(replayAttemptEntry(replayAttempt).status)">{{ chainStatusLabel(replayAttemptEntry(replayAttempt).status) }}</span></div>
-                      <div class="replay-score-grid"><span>{{ t('modelRules.diagnostics.score') }} {{ replayScore(replayAttempt.score.overall) }}</span><span>{{ t('modelRules.diagnostics.reliability') }} {{ replayScore(replayAttempt.score.reliability) }}</span><span>{{ t('modelRules.diagnostics.latencyScore') }} {{ replayScore(replayAttempt.score.latency) }}</span><span>{{ t('modelRules.diagnostics.ttftScore') }} {{ replayScore(replayAttempt.score.ttft) }}</span><span>{{ t('modelRules.diagnostics.capacity') }} {{ replayScore(replayAttempt.score.capacity) }}</span><span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ replayScore(replayAttempt.score.cost_efficiency) }}</span><span>{{ t('usage.logTable.replayEstimatedCost') }} {{ costLabel(replayAttempt.score.estimated_cost, replayAttempt.score.cost?.available, 4) }}</span><span>{{ t('usage.logTable.replayAvailability') }}: {{ replayAttempt.score.availability || t('usage.logTable.replayUnknown') }}{{ replayAttempt.score.reason ? ` · ${replayAttempt.score.reason}` : '' }}</span></div>
-                      <div v-if="replayAttempt.target_missing || replayAttempt.provider_missing || replayAttempt.replay_limitation || !replayAttempt.score.metrics_fresh" class="replay-attempt-notes"><span v-if="replayAttempt.target_missing">{{ t('usage.logTable.replayMissingTarget') }}</span><span v-if="replayAttempt.provider_missing">{{ t('usage.logTable.replayMissingProvider') }}</span><span v-if="!replayAttempt.score.metrics_fresh">{{ t('usage.logTable.replayNoSamples') }}</span><span v-if="replayAttempt.replay_limitation">{{ t('usage.logTable.replayLimitation') }}: {{ replayAttempt.replay_limitation }}</span></div>
+                      <div class="replay-attempt-main"><span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: replayAttemptEntry(replayAttempt).attempt_order }) }}</span><span class="replay-attempt-provider">{{ replayAttemptProvider(replayAttempt) }}</span><span class="text-mono text-muted">{{ replayAttemptModel(replayAttempt) }}</span><span v-if="replayAttempt.target_id" class="replay-target-id text-muted" :title="replayAttempt.target_id">{{ t('usage.logTable.replayTarget') }} {{ replayAttemptTargetId(replayAttempt) }}</span><span class="badge" :class="chainStatusClass(replayAttemptEntry(replayAttempt).status)">{{ chainStatusLabel(replayAttemptEntry(replayAttempt).status) }}</span></div>
+                      <div class="replay-score-grid"><span class="replay-score-overall">{{ t('modelRules.diagnostics.score') }} {{ replayScore(replayAttempt.score.overall) }}</span><span>{{ t('modelRules.diagnostics.reliabilityPlain') }} {{ replayScore(replayAttempt.score.reliability) }}</span><span>{{ t('modelRules.diagnostics.latencyPlain') }} {{ replayScore(replayAttempt.score.latency) }}</span><span>{{ t('modelRules.diagnostics.ttftPlain') }} {{ replayScore(replayAttempt.score.ttft) }}</span><span>{{ t('modelRules.diagnostics.capacityPlain') }} {{ replayScore(replayAttempt.score.capacity) }}</span><span>{{ t('modelRules.diagnostics.costEfficiencyPlain') }} {{ replayScore(replayAttempt.score.cost_efficiency) }}</span><span>{{ t('usage.logTable.replayEstimatedCost') }} {{ costLabel(replayAttempt.score.estimated_cost, replayAttempt.score.cost?.available, 4) }}</span><span>{{ t('usage.logTable.replayAvailability') }}: {{ availabilityLabel(replayAttempt.score.availability) }}<template v-if="replayAttempt.score.reason"> · {{ replayReasonLabel(replayAttempt.score.reason) }}</template></span></div>
+                      <div v-if="replayAttempt.target_missing || replayAttempt.provider_missing || replayAttempt.replay_limitation || !replayAttempt.score.metrics_fresh" class="replay-attempt-notes"><span v-if="replayAttempt.target_missing">{{ t('usage.logTable.replayMissingTarget') }}</span><span v-if="replayAttempt.provider_missing">{{ t('usage.logTable.replayMissingProvider') }}</span><span v-if="!replayAttempt.score.metrics_fresh">{{ t('usage.logTable.replayNoSamples') }}</span><span v-if="replayAttempt.replay_limitation">{{ t('usage.logTable.replayLimitation') }}: {{ replayLimitationLabel(replayAttempt.replay_limitation) }}</span></div>
                     </div>
                   </div>
                   <div v-else class="replay-muted">{{ t('usage.logTable.replayNoChain') }}</div>
@@ -786,6 +855,7 @@ function hitModel(log: model.RequestLog): { provider: string; model: string } | 
 }
 .replay-header { justify-content: space-between; gap: 12px; }
 .replay-summary { margin-top: 4px; color: var(--muted); font-size: 11.5px; }
+.replay-conclusion { color: var(--fg); font-size: 12px; }
 .replay-button { padding: 4px 9px; font-size: 11.5px; flex-shrink: 0; }
 .replay-note,
 .replay-error,
@@ -797,7 +867,10 @@ function hitModel(log: model.RequestLog): { provider: string; model: string } | 
 .replay-attempts { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .replay-attempts-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 .replay-attempt { padding: 7px 8px; border-radius: 6px; background: var(--bg, rgba(0, 0, 0, 0.02)); }
+.replay-attempt-provider { color: var(--fg); font-weight: 500; }
+.replay-target-id { font-family: var(--font-mono); font-size: 10px; }
 .replay-score-grid { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 5px; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.replay-score-overall { color: var(--fg); font-weight: 600; }
 .replay-attempt-notes { margin-top: 5px; font-size: 11px; }
 @media (max-width: 700px) {
   .replay-header { align-items: flex-start; }
