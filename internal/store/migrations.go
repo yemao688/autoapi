@@ -548,6 +548,22 @@ INNER JOIN providers p ON p.id = c.provider_id;
 DROP TABLE provider_capabilities;
 ALTER TABLE provider_capabilities_new RENAME TO provider_capabilities;`,
 	},
+	{
+		ID: "030_model_rules_name_unique",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) {
+			var name string
+			var count int
+			err := tx.QueryRow(`SELECT name, COUNT(*) FROM model_rules GROUP BY name HAVING COUNT(*) > 1 LIMIT 1`).Scan(&name, &count)
+			if err != nil && err != sql.ErrNoRows {
+				return false, fmt.Errorf("check duplicate model rule names: %w", err)
+			}
+			if err == nil {
+				return false, fmt.Errorf("cannot enforce model rule name uniqueness: name %q has %d rows", name, count)
+			}
+			return modelRulesNameUniqueIndexExists(tx)
+		},
+		SQL: `CREATE UNIQUE INDEX idx_model_rules_name_unique ON model_rules(name);`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists
@@ -777,6 +793,47 @@ func tableExists(tx *sql.Tx, table string) (bool, error) {
 		return false, fmt.Errorf("store: check table exists: %w", err)
 	}
 	return true, nil
+}
+
+func modelRulesNameUniqueIndexExists(tx *sql.Tx) (bool, error) {
+	rows, err := tx.Query(`PRAGMA index_list(model_rules)`)
+	if err != nil {
+		return false, fmt.Errorf("store: list model_rules indexes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq, unique, partial int
+		var name, origin string
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			return false, fmt.Errorf("store: scan model_rules index: %w", err)
+		}
+		if unique == 0 {
+			continue
+		}
+		info, err := tx.Query(`PRAGMA index_info(` + name + `)`)
+		if err != nil {
+			return false, fmt.Errorf("store: inspect model_rules index %q: %w", name, err)
+		}
+		var columns []string
+		for info.Next() {
+			var seqno, cid int
+			var column string
+			if err := info.Scan(&seqno, &cid, &column); err != nil {
+				info.Close()
+				return false, err
+			}
+			columns = append(columns, column)
+		}
+		if err := info.Err(); err != nil {
+			info.Close()
+			return false, err
+		}
+		info.Close()
+		if len(columns) == 1 && columns[0] == "name" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // tableHasFKToParent reports whether the named table has a single-column foreign key

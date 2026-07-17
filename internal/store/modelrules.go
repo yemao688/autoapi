@@ -144,10 +144,8 @@ func (s *Store) CreateModelRule(in model.ModelRuleInput) (*model.ModelRule, erro
 	}
 
 	if err := s.execTx(func(tx *sql.Tx) error {
-		// Enforce name uniqueness before insert. The CHECK here is the
-		// application-level guarantee; the schema has no UNIQUE constraint
-		// on name yet (the column already exists from the old `routes` table
-		// and we keep description-less backwards compatibility).
+		// Keep this check for the friendly UI error; the database unique index
+		// is the final guard against concurrent writers.
 		var count int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM model_rules WHERE name = ?`, r.Name).Scan(&count); err != nil {
 			return fmt.Errorf("store: check unique name: %w", err)

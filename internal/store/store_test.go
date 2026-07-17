@@ -453,6 +453,19 @@ func TestModelRule_NameUniqueness(t *testing.T) {
 	}
 }
 
+func TestModelRule_NameUniquenessDatabaseConstraint(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateModelRule(model.ModelRuleInput{Name: "database-guard"}); err != nil {
+		t.Fatalf("CreateModelRule: %v", err)
+	}
+	_, err := s.db.Exec(`INSERT INTO model_rules
+		(id, name, enabled, first_byte_timeout_ms, strategy, display_order, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "direct-duplicate", "database-guard", 1, 0, "priority_first", 0, nowMs(), nowMs())
+	if err == nil {
+		t.Fatal("expected database unique constraint to reject duplicate model rule name")
+	}
+}
+
 // TestModelRule_UpdateRenameRejectsDuplicate verifies that renaming a rule
 // to an already-taken name is rejected by the store.
 func TestModelRule_UpdateRenameRejectsDuplicate(t *testing.T) {
