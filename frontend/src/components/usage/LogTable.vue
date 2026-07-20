@@ -314,6 +314,12 @@ function hitModel(log: model.RequestLog): { provider: string; model: string } | 
   return null
 }
 
+function apiKeyLabel(log: model.RequestLog): string {
+  const raw = log as unknown as Record<string, unknown>
+  if (typeof raw.api_key_id !== 'string' || !raw.api_key_id) return '—'
+  return typeof raw.api_key_name === 'string' && raw.api_key_name.trim() ? raw.api_key_name : t('usage.logTable.unknownToken')
+}
+
 </script>
 
 <template>
@@ -441,6 +447,7 @@ function hitModel(log: model.RequestLog): { provider: string; model: string } | 
           <td :colspan="columns">
             <div class="log-detail">
               <div class="log-detail-grid">
+                <div class="log-detail-item"><span class="log-detail-label">{{ t('usage.logTable.token') }}</span><span class="log-detail-value">{{ apiKeyLabel(log) }}</span></div>
                 <div class="log-detail-item">
                   <span class="log-detail-label">{{ t('usage.logTable.requestId') }}</span>
                   <span class="log-detail-value text-mono">{{ log.request_id || '—' }}</span>

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"autoapi/internal/model"
@@ -39,6 +40,8 @@ type Service struct {
 	httpClient *http.Client
 	encKey     []byte // 32-byte AES key; loaded at construction from keyDir
 	startedAt  time.Time
+	testMu     sync.Mutex
+	tests      map[string]context.CancelFunc
 }
 
 // ProxyRef is the minimal proxy surface needed to compute live system health.
@@ -64,6 +67,7 @@ func New(s *store.Store, proxy ProxyRef, keyDir string) *Service {
 		httpClient: &http.Client{}, // no global timeout; per-request context timeout used
 		encKey:     encKey,
 		startedAt:  time.Now(),
+		tests:      make(map[string]context.CancelFunc),
 	}
 	slog.Info("service: initialized", "key_dir", keyDir, "key_bytes", len(encKey))
 	return svc
@@ -472,7 +476,7 @@ func (s *Service) TestModelLatency(providerID, modelName string) (*model.ModelTe
 // the supplied model name and returns the result (success or a structured
 // error) without raising an error for downstream failures. The stream flag
 // controls whether the request is made in streaming mode.
-func (s *Service) TestModelChat(providerID, modelName string, stream bool) (*model.ModelChatTestResult, error) {
+func (s *Service) TestModelChat(providerID, modelName, protocol string, stream bool, testID string) (*model.ModelChatTestResult, error) {
 	p, err := s.store.GetProvider(providerID)
 	if err != nil {
 		return nil, fmt.Errorf("provider not found: %w", err)
@@ -483,21 +487,38 @@ func (s *Service) TestModelChat(providerID, modelName string, stream bool) (*mod
 		return nil, fmt.Errorf("failed to resolve API key: %w", err)
 	}
 
-	requestBody := map[string]interface{}{
-		"model":      modelName,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 512,
-		"stream":     stream,
+	var requestBody map[string]interface{}
+	var path string
+	switch protocol {
+	case "chat":
+		path, requestBody = "/v1/chat/completions", map[string]interface{}{"model": modelName, "messages": []map[string]string{{"role": "user", "content": "hi"}}, "max_tokens": 512, "stream": stream}
+	case "responses":
+		path, requestBody = "/v1/responses", map[string]interface{}{"model": modelName, "input": "hi", "max_output_tokens": 512, "stream": stream, "store": false}
+	case "messages":
+		path, requestBody = "/v1/messages", map[string]interface{}{"model": modelName, "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "max_tokens": 512, "stream": stream}
+	case "gemini":
+		path, requestBody = "/v1beta/models/"+url.PathEscape(modelName)+":generateContent", map[string]interface{}{"contents": []map[string]interface{}{{"role": "user", "parts": []map[string]string{{"text": "hi"}}}}}
+		if stream {
+			path = "/v1beta/models/" + url.PathEscape(modelName) + ":streamGenerateContent?alt=sse"
+		}
+	default:
+		return nil, fmt.Errorf("unsupported model test protocol %q (expected responses, messages, chat, or gemini)", protocol)
 	}
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, err
 	}
 
-	chatURL := store.JoinProviderURL(p.BaseURL, "/v1/chat/completions")
+	chatURL := store.JoinProviderURL(p.BaseURL, path)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	if testID != "" {
+		s.testMu.Lock()
+		s.tests[testID] = cancel
+		s.testMu.Unlock()
+		defer func() { s.testMu.Lock(); delete(s.tests, testID); s.testMu.Unlock() }()
+	}
 
 	start := time.Now()
 	result := func(ok bool, response, errMsg, finishReason string) *model.ModelChatTestResult {
@@ -515,7 +536,15 @@ func (s *Service) TestModelChat(providerID, modelName string, stream bool) (*mod
 		return result(false, "", err.Error(), ""), nil
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if protocol == "gemini" {
+		req.Header.Set("x-goog-api-key", apiKey)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if protocol == "messages" {
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -529,7 +558,10 @@ func (s *Service) TestModelChat(providerID, modelName string, stream bool) (*mod
 	}
 
 	if stream {
-		return s.parseChatStream(resp.Body, start), nil
+		if protocol == "chat" {
+			return s.parseChatStream(resp.Body, start), nil
+		}
+		return s.parseGenericStream(resp.Body, start), nil
 	}
 
 	// Non-stream mode: read up to 64 KiB + 1 byte so we can detect overflow.
@@ -542,7 +574,83 @@ func (s *Service) TestModelChat(providerID, modelName string, stream bool) (*mod
 	if len(respBody) == maxBodySize {
 		return result(false, "", "response body too large (>64 KiB)", ""), nil
 	}
-	return s.parseChatNonStream(respBody, start), nil
+	if protocol == "chat" {
+		return s.parseChatNonStream(respBody, start), nil
+	}
+	return parseGenericNonStream(respBody, start), nil
+}
+
+func (s *Service) CancelModelTest(testID string) bool {
+	s.testMu.Lock()
+	cancel, ok := s.tests[testID]
+	s.testMu.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
+}
+
+func parseGenericNonStream(body []byte, start time.Time) *model.ModelChatTestResult {
+	var v interface{}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return &model.ModelChatTestResult{Error: fmt.Sprintf("parse response: %v", err), LatencyMs: int(time.Since(start).Milliseconds())}
+	}
+	text := genericText(v)
+	if text == "" {
+		return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: int(time.Since(start).Milliseconds())}
+	}
+	return &model.ModelChatTestResult{OK: true, Response: text, LatencyMs: int(time.Since(start).Milliseconds())}
+}
+func genericText(v interface{}) string {
+	var b strings.Builder
+	var walk func(interface{})
+	walk = func(x interface{}) {
+		switch q := x.(type) {
+		case map[string]interface{}:
+			for _, k := range []string{"text", "output_text", "content", "delta"} {
+				if z, ok := q[k].(string); ok {
+					b.WriteString(z)
+				}
+			}
+			for k, z := range q {
+				if k != "text" && k != "output_text" && k != "delta" {
+					walk(z)
+				}
+			}
+		case []interface{}:
+			for _, z := range q {
+				walk(z)
+			}
+		}
+	}
+	walk(v)
+	return b.String()
+}
+func (s *Service) parseGenericStream(body io.Reader, start time.Time) *model.ModelChatTestResult {
+	cr := &countingReader{r: body}
+	scanner := bufio.NewScanner(io.LimitReader(cr, 256*1024))
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	var b strings.Builder
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "[DONE]" {
+			break
+		}
+		var v interface{}
+		if json.Unmarshal([]byte(line), &v) == nil {
+			b.WriteString(genericText(v))
+		}
+	}
+	if scanner.Err() != nil {
+		return &model.ModelChatTestResult{Error: scanner.Err().Error(), LatencyMs: int(time.Since(start).Milliseconds())}
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: int(time.Since(start).Milliseconds())}
+	}
+	return &model.ModelChatTestResult{OK: true, Response: b.String(), LatencyMs: int(time.Since(start).Milliseconds())}
 }
 
 func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.ModelChatTestResult {

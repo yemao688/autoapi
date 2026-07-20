@@ -107,7 +107,15 @@ func (m *mockStore) GetModelCapabilitiesForModels(refs []model.ProviderModelRef)
 	return m.modelCapabilities, nil
 }
 
-func (m *mockStore) ListAPIKeys() ([]model.ApiKey, error) { return m.apiKeys, nil }
+func (m *mockStore) GetAPIKey(id string) (*model.ApiKey, error) {
+	for i := range m.apiKeys {
+		if m.apiKeys[i].ID == id {
+			k := m.apiKeys[i]
+			return &k, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
 
 func (m *mockStore) GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error) {
 	m.getProviderKeyCalls++
@@ -580,7 +588,7 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -621,7 +629,7 @@ func TestHandlerMetricsCountsRealAttemptsAndRequest(t *testing.T) {
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true}, "p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p0", ModelName: "m0", Enabled: true}, {ProviderID: "p1", ModelName: "m1", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	reg := metrics.New(16, time.Hour)
 	p := New(st, &mockService{}, 0, nil, reg)
@@ -661,7 +669,7 @@ func TestHandlerPreflightMetricsAreRequestOnly(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			st := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}, providers: map[string]*model.Provider{}, rules: nil}
+			st := &mockStore{apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}, providers: map[string]*model.Provider{}, rules: nil}
 			reg := metrics.New(16, time.Hour)
 			p := New(st, &mockService{}, 0, nil, reg)
 			defer p.Shutdown()
@@ -703,7 +711,7 @@ func TestHandlerStreamMetricsSuccessAndTruncate(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+			st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 			spy := &metricSpy{}
 			p := New(st, &mockService{}, 0, nil)
 			p.metricSink = spy
@@ -756,7 +764,7 @@ func TestHandlerMetricSinkPanicDoesNotChangeResponse(t *testing.T) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer srv.Close()
-	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(st, &mockService{}, 0, nil)
 	p.metricSink = panicMetricSink{}
 	defer p.Shutdown()
@@ -783,7 +791,7 @@ func TestMessagesClientFallsBackToResponsesProvider(t *testing.T) {
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-resp", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -817,7 +825,7 @@ func TestMessagesSystemArrayNativePassThroughAndConversionPreflight(t *testing.T
 		st := &mockStore{
 			providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
 			rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(st, &mockService{}, 0, nil)
 		defer p.Shutdown()
@@ -851,7 +859,7 @@ func TestMessagesSystemArrayNativePassThroughAndConversionPreflight(t *testing.T
 		st := &mockStore{
 			providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 			rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(st, &mockService{}, 0, nil)
 		defer p.Shutdown()
@@ -928,7 +936,7 @@ func TestConversionPreservationAvailabilityE2E(t *testing.T) {
 			st := &mockStore{
 				providers: map[string]*model.Provider{"p": &provider},
 				rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-				apiKeys:   []model.ApiKey{{ID: "key1"}},
+				apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 			}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
@@ -969,7 +977,7 @@ func TestResponsesClientFallsBackToMessagesProvider(t *testing.T) {
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-msg", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1003,7 +1011,7 @@ func TestChatResponsesNonStreamingConversionE2E(t *testing.T) {
 		st := &mockStore{
 			providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 			rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-			apiKeys:      []model.ApiKey{{ID: "key1"}},
+			apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 			capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
 		}
 		p := New(st, &mockService{}, 0, nil)
@@ -1036,7 +1044,7 @@ func TestChatResponsesNonStreamingConversionE2E(t *testing.T) {
 		st := &mockStore{
 			providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
 			rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-			apiKeys:      []model.ApiKey{{ID: "key1"}},
+			apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 			capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}},
 		}
 		p := New(st, &mockService{}, 0, nil)
@@ -1070,7 +1078,7 @@ func TestChatToResponsesNonStreamingE2E(t *testing.T) {
 	st := &mockStore{
 		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
 	}
 	p := New(st, &mockService{}, 0, nil)
@@ -1112,7 +1120,7 @@ func TestResponsesToChatNonStreamingE2E(t *testing.T) {
 	st := &mockStore{
 		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
 		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}},
 	}
 	p := New(st, &mockService{}, 0, nil)
@@ -1159,7 +1167,7 @@ func TestChatResponseConversionErrorFailsOverToNextCandidate(t *testing.T) {
 			{ID: "t0", ProviderID: "p0", ModelName: "u0", Enabled: true},
 			{ID: "t1", ProviderID: "p1", ModelName: "u1", Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{
 			{ProviderID: "p0", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
 			{ProviderID: "p1", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
@@ -1231,7 +1239,7 @@ func TestConversionRouteBreakerFiltersAfterThreeFailuresWithoutAffectingNative(t
 			{ProviderID: "p", ModelName: "native-upstream", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: true, Source: "manual"},
 			{ProviderID: "p", ModelName: "native-upstream", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1280,7 +1288,7 @@ func TestAllChatResponseConversionErrorsReturn502(t *testing.T) {
 			server.Close()
 		}
 	}()
-	st := &mockStore{providers: providers, rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: targets}}, apiKeys: []model.ApiKey{{ID: "key1"}}, capabilities: capabilities}
+	st := &mockStore{providers: providers, rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: targets}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}, capabilities: capabilities}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
@@ -1309,7 +1317,7 @@ func TestChatStreamRoutesToResponsesProvider(t *testing.T) {
 	store := &mockStore{
 		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}},
-		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
 	}
 	keys := &countingKeyService{inner: &mockService{}}
@@ -1348,7 +1356,7 @@ func TestResponsesStreamPrefersChatEdgeOverMessagesTarget(t *testing.T) {
 			{ID: "t0", ProviderID: "chat", Enabled: true},
 			{ID: "t1", ProviderID: "messages", Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{
 			{ProviderID: "chat", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: true, Source: "manual"},
 			{ProviderID: "messages", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
@@ -1382,7 +1390,7 @@ func TestResponsesClientStreamsFromMessagesProvider(t *testing.T) {
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-msg", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1410,7 +1418,7 @@ func TestProtocolConversionErrorLogsChainWithoutProviderBreaker(t *testing.T) {
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1456,7 +1464,7 @@ func TestMessagesClientToResponsesProviderStreamingUpstreamErrorIsReached(t *tes
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream-resp", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1492,7 +1500,7 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
 			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1571,7 +1579,7 @@ func TestStreamingConversionPartialByteStallDeadlineFailover(t *testing.T) {
 			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true, FirstTokenTimeoutSeconds: 1},
 			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1633,7 +1641,7 @@ func TestMessagesClientResponsesProviderStreamingSuccessE2E(t *testing.T) {
 			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"output_tokens\":3}}}\n\n")
 	}))
 	defer srv.Close()
-	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "upstream", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "upstream", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"client-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
@@ -1675,7 +1683,7 @@ func TestResponsesNativeStreamingPassthroughE2E(t *testing.T) {
 		_, _ = io.WriteString(w, upstream)
 	}))
 	defer srv.Close()
-	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "native", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "native", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
 	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"client-model","stream":true,"input":"hi"}`))
@@ -1730,7 +1738,7 @@ func TestStreamingConversionPostCommitFailure(t *testing.T) {
 			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
 			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -1826,7 +1834,7 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -1894,7 +1902,7 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -1942,7 +1950,7 @@ func TestFailover_AllCandidatesFail(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -1982,7 +1990,7 @@ func TestFailover_HalfOpenProbeNotStarved(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2033,7 +2041,7 @@ func TestNoMatchingRuleReturns503(t *testing.T) {
 			"default": {ID: "default", Name: "Default", BaseURL: srv.URL, Enabled: true},
 		},
 		rules:   []model.ModelRule{}, // no rules registered
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 		settings: &model.Settings{
 			Routing: model.RoutingSettings{StreamingSSE: true},
 		},
@@ -2070,7 +2078,7 @@ func TestNoMatchingRuleReturns503(t *testing.T) {
 }
 
 func TestTokenStatsRequiresAuth(t *testing.T) {
-	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
 
@@ -2087,6 +2095,19 @@ func TestTokenStatsRequiresAuth(t *testing.T) {
 	p.router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 with auth, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDisabledAPIKeyIsUnauthorized(t *testing.T) {
+	st := &mockStore{apiKeys: []model.ApiKey{{ID: "disabled", Name: "off", Enabled: false}}}
+	p := New(st, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+	req := httptest.NewRequest("GET", "/v1/stats/tokens", nil)
+	req.Header.Set("Authorization", "Bearer disabled")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for disabled key, got %d", rec.Code)
 	}
 }
 
@@ -2117,7 +2138,7 @@ func TestGenericOpenAI_ImagesRoute(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2169,7 +2190,7 @@ func TestStreaming_PassThrough(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2236,7 +2257,7 @@ func TestHybridFailover_ChatConversionToNativeChat(t *testing.T) {
 			{ID: "t-convert", ProviderID: "p-responses", ModelName: "upstream-responses", MaxRetries: 0, Enabled: true},
 			{ID: "t-native", ProviderID: "p-chat", ModelName: "upstream-chat", MaxRetries: 0, Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 		modelCapabilities: []model.ModelCapability{
 			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
 			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: true, Source: "manual"},
@@ -2313,7 +2334,7 @@ func TestHybridFailover_NativeResponsesToChatConversion(t *testing.T) {
 			{ID: "t-native", ProviderID: "p-responses", ModelName: "upstream-responses", MaxRetries: 0, Enabled: true},
 			{ID: "t-convert", ProviderID: "p-chat", ModelName: "upstream-chat", MaxRetries: 0, Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 		modelCapabilities: []model.ModelCapability{
 			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: true, Source: "manual"},
 			{ProviderID: "p-responses", ModelName: "upstream-responses", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
@@ -2390,7 +2411,7 @@ func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2451,7 +2472,7 @@ func TestHandlerPlansCandidatesOnceBeforeRetryAndFailover(t *testing.T) {
 				{ProviderID: "p1", ModelName: "m1", Enabled: true},
 			},
 		}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}}
 	metricsSpy := &planningMetricSpy{byID: map[string]metrics.Snapshot{}}
 	p := New(store, &mockService{}, 0, nil)
@@ -2509,7 +2530,7 @@ func TestFailover_RetryBoundedExhaustedFallsThrough(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2580,7 +2601,7 @@ func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2659,7 +2680,7 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2761,7 +2782,7 @@ func TestStreaming_RetriesOnRetryable5xxBeforeFirstByte(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2846,7 +2867,7 @@ func TestStreaming_RetriesPerTargetBeforeFailover(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -2937,7 +2958,7 @@ func TestStreaming_FailoverOnNetworkError(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -3019,7 +3040,7 @@ func TestStreaming_FailoverOnFirstByteTimeout(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -3102,7 +3123,7 @@ func TestStreaming_TruePassThrough(t *testing.T) {
 				},
 			},
 		},
-		apiKeys:  []model.ApiKey{{ID: "key1"}},
+		apiKeys:  []model.ApiKey{{ID: "key1", Enabled: true}},
 		settings: &model.Settings{},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return store.settings, nil })
@@ -3271,7 +3292,7 @@ func TestStreaming_FirstByteTimeoutFailover(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -3397,7 +3418,7 @@ func TestStreaming_CumulativeLatency(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -3510,7 +3531,7 @@ func TestStreaming_UsageParsedFromStream(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -3605,7 +3626,7 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -3744,7 +3765,7 @@ func TestStreaming_LongBodyNotKilledByFirstByteTimeout(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -3887,7 +3908,7 @@ func TestStreaming_FirstByteBudgetExcludesBodyTime(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -4037,7 +4058,7 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -4171,7 +4192,7 @@ func TestStreaming_ProtocolErrorThenClientCancelIsTruncated(t *testing.T) {
 				{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
 			},
 		}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -4234,7 +4255,7 @@ func TestStreaming_ProtocolErrorCleanEOFKeepsError(t *testing.T) {
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -4302,7 +4323,7 @@ func TestStreaming_ClientDisconnectBeforeFirstByte_RecordsProviderIdentity(t *te
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -4442,7 +4463,7 @@ func TestStreaming_DoneThenClientCancel_IsSuccess(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -4567,7 +4588,7 @@ func TestFailover_GlobalAttemptCap(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -4651,7 +4672,7 @@ func TestStreamHalfOpenTopTerminationReleasesBothProbes(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 			}))
 			defer srv.Close()
-			st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, FirstByteTimeoutSeconds: 1, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", MaxRetries: 1, Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1"}}}
+			st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "x", Enabled: true, FirstByteTimeoutSeconds: 1, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", MaxRetries: 1, Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
 			spy := &metricSpy{}
@@ -4890,7 +4911,7 @@ func TestFailover_BackoffBetweenRetries(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -4964,7 +4985,7 @@ func TestFailover_CandidateLocalBackoffNonStreaming(t *testing.T) {
 			{ID: "ta", ProviderID: "a", MaxRetries: 3, Enabled: true},
 			{ID: "tb", ProviderID: "b", MaxRetries: 1, Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -5010,7 +5031,7 @@ func TestFailover_CandidateLocalBackoffStreaming(t *testing.T) {
 			{ID: "ta", ProviderID: "a", MaxRetries: 3, Enabled: true},
 			{ID: "tb", ProviderID: "b", MaxRetries: 1, Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -5044,7 +5065,7 @@ func TestFailover_RetryAfterHonoredWithinCandidate(t *testing.T) {
 	st := &mockStore{
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
 		rules:     []model.ModelRule{{ID: "r", Name: "retry-after-local", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", MaxRetries: 1, Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -5083,7 +5104,7 @@ func TestFailover_IgnoresRetryAfterAcrossTargetsStreaming(t *testing.T) {
 			{ID: "t0", ProviderID: "p0", MaxRetries: 0, Enabled: true},
 			{ID: "t1", ProviderID: "p1", MaxRetries: 0, Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(st, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -5141,7 +5162,7 @@ func TestFailover_UnknownStatusFailover(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5232,7 +5253,7 @@ func TestFailover_IgnoresRetryAfterAcrossTargets(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5300,7 +5321,7 @@ func TestFailover_RuleFirstByteBudgetExceeded(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5351,7 +5372,7 @@ func TestFailover_StreamRuleFirstByteBudgetExceeded(t *testing.T) {
 	store := &mockStore{
 		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "stream-budget", Enabled: true, FirstByteTimeoutSeconds: 1, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 5, Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5405,7 +5426,7 @@ func TestProviderHalfOpenLeaseIsReusedAcrossRetries(t *testing.T) {
 			st := &mockStore{
 				providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
 				rules:     []model.ModelRule{{ID: "r", Name: "lease", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", MaxRetries: 1, Enabled: true}}}},
-				apiKeys:   []model.ApiKey{{ID: "key1"}},
+				apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 			}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
@@ -5449,7 +5470,7 @@ func TestHalfOpenProvider501DoesNotPenalizeConversionRoute(t *testing.T) {
 			st := &mockStore{
 				providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 				rules:     []model.ModelRule{{ID: "r", Name: "route", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", Enabled: true}}}},
-				apiKeys:   []model.ApiKey{{ID: "key1"}},
+				apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 			}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
@@ -5538,7 +5559,7 @@ func TestFailover_TruncatedNonStreaming(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5613,7 +5634,7 @@ func TestFailover_SuccessImplicit200(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5689,7 +5710,7 @@ func TestFailover_AllCandidatesTruncated(t *testing.T) {
 				},
 			},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5813,7 +5834,7 @@ func TestChatMultimodal_Passthrough(t *testing.T) {
 				{ProviderID: "p0", ModelName: "m1", Enabled: true},
 			}},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5882,7 +5903,7 @@ func TestChatLargeMultimodalBody(t *testing.T) {
 				{ProviderID: "p0", ModelName: "m1", Enabled: true},
 			}},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5935,7 +5956,7 @@ func TestMultipartAudioTranscription(t *testing.T) {
 				{ProviderID: "p0", ModelName: "whisper-1", Enabled: true},
 			}},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -5996,7 +6017,7 @@ func TestUpstreamErrorBodyInLog(t *testing.T) {
 				{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
 			}},
 		},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -6023,7 +6044,7 @@ func TestLogModelPopulatedOnNoMatch(t *testing.T) {
 	store := &mockStore{
 		providers: map[string]*model.Provider{},
 		rules:     []model.ModelRule{},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -6048,7 +6069,7 @@ func TestLogModelPopulatedOnNoMatch(t *testing.T) {
 }
 
 func TestChar_ChatRouteRegistered(t *testing.T) {
-	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
 
@@ -6083,7 +6104,7 @@ func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
 	store := &mockStore{
 		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -6136,7 +6157,7 @@ func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
 }
 
 func TestChar_ResponsesRouteRegistered(t *testing.T) {
-	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
 
@@ -6170,7 +6191,7 @@ func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
 		store := &mockStore{
 			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 			rules:     []model.ModelRule{{ID: "r1", Name: "resp-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "upstream-resp", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()
@@ -6203,7 +6224,7 @@ func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
 		store := &mockStore{
 			providers:    map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: false}},
 			rules:        []model.ModelRule{{ID: "r1", Name: "resp-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "upstream-resp", Enabled: true}}}},
-			apiKeys:      []model.ApiKey{{ID: "key1"}},
+			apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 			capabilities: []model.ProviderCapability{{ProviderID: "p0", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
@@ -6222,7 +6243,7 @@ func TestChar_ResponsesE2EAndPreflightReject(t *testing.T) {
 }
 
 func TestChar_MessagesRouteRegistered(t *testing.T) {
-	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
 
@@ -6247,7 +6268,7 @@ func TestFeatureMismatchReturns422UnsupportedFeature(t *testing.T) {
 		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true, MessagesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) {
 		return &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}}, nil
@@ -6265,7 +6286,7 @@ func TestFeatureMismatchReturns422UnsupportedFeature(t *testing.T) {
 }
 
 func TestNoRuleStillReturns503(t *testing.T) {
-	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}, providers: map[string]*model.Provider{}, rules: nil}
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}, providers: map[string]*model.Provider{}, rules: nil}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"missing","messages":[{"role":"user","content":"hi"}]}`))
@@ -6283,7 +6304,7 @@ func TestChatFeatureExplicitFalseE2E422(t *testing.T) {
 		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "vision-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{
 			{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: string(model.FeatureVision), Enabled: false, Source: "manual"},
 		},
@@ -6305,7 +6326,7 @@ func TestGeminiFeatureExplicitFalseE2E422(t *testing.T) {
 		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true, GeminiEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "gemini-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{
 			{ProviderID: "p", Protocol: string(ProtocolGemini), Feature: string(model.FeatureVision), Enabled: false, Source: "manual"},
 		},
@@ -6328,7 +6349,7 @@ func TestNonFeatureUnavailableStillReturns503(t *testing.T) {
 		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: false, MessagesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -6356,7 +6377,7 @@ func TestConversionRejectsBeforeUpstreamAttempt(t *testing.T) {
 		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	svc := &countingKeyService{inner: &mockService{}}
 	p := New(store, svc, 0, nil)
@@ -6381,7 +6402,7 @@ func TestFeatureEnforcementCachedNoPerRequestSettingsQuery(t *testing.T) {
 		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
 		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true, MessagesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, nil)
 	defer p.Shutdown()
@@ -6419,7 +6440,7 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		store := &mockStore{
 			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
 			rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()
@@ -6459,7 +6480,7 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		store := &mockStore{
 			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
 			rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()
@@ -6487,7 +6508,7 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		store := &mockStore{
 			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: false}},
 			rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()
@@ -6505,7 +6526,7 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 }
 
 func TestChar_GeminiRouteRegistered(t *testing.T) {
-	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1"}}}
+	store := &mockStore{apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
 
@@ -6545,7 +6566,7 @@ func TestChar_GeminiE2EAndPreflightReject(t *testing.T) {
 		store := &mockStore{
 			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, GeminiEnabled: true}},
 			rules:     []model.ModelRule{{ID: "r1", Name: "gemini-pro", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "gemini-1.5-pro", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()
@@ -6581,7 +6602,7 @@ func TestChar_GeminiE2EAndPreflightReject(t *testing.T) {
 		store := &mockStore{
 			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, GeminiEnabled: false}},
 			rules:     []model.ModelRule{{ID: "r1", Name: "gemini-pro", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "gemini-1.5-pro", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1"}},
+			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()
@@ -6628,7 +6649,7 @@ func TestChar_GeminiStreamingSSETerminal(t *testing.T) {
 	store := &mockStore{
 		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, GeminiEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "gemini-pro", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "gemini-1.5-pro", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -6697,7 +6718,7 @@ func TestChar_MessagesStreamingE2E(t *testing.T) {
 	store := &mockStore{
 		providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: true}},
 		rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
-		apiKeys:   []model.ApiKey{{ID: "key1"}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -6775,7 +6796,7 @@ func TestChar_PriorityFirstFailoverPreservesCandidateOrder(t *testing.T) {
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
 		},
 		rules:   []model.ModelRule{{ID: "r1", Name: "x", Enabled: true, Strategy: string(routing.PriorityFirst), Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true}, {ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true}}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 	defer p.Shutdown()
@@ -6819,7 +6840,7 @@ func TestChatToResponsesStreamingE2E(t *testing.T) {
 	st := &mockStore{
 		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
 		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
 	}
 	p := New(st, &mockService{}, 0, nil)
@@ -6867,7 +6888,7 @@ func TestResponsesToChatStreamingE2E(t *testing.T) {
 	st := &mockStore{
 		providers:    map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
 		rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-		apiKeys:      []model.ApiKey{{ID: "key1"}},
+		apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}},
 	}
 	p := New(st, &mockService{}, 0, nil)
@@ -6921,7 +6942,7 @@ func TestChatToResponsesStreamingPreCommitFailover(t *testing.T) {
 			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
 			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{
 			{ProviderID: "p0", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
 			{ProviderID: "p1", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
@@ -6974,7 +6995,7 @@ func TestResponsesToChatStreamingPreCommitFailover(t *testing.T) {
 			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
 			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
 		}}},
-		apiKeys: []model.ApiKey{{ID: "key1"}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 		capabilities: []model.ProviderCapability{
 			{ProviderID: "p0", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},
 			{ProviderID: "p1", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"},

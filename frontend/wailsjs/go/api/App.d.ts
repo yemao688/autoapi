@@ -6,6 +6,8 @@ import {context} from '../models';
 
 export function AddProviderModels(arg1:string,arg2:Array<string>):Promise<void>;
 
+export function CancelModelTest(arg1:string):Promise<boolean>;
+
 export function ClearLogs():Promise<number>;
 
 export function ClearProviderModels(arg1:string):Promise<void>;
@@ -108,6 +110,8 @@ export function RestartProxy():Promise<void>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 
+export function SetAPIKeyEnabled(arg1:string,arg2:boolean):Promise<void>;
+
 export function SetAppInfo(arg1:model.AppInfo):Promise<void>;
 
 export function SetInitialVisibility(arg1:boolean):Promise<void>;
@@ -134,7 +138,7 @@ export function StopProxy():Promise<void>;
 
 export function TestAllProviders():Promise<Array<model.ProviderTestResult>>;
 
-export function TestModelChat(arg1:string,arg2:string,arg3:boolean):Promise<model.ModelChatTestResult>;
+export function TestModelChat(arg1:string,arg2:string,arg3:string,arg4:boolean,arg5:string):Promise<model.ModelChatTestResult>;
 
 export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTestResult>;
 

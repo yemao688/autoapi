@@ -564,6 +564,25 @@ ALTER TABLE provider_capabilities_new RENAME TO provider_capabilities;`,
 		},
 		SQL: `CREATE UNIQUE INDEX idx_model_rules_name_unique ON model_rules(name);`,
 	},
+	{
+		ID:              "031_api_keys_enabled",
+		SQL:             `ALTER TABLE api_keys ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;`,
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "api_keys", "enabled") },
+	},
+	{
+		ID:              "032_api_keys_last_used_at",
+		SQL:             `ALTER TABLE api_keys ADD COLUMN last_used_at INTEGER NOT NULL DEFAULT 0;`,
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "api_keys", "last_used_at") },
+	},
+	{
+		ID:              "033_request_logs_api_key_name",
+		SQL:             `ALTER TABLE request_logs ADD COLUMN api_key_name TEXT NOT NULL DEFAULT '';`,
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "request_logs", "api_key_name") },
+	},
+	{
+		ID:  "034_request_logs_api_key_index",
+		SQL: `CREATE INDEX IF NOT EXISTS idx_request_logs_api_key_ts ON request_logs(api_key_id, timestamp_ms);`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

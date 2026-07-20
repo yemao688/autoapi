@@ -134,7 +134,7 @@ type storeProxy interface {
 	ListProviders() ([]model.Provider, error)
 	ListModelRules() ([]model.ModelRule, error)
 	GetProvider(id string) (*model.Provider, error)
-	ListAPIKeys() ([]model.ApiKey, error)
+	GetAPIKey(id string) (*model.ApiKey, error)
 	GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error)
 	InsertRequestLog(l model.RequestLog) error
 	InsertRequestLogsBatch(logs []model.RequestLog) error
@@ -602,31 +602,29 @@ func (p *Proxy) loadModelRules() []model.ModelRule {
 // authenticate validates the Bearer token against autoapi API keys. The token
 // is expected to be the api_keys.id UUID. Disabled or expired keys are
 // rejected.
-func (p *Proxy) authenticate(r *http.Request) (apiKeyID string, ok bool, err error) {
+func (p *Proxy) authenticate(r *http.Request) (apiKeyID, apiKeyName string, ok bool, err error) {
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(auth, prefix) {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	token := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
 	if token == "" {
-		return "", false, nil
+		return "", "", false, nil
 	}
 
-	keys, err := p.store.ListAPIKeys()
+	k, err := p.store.GetAPIKey(token)
 	if err != nil {
-		return "", false, err
+		if errors.Is(err, store.ErrNotFound) {
+			return "", "", false, nil
+		}
+		return "", "", false, err
 	}
 	now := time.Now().UnixMilli()
-	for _, k := range keys {
-		if k.ID == token {
-			if k.ExpiresAt > 0 && k.ExpiresAt < now {
-				return "", false, nil
-			}
-			return k.ID, true, nil
-		}
+	if !k.Enabled || (k.ExpiresAt > 0 && k.ExpiresAt < now) {
+		return "", "", false, nil
 	}
-	return "", false, nil
+	return k.ID, k.Name, true, nil
 }
 
 // writeError writes an OpenAI-compatible error JSON body.

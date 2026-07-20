@@ -71,6 +71,10 @@ export namespace model {
 	    expires_at: number;
 	    created_at: number;
 	    updated_at: number;
+	    enabled: boolean;
+	    last_used_at: number;
+	    today_tokens: number;
+	    thirty_day_tokens: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ApiKey(source);
@@ -83,6 +87,10 @@ export namespace model {
 	        this.expires_at = source["expires_at"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
+	        this.enabled = source["enabled"];
+	        this.last_used_at = source["last_used_at"];
+	        this.today_tokens = source["today_tokens"];
+	        this.thirty_day_tokens = source["thirty_day_tokens"];
 	    }
 	}
 	export class ApiKeyInput {
@@ -218,6 +226,7 @@ export namespace model {
 	    route_id: string;
 	    route_label: string;
 	    api_key_id: string;
+	    api_key_name: string;
 	    error?: string;
 	    user_agent: string;
 	    client_ip: string;
@@ -249,6 +258,7 @@ export namespace model {
 	        this.route_id = source["route_id"];
 	        this.route_label = source["route_label"];
 	        this.api_key_id = source["api_key_id"];
+	        this.api_key_name = source["api_key_name"];
 	        this.error = source["error"];
 	        this.user_agent = source["user_agent"];
 	        this.client_ip = source["client_ip"];

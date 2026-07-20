@@ -171,11 +171,15 @@ type ModelChatTestResult struct {
 // ApiKey is an access token for the autoapi proxy. The token value is the row
 // ID itself; no secret material is stored in this table.
 type ApiKey struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ExpiresAt int64  `json:"expires_at"` // ms; 0 = no expiry
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	ExpiresAt       int64  `json:"expires_at"` // ms; 0 = no expiry
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
+	Enabled         bool   `json:"enabled"`
+	LastUsedAt      int64  `json:"last_used_at"`
+	TodayTokens     int64  `json:"today_tokens"`
+	ThirtyDayTokens int64  `json:"thirty_day_tokens"`
 }
 
 // ModelRule is the client-facing model definition. A rule's Name is the model
@@ -271,6 +275,7 @@ type RequestLog struct {
 	RouteID       string  `json:"route_id"`       // empty = default route
 	RouteLabel    string  `json:"route_label"`
 	APIKeyID      string  `json:"api_key_id"`
+	APIKeyName    string  `json:"api_key_name"`
 	Error         string  `json:"error,omitempty"`
 
 	// Request context captured by the proxy for diagnostics and the

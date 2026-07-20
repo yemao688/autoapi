@@ -6,6 +6,10 @@ export function AddProviderModels(arg1, arg2) {
   return window['go']['api']['App']['AddProviderModels'](arg1, arg2);
 }
 
+export function CancelModelTest(arg1) {
+  return window['go']['api']['App']['CancelModelTest'](arg1);
+}
+
 export function ClearLogs() {
   return window['go']['api']['App']['ClearLogs']();
 }
@@ -210,6 +214,10 @@ export function SaveSettings(arg1) {
   return window['go']['api']['App']['SaveSettings'](arg1);
 }
 
+export function SetAPIKeyEnabled(arg1, arg2) {
+  return window['go']['api']['App']['SetAPIKeyEnabled'](arg1, arg2);
+}
+
 export function SetAppInfo(arg1) {
   return window['go']['api']['App']['SetAppInfo'](arg1);
 }
@@ -262,8 +270,8 @@ export function TestAllProviders() {
   return window['go']['api']['App']['TestAllProviders']();
 }
 
-export function TestModelChat(arg1, arg2, arg3) {
-  return window['go']['api']['App']['TestModelChat'](arg1, arg2, arg3);
+export function TestModelChat(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['api']['App']['TestModelChat'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function TestModelLatency(arg1, arg2) {

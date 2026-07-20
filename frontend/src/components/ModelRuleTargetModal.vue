@@ -185,7 +185,7 @@ async function testModel() {
 <template>
   <Teleport to="body">
     <div v-if="open" class="modal-overlay" @click.self="close">
-      <div class="modal-card">
+      <div class="modal-card modal-card-scroll">
         <div class="modal-title">{{ isEdit ? t('modelRules.targets.edit') : t('modelRules.targets.add') }}</div>
         <div class="field">
           <label class="field-label">{{ t('modelRules.targets.provider') }}</label>

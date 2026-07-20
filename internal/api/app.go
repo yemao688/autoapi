@@ -102,6 +102,7 @@ type StoreService interface {
 	CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error)
 	UpdateAPIKey(id string, in model.ApiKeyInput) (*model.ApiKey, error)
 	DeleteAPIKey(id string) error
+	SetAPIKeyEnabled(id string, enabled bool) error
 
 	// Provider upstream keys (ciphertext). The App layer composes Service.Encrypt +
 	// Store.UpdateProviderKeyCiphertext; the store never sees plaintext.
@@ -149,7 +150,8 @@ type BusinessService interface {
 	TestAllProviders() ([]model.ProviderTestResult, error)
 	FetchUpstreamModels(providerID string) ([]model.Model, error)
 	TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error)
-	TestModelChat(providerID, modelName string, stream bool) (*model.ModelChatTestResult, error)
+	TestModelChat(providerID, modelName, protocol string, stream bool, testID string) (*model.ModelChatTestResult, error)
+	CancelModelTest(testID string) bool
 	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
@@ -847,11 +849,18 @@ func (a *App) TestModelLatency(providerID, modelName string) (*model.ModelTestRe
 	return a.deps.Service.TestModelLatency(providerID, modelName)
 }
 
-func (a *App) TestModelChat(providerID, modelName string, stream bool) (*model.ModelChatTestResult, error) {
+func (a *App) TestModelChat(providerID, modelName, protocol string, stream bool, testID string) (*model.ModelChatTestResult, error) {
 	if a.deps.Service == nil {
 		return nil, errNotImpl
 	}
-	return a.deps.Service.TestModelChat(providerID, modelName, stream)
+	return a.deps.Service.TestModelChat(providerID, modelName, protocol, stream, testID)
+}
+
+func (a *App) CancelModelTest(testID string) bool {
+	if a.deps.Service == nil {
+		return false
+	}
+	return a.deps.Service.CancelModelTest(testID)
 }
 
 func (a *App) SetModelsActive(providerID string, modelNames []string, active bool) error {
@@ -942,6 +951,13 @@ func (a *App) DeleteAPIKey(id string) error {
 		return errNotImpl
 	}
 	return a.deps.Store.DeleteAPIKey(id)
+}
+
+func (a *App) SetAPIKeyEnabled(id string, enabled bool) error {
+	if a.deps.Store == nil {
+		return errNotImpl
+	}
+	return a.deps.Store.SetAPIKeyEnabled(id, enabled)
 }
 
 // ----- Model rules -----

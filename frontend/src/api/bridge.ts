@@ -127,9 +127,13 @@ export const api = {
     ensureWails()
     return wails.SetProviderEnabled(id, enabled) as Promise<void>
   },
-  testModelChat: (providerId: string, modelName: string, stream: boolean = false): Promise<model.ModelChatTestResult> => {
+  testModelChat: (providerId: string, modelName: string, protocol: string, stream: boolean, testId: string): Promise<model.ModelChatTestResult> => {
     ensureWails()
-    return wails.TestModelChat(providerId, modelName, stream) as Promise<model.ModelChatTestResult>
+    return wails.TestModelChat(providerId, modelName, protocol, stream, testId)
+  },
+  cancelModelTest: (testId: string): Promise<boolean> => {
+    ensureWails()
+    return wails.CancelModelTest(testId)
   },
 
   // Model rules
@@ -190,6 +194,10 @@ export const api = {
   deleteApiKey: (id: string): Promise<void> => {
     ensureWails()
     return wails.DeleteAPIKey(id) as Promise<void>
+  },
+  setApiKeyEnabled: (id: string, enabled: boolean): Promise<void> => {
+    ensureWails()
+    return wails.SetAPIKeyEnabled(id, enabled)
   },
 
   // Usage & Logs

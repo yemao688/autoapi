@@ -403,7 +403,7 @@ func TestResolveCandidatesAllConversionRoutesFilteredReturnsUnavailable(t *testi
 				providers:    map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}},
 				rules:        []model.ModelRule{{ID: "r", Name: "client", Enabled: true, Strategy: string(strategy), Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}},
 				capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
-				apiKeys:      []model.ApiKey{{ID: "key1"}},
+				apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 			}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
@@ -482,7 +482,7 @@ func TestRouteModeHalfOpenNeutralExecutionTermination(t *testing.T) {
 				providers:    map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true, BaseURL: srv.URL}},
 				rules:        []model.ModelRule{{ID: "r", Name: "half-open", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}},
 				capabilities: []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
-				apiKeys:      []model.ApiKey{{ID: "key1"}},
+				apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 			}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()

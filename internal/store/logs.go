@@ -100,7 +100,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
 		       input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 		       route_id, route_label,
-		       api_key_id, COALESCE(error, ''),
+		       api_key_id, COALESCE(api_key_name, ''), COALESCE(error, ''),
 		       cache_creation, cache_hit,
 		       COALESCE(chain_json, ''), user_agent, client_ip, request_id, request_uri
 		FROM request_logs %s
@@ -124,7 +124,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 			&l.ID, &l.Timestamp, &l.StatusCode,
 			&l.ProviderID, &l.ProviderName, &l.Model,
 			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
-			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error,
+			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.APIKeyName, &l.Error,
 			&l.CacheCreation, &l.CacheHit,
 			&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID, &l.RequestURI,
 		); err != nil {
@@ -151,11 +151,11 @@ func (s *Store) GetRequestLog(id string) (*model.RequestLog, error) {
 	var chainJS string
 	err := s.db.QueryRow(`SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
 		input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
-		route_id, route_label, api_key_id, COALESCE(error, ''), cache_creation, cache_hit,
+		route_id, route_label, api_key_id, COALESCE(api_key_name, ''), COALESCE(error, ''), cache_creation, cache_hit,
 		COALESCE(chain_json, ''), user_agent, client_ip, request_id, request_uri
 		FROM request_logs WHERE id = ?`, id).Scan(&l.ID, &l.Timestamp, &l.StatusCode, &l.ProviderID, &l.ProviderName, &l.Model,
 		&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
-		&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.Error, &l.CacheCreation, &l.CacheHit,
+		&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.APIKeyName, &l.Error, &l.CacheCreation, &l.CacheHit,
 		&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID, &l.RequestURI)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -180,19 +180,19 @@ func (s *Store) InsertRequestLog(l model.RequestLog) error {
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
 			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
-			                          api_key_id, error,
+			                          api_key_id, api_key_name, error,
 			                          cache_creation, cache_hit,
 			                          chain_json, user_agent, client_ip, request_id, request_uri)
 			VALUES (?, ?, ?, ?, ?, ?,
 			        ?, ?, ?, ?, ?, ?,
-			        ?, ?,
+			        ?, ?, ?,
 			        ?, ?,
 			        ?, ?,
 			        ?, ?, ?, ?, ?)`,
 			l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
 			l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 			l.RouteID, l.RouteLabel,
-			l.APIKeyID, l.Error,
+			l.APIKeyID, l.APIKeyName, l.Error,
 			l.CacheCreation, l.CacheHit,
 			chainJSON, l.UserAgent, l.ClientIP, l.RequestID, l.RequestURI)
 		return err
@@ -206,12 +206,12 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
 			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
-			                          api_key_id, error,
+			                          api_key_id, api_key_name, error,
 			                          cache_creation, cache_hit,
 			                          chain_json, user_agent, client_ip, request_id, request_uri)
 			VALUES (?, ?, ?, ?, ?, ?,
 			        ?, ?, ?, ?, ?, ?,
-			        ?, ?,
+			        ?, ?, ?,
 			        ?, ?,
 			        ?, ?,
 			        ?, ?, ?, ?, ?)`)
@@ -228,10 +228,23 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 				l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
 				l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 				l.RouteID, l.RouteLabel,
-				l.APIKeyID, l.Error,
+				l.APIKeyID, l.APIKeyName, l.Error,
 				l.CacheCreation, l.CacheHit,
 				chainJSON, l.UserAgent, l.ClientIP, l.RequestID, l.RequestURI,
 			); err != nil {
+				return err
+			}
+		}
+		// Authentication usage bookkeeping is deliberately part of this same
+		// batched transaction. A key is updated once to the greatest timestamp.
+		latest := map[string]int64{}
+		for _, l := range logs {
+			if l.APIKeyID != "" && l.Timestamp > latest[l.APIKeyID] {
+				latest[l.APIKeyID] = l.Timestamp
+			}
+		}
+		for id, ts := range latest {
+			if _, err := tx.Exec(`UPDATE api_keys SET last_used_at=CASE WHEN last_used_at < ? THEN ? ELSE last_used_at END WHERE id=?`, ts, ts, id); err != nil {
 				return err
 			}
 		}

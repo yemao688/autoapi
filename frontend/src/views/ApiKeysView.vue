@@ -7,11 +7,13 @@ import { useRelativeTime } from '../composables/useRelativeTime'
 import { toDateTimeLocal, fromDateTimeLocal } from '../composables/useDateTime'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
+import { useFormatters } from '../composables/useFormatters'
 import DropdownMenu from '@/components/DropdownMenu.vue'
 import type { model } from '../../wailsjs/go/models'
 
 const { t } = useI18n()
 const { format } = useRelativeTime()
+const { tokens: formatTokens } = useFormatters()
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -44,7 +46,7 @@ const filteredKeys = computed(() => {
   return list
 })
 
-const activeCount = computed(() => (keys.value || []).length)
+const activeCount = computed(() => (keys.value || []).filter((key) => keyField(key, 'enabled') !== false).length)
 
 const expiringCount = computed(() => {
   const now = Date.now()
@@ -62,6 +64,31 @@ function tokenDisplay(id: string): string {
 function formatExpiresAt(ms: number): string {
   if (!ms || ms <= 0) return t('apiKeys.noExpiry')
   return new Date(ms).toLocaleString()
+}
+
+function keyField(key: model.ApiKey, field: string): number | boolean | undefined {
+  return (key as unknown as Record<string, number | boolean | undefined>)[field]
+}
+
+function formatUsage(value: number | boolean | undefined): string {
+  const count = typeof value === 'number' ? value : 0
+  return `${formatTokens(count)} ${t('apiKeys.tokenUnit')}`
+}
+
+function formatLastUsed(key: model.ApiKey): string {
+  const value = keyField(key, 'last_used_at')
+  return typeof value === 'number' && value > 0 ? format(value) : t('apiKeys.neverUsed')
+}
+
+async function toggleKeyEnabled(key: model.ApiKey) {
+  const previous = keyField(key, 'enabled') !== false
+  ;(key as unknown as Record<string, unknown>).enabled = !previous
+  try {
+    await api.setApiKeyEnabled(key.id, !previous)
+  } catch (e: any) {
+    ;(key as unknown as Record<string, unknown>).enabled = previous
+    toast.push(t('toast.toggleFailed') + ': ' + (e?.message || String(e)), 'error')
+  }
 }
 
 async function copyToken(token: string) {
@@ -205,6 +232,8 @@ onMounted(() => {
               <tr>
                 <th>{{ t('apiKeys.columns.name') }}</th>
                 <th>{{ t('apiKeys.columns.token') }}</th>
+                <th>{{ t('apiKeys.columns.status') }}</th>
+                <th>{{ t('apiKeys.columns.usage') }}</th>
                 <th>{{ t('apiKeys.columns.expires') }}</th>
                 <th class="right">{{ t('apiKeys.columns.actions') }}</th>
               </tr>
@@ -213,7 +242,7 @@ onMounted(() => {
               <tr v-for="key in filteredKeys" :key="key.id">
                 <td>
                   <div style="font-weight: 500;">{{ key.name }}</div>
-                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">{{ format(key.created_at) }}</div>
+                  <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">{{ t('apiKeys.createdAt') }} · {{ format(key.created_at) }}</div>
                 </td>
                 <td>
                   <div class="row" style="gap: 6px;">
@@ -222,6 +251,17 @@ onMounted(() => {
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
                   </div>
+                </td>
+                <td>
+                  <label class="toggle toggle-sm" :aria-label="keyField(key, 'enabled') === false ? t('apiKeys.enable') : t('apiKeys.disable')" @click.stop>
+                    <input type="checkbox" :checked="keyField(key, 'enabled') !== false" @change="toggleKeyEnabled(key)">
+                    <span class="toggle-slider blue"></span>
+                  </label>
+                </td>
+                <td class="api-key-usage">
+                  <div><span class="text-muted">{{ t('apiKeys.today') }}</span> <span class="text-mono">{{ formatUsage(keyField(key, 'today_tokens')) }}</span></div>
+                  <div><span class="text-muted">{{ t('apiKeys.last30Days') }}</span> <span class="text-mono">{{ formatUsage(keyField(key, 'thirty_day_tokens')) }}</span></div>
+                  <div class="text-muted" style="font-size: 11px;">{{ t('apiKeys.lastUsed') }} · {{ formatLastUsed(key) }}</div>
                 </td>
                 <td>
                   <span :class="{ 'text-muted': !key.expires_at }">{{ formatExpiresAt(key.expires_at) }}</span>
@@ -257,7 +297,7 @@ onMounted(() => {
   <!-- Create / edit modal -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
-      <div class="modal-card">
+      <div class="modal-card modal-card-scroll">
         <div v-if="revealedToken" class="modal-title">{{ t('apiKeys.modal.saveTitle') }}</div>
         <div v-else class="modal-title">{{ modalMode === 'edit' ? t('apiKeys.modal.edit') : t('apiKeys.modal.add') }}</div>
 

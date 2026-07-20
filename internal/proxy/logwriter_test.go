@@ -16,7 +16,7 @@ type fakeBatchStore struct {
 func (f *fakeBatchStore) ListProviders() ([]model.Provider, error)       { return nil, nil }
 func (f *fakeBatchStore) ListModelRules() ([]model.ModelRule, error)     { return nil, nil }
 func (f *fakeBatchStore) GetProvider(id string) (*model.Provider, error) { return nil, nil }
-func (f *fakeBatchStore) ListAPIKeys() ([]model.ApiKey, error)           { return nil, nil }
+func (f *fakeBatchStore) GetAPIKey(string) (*model.ApiKey, error)        { return nil, nil }
 func (f *fakeBatchStore) GetProviderKeyCiphertext(providerID string) (ciphertext, nonce []byte, err error) {
 	return nil, nil, nil
 }

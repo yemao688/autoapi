@@ -91,17 +91,17 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
 			status = http.StatusInternalServerError
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
-		logEntry.StatusCode, logEntry.APIKeyID, logEntry.Error = status, apiKeyID, "authentication failed"
+		logEntry.StatusCode, logEntry.Error = status, "authentication failed"
 		return
 	}
-	logEntry.APIKeyID = apiKeyID
+	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBodySize))
 	if err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
@@ -153,17 +153,17 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
 			status = http.StatusInternalServerError
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
-		logEntry.StatusCode, logEntry.APIKeyID, logEntry.Error = status, apiKeyID, "authentication failed"
+		logEntry.StatusCode, logEntry.Error = status, "authentication failed"
 		return
 	}
-	logEntry.APIKeyID = apiKeyID
+	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBodySize))
 	if err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
@@ -213,17 +213,17 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
 			status = http.StatusInternalServerError
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
-		logEntry.StatusCode, logEntry.APIKeyID, logEntry.Error = status, apiKeyID, "authentication failed"
+		logEntry.StatusCode, logEntry.Error = status, "authentication failed"
 		return
 	}
-	logEntry.APIKeyID = apiKeyID
+	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 
 	modelName, action, err := parseGeminiModelAction(chi.URLParam(r, "modelAction"))
 	if err != nil {
@@ -375,7 +375,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -386,11 +386,11 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode = status
-		logEntry.APIKeyID = apiKeyID
+		logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 		logEntry.Error = "authentication failed"
 		return
 	}
-	logEntry.APIKeyID = apiKeyID
+	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBodySize))
 	if err != nil {
@@ -475,7 +475,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -486,11 +486,11 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode = status
-		logEntry.APIKeyID = apiKeyID
+		logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 		logEntry.Error = "authentication failed"
 		return
 	}
-	logEntry.APIKeyID = apiKeyID
+	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
@@ -567,7 +567,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -578,11 +578,11 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode = status
-		logEntry.APIKeyID = apiKeyID
+		logEntry.APIKeyID = ""
 		logEntry.Error = "authentication failed"
 		return
 	}
-	logEntry.APIKeyID = apiKeyID
+	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxGenericBodySize))
 	if err != nil {
@@ -688,7 +688,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) handleTokenStats(w http.ResponseWriter, r *http.Request) {
-	_, ok, err := p.authenticate(r)
+	_, _, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {

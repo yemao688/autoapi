@@ -26,7 +26,6 @@ const {
 
 const modelsMap = ref<Record<string, model.Model[]>>({})
 
-const activeTab = ref<'all' | 'connected' | 'error'>('all')
 const search = ref('')
 const sortBy = ref<'usage' | 'name' | 'last_tested'>('usage')
 
@@ -102,11 +101,6 @@ const form = ref<model.ProviderInput>({
 
 const filteredProviders = computed(() => {
   let list = providers.value || []
-  if (activeTab.value === 'connected') {
-    list = list.filter((p) => p.status === 'connected')
-  } else if (activeTab.value === 'error') {
-    list = list.filter((p) => p.status === 'error' || p.status === 'unknown')
-  }
   const q = search.value.trim().toLowerCase()
   if (q) {
     list = list.filter((p) => p.name.toLowerCase().includes(q))
@@ -741,38 +735,6 @@ async function deleteProvider(id: string, name: string) {
   }
 }
 
-function handleTabKeydown(e: KeyboardEvent) {
-  const container = e.currentTarget as HTMLElement
-  const tabs = container.querySelectorAll<HTMLButtonElement>('.tab')
-  if (!tabs.length) return
-  const currentIdx = Array.from(tabs).findIndex((t) => t === document.activeElement)
-  let nextIdx = currentIdx
-  switch (e.key) {
-    case 'ArrowRight':
-    case 'ArrowDown':
-      e.preventDefault()
-      nextIdx = (currentIdx + 1) % tabs.length
-      break
-    case 'ArrowLeft':
-    case 'ArrowUp':
-      e.preventDefault()
-      nextIdx = (currentIdx - 1 + tabs.length) % tabs.length
-      break
-    case 'Home':
-      e.preventDefault()
-      nextIdx = 0
-      break
-    case 'End':
-      e.preventDefault()
-      nextIdx = tabs.length - 1
-      break
-    default:
-      return
-  }
-  tabs[nextIdx]?.focus()
-  tabs[nextIdx]?.click()
-}
-
 onMounted(() => {
   refresh()
 })
@@ -806,11 +768,6 @@ onMounted(() => {
           <div class="row" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; gap: 6px; flex: 1; max-width: 360px;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;color:var(--muted);"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
             <input v-model="search" class="input" style="border: none; padding: 0; font-size: 13px;" :placeholder="t('providers.searchPlaceholder')">
-          </div>
-          <div class="tabs" tabindex="0" @keydown="handleTabKeydown" style="outline: none;">
-            <button class="tab" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">{{ t('providers.tabs.all') }}</button>
-            <button class="tab" :class="{ active: activeTab === 'connected' }" @click="activeTab = 'connected'">{{ t('providers.tabs.connected') }}</button>
-            <button class="tab" :class="{ active: activeTab === 'error' }" @click="activeTab = 'error'">{{ t('providers.tabs.error') }}</button>
           </div>
           <div class="spacer"></div>
           <div class="row" style="font-size: 12px; color: var(--muted);">
@@ -863,11 +820,12 @@ onMounted(() => {
               <span class="text-mono" style="font-size: 13px; font-weight: 500;">{{ fmtTokens(provider.monthly_tokens) }} tokens</span>
             </div>
             <div class="row-between" style="margin-bottom: 14px;">
-              <span class="text-muted" style="font-size: 12px;">{{ provider.status === 'connected' ? t('providers.avgLatency') : t('providers.lastError') }}</span>
-              <span class="text-mono" :style="{ fontSize: '13px', fontWeight: 500, color: provider.status === 'connected' ? 'inherit' : 'var(--negative)' }">
-                {{ provider.status === 'connected' ? fmtLatency(provider.avg_latency_ms) : (provider.error_message || '—') }}
+              <span class="text-muted" style="font-size: 12px;">{{ t('providers.avgLatency') }}</span>
+              <span class="text-mono" style="font-size: 13px; font-weight: 500;">
+                {{ fmtLatency(provider.avg_latency_ms) }}
               </span>
             </div>
+            <div class="row-between" style="margin-bottom: 14px;"><span class="text-muted" style="font-size: 12px;">{{ t('providers.lastTested') }}</span><span class="text-mono" style="font-size: 12px;">{{ provider.last_tested_at ? new Date(provider.last_tested_at).toLocaleString() : '—' }}</span></div>
             <div class="row" style="flex-wrap: wrap; gap: 4px; margin-bottom: 14px;">
               <template v-if="modelsMap[provider.id]?.length">
                 <span v-for="m in modelsMap[provider.id]" :key="m.id" class="badge mono">{{ m.name }}</span>
@@ -876,13 +834,12 @@ onMounted(() => {
             </div>
             <div class="row" style="justify-content: flex-end; gap: 4px;">
               <button
-                class="btn"
-                :class="provider.status === 'connected' ? 'btn-secondary' : 'btn-primary'"
+                class="btn btn-secondary"
                 style="padding: 4px 10px; font-size: 12px;"
                 :disabled="testingIds.has(provider.id)"
                 @click="testOne(provider.id)"
               >
-                {{ testingIds.has(provider.id) ? t('providers.testing') : (provider.status === 'connected' ? t('providers.test') : t('providers.reconnect')) }}
+                {{ testingIds.has(provider.id) ? t('providers.testing') : t('providers.test') }}
               </button>
               <button class="btn btn-icon" :title="t('common.edit')" @click="openEdit(provider)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
@@ -925,7 +882,7 @@ onMounted(() => {
   <!-- Provider modal -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
-      <div class="modal-card wide">
+      <div class="modal-card wide modal-card-scroll">
         <div class="modal-title">{{ modalMode === 'edit' ? t('providers.modal.edit') : (form.is_custom ? t('providers.modal.addCustom') : t('providers.modal.add')) }}</div>
         <div class="field">
           <label class="field-label">{{ t('providers.modal.name') }}</label>
@@ -1156,7 +1113,7 @@ onMounted(() => {
   <!-- Focused model editor: pricing belongs to the model catalog, not a separate screen. -->
   <Teleport to="body">
     <div v-if="modelEditOpen" class="modal-overlay" @click.self="closeModelEdit">
-      <div class="modal-card" role="dialog" aria-modal="true" :aria-label="t('providers.modal.editModel')">
+      <div class="modal-card modal-card-scroll" role="dialog" aria-modal="true" :aria-label="t('providers.modal.editModel')">
         <div class="modal-title">{{ t('providers.modal.editModel') }}</div>
         <p class="field-help">{{ t('providers.modal.editModelHelp') }}</p>
         <div class="field">

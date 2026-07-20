@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"testing"
+	"time"
 
 	"autoapi/internal/model"
 )
@@ -345,6 +346,50 @@ func TestAPIKeyCRUD(t *testing.T) {
 	}
 	if created.ID == "" || created.Name != "Another Token" {
 		t.Fatalf("unexpected recreated key: %+v", created)
+	}
+}
+
+func TestAPIKeyEnabledUsageAndBatchedLastUsed(t *testing.T) {
+	s := newTestStore(t)
+	k, err := s.CreateAPIKey(model.ApiKeyInput{Name: "usage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAPIKeyEnabled(k.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetAPIKey(k.ID)
+	if err != nil || got.Enabled {
+		t.Fatalf("enabled state: got=%+v err=%v", got, err)
+	}
+	if err := s.SetAPIKeyEnabled(k.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	localStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).UnixMilli()
+	logs := []model.RequestLog{
+		{ID: "usage-today", Timestamp: localStart + 1000, StatusCode: 200, APIKeyID: k.ID, APIKeyName: "usage", InputTokens: 10, OutputTokens: 5},
+		{ID: "usage-old", Timestamp: time.Now().AddDate(0, 0, -10).UnixMilli(), StatusCode: 200, APIKeyID: k.ID, APIKeyName: "usage", InputTokens: 20, OutputTokens: 5},
+	}
+	if err := s.InsertRequestLogsBatch(logs); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := s.ListAPIKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].TodayTokens != 15 || keys[0].ThirtyDayTokens != 40 {
+		t.Fatalf("usage totals: %+v", keys)
+	}
+	if keys[0].LastUsedAt != localStart+1000 {
+		t.Fatalf("last_used_at=%d", keys[0].LastUsedAt)
+	}
+	if _, err := s.UpdateAPIKey(k.ID, model.ApiKeyInput{Name: "renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	log, err := s.GetRequestLog("usage-today")
+	if err != nil || log.APIKeyName != "usage" {
+		t.Fatalf("snapshot log=%+v err=%v", log, err)
 	}
 }
 
