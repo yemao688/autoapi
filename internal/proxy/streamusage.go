@@ -27,13 +27,19 @@ import (
 type streamUsageJSON struct {
 	Usage    *streamUsageFields `json:"usage"`
 	Type     string             `json:"type"`
+	Code     string             `json:"code"`
 	Error    *streamUsageError  `json:"error"`
 	Response *struct {
-		Usage *streamUsageFields `json:"usage"`
+		Usage             *streamUsageFields `json:"usage"`
+		Error             *streamUsageError  `json:"error"`
+		IncompleteDetails *struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
 	} `json:"response"`
-	Message *struct {
-		Usage *streamUsageFields `json:"usage"`
-	} `json:"message"`
+	IncompleteDetails *struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	Message json.RawMessage `json:"message"`
 }
 
 // streamUsageFields is the per-event usage payload. The zero value
@@ -57,9 +63,9 @@ type streamUsageFields struct {
 }
 
 type streamUsageError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Status  string `json:"status"`
+	Code    json.RawMessage `json:"code"`
+	Message string          `json:"message"`
+	Status  string          `json:"status"`
 }
 
 type geminiStreamCandidate struct {
@@ -96,6 +102,8 @@ type streamUsageAccumulator struct {
 	seenDone      bool
 	terminal      string
 	lastEvent     string
+	errored       bool
+	errorMessage  string
 }
 
 // Feed processes the next chunk of SSE bytes. It extracts any complete
@@ -175,7 +183,7 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 		return
 	}
 	// If the data looks like Gemini, attach usage from Gemini's usageMetadata.
-	if u.Usage == nil && u.Response == nil && u.Message == nil {
+	if u.Usage == nil && u.Response == nil && len(u.Message) == 0 {
 		if geminiUsage := geminiUsageFromData(data, &u); geminiUsage != nil {
 			u.Usage = geminiUsage
 		}
@@ -183,6 +191,16 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	if a.lastEvent == "message_stop" || u.Type == "message_stop" {
 		a.terminal = "message_stop"
 		a.seenDone = true
+	}
+	// Error events are terminal even when they carry no usage. This must be
+	// checked before the usage==nil return below: clients commonly cancel as
+	// soon as they receive one of these events.
+	if message, ok := streamProtocolError(&u); ok {
+		a.errored = true
+		a.errorMessage = message
+		a.terminal = "error"
+		a.seenDone = true
+		return
 	}
 	// Anthropic message_start nests usage under "message"; OpenAI
 	// and Anthropic message_delta expose usage at the top level.
@@ -192,8 +210,13 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 		usage = u.Usage
 	} else if u.Response != nil && u.Response.Usage != nil {
 		usage = u.Response.Usage
-	} else if u.Message != nil && u.Message.Usage != nil {
-		usage = u.Message.Usage
+	} else if len(u.Message) > 0 {
+		var message struct {
+			Usage *streamUsageFields `json:"usage"`
+		}
+		if json.Unmarshal(u.Message, &message) == nil {
+			usage = message.Usage
+		}
 	}
 	if usage == nil {
 		// Responses streams terminate with response.completed/failed/
@@ -282,6 +305,50 @@ func (a *streamUsageAccumulator) Done() bool {
 func (a *streamUsageAccumulator) TerminalState() string { return a.terminal }
 func (a *streamUsageAccumulator) Successful() bool {
 	return (a.terminal == "" && a.seenDone) || a.terminal == "completed" || a.terminal == "message_stop"
+}
+
+func (a *streamUsageAccumulator) Errored() bool { return a.errored }
+
+func (a *streamUsageAccumulator) ErrorMessage() string { return a.errorMessage }
+
+func streamProtocolError(u *streamUsageJSON) (string, bool) {
+	if u.Error != nil {
+		if u.Error.Message != "" {
+			return u.Error.Message, true
+		}
+		if u.Error.Status != "" {
+			return u.Error.Status, true
+		}
+		return "upstream protocol error", true
+	}
+	if u.Type == "error" {
+		var message string
+		if json.Unmarshal(u.Message, &message) == nil && message != "" {
+			return message, true
+		}
+		return "upstream protocol error", true
+	}
+	if u.Response != nil {
+		if u.Response.Error != nil {
+			if u.Response.Error.Message != "" {
+				return u.Response.Error.Message, true
+			}
+			if u.Response.Error.Status != "" {
+				return u.Response.Error.Status, true
+			}
+			return "upstream protocol error", true
+		}
+		if u.Response.IncompleteDetails != nil && u.Response.IncompleteDetails.Reason != "" {
+			return u.Response.IncompleteDetails.Reason, u.Type == "response.incomplete"
+		}
+	}
+	if u.IncompleteDetails != nil && u.IncompleteDetails.Reason != "" {
+		return u.IncompleteDetails.Reason, u.Type == "response.incomplete"
+	}
+	// Responses also has a top-level error event with code/message, while
+	// Anthropic and Gemini put the same object under error; the shared Error
+	// field above deliberately handles all three dialects.
+	return "", false
 }
 
 func isResponsesTerminal(typ string) bool {

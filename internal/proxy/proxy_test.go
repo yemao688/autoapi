@@ -4130,6 +4130,136 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 	}
 }
 
+// TestStreaming_ProtocolErrorThenClientCancelIsTruncated verifies that a
+// client cancellation caused by an upstream SSE error is attributed to the
+// upstream, not to the client. The error event is committed before the
+// request is cancelled, so the attempt must not fail over.
+func TestStreaming_ProtocolErrorThenClientCancelIsTruncated(t *testing.T) {
+	hangCh := make(chan struct{})
+	var upstreamHits, failoverHits int
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		select {
+		case <-hangCh:
+		case <-r.Context().Done():
+		}
+	}))
+	defer upstreamSrv.Close()
+	defer close(hangCh)
+	failoverSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failoverHits++
+		http.Error(w, "unexpected failover", http.StatusInternalServerError)
+	}))
+	defer failoverSrv.Close()
+
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: upstreamSrv.URL, Enabled: true, ResponsesEnabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: failoverSrv.URL, Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{
+			ID: "r1", Name: "x", Enabled: true,
+			Targets: []model.ModelRuleTarget{
+				{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 0, Enabled: true},
+				{ID: "t1", ProviderID: "p1", ModelName: "m1", MaxRetries: 0, Enabled: true},
+			},
+		}},
+		apiKeys: []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
+	defer p.Shutdown()
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	clientCtx, clientCancel := context.WithCancel(context.Background())
+	defer clientCancel()
+	req, _ := http.NewRequestWithContext(clientCtx, "POST", proxySrv.URL+"/v1/responses",
+		strings.NewReader(`{"model":"x","input":"hi","stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	readBuf := make([]byte, 4096)
+	n, readErr := resp.Body.Read(readBuf)
+	if readErr != nil && !strings.Contains(readErr.Error(), "canceled") {
+		t.Fatalf("reading committed error event failed: %v", readErr)
+	}
+	if !strings.Contains(string(readBuf[:n]), "server overloaded") {
+		t.Fatalf("expected committed protocol error, got %q", string(readBuf[:n]))
+	}
+	clientCancel()
+	_ = resp.Body.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	p.Shutdown()
+	if upstreamHits != 1 || failoverHits != 0 {
+		t.Fatalf("expected one upstream hit and no failover, got upstream=%d failover=%d", upstreamHits, failoverHits)
+	}
+	if got, want := store.providers["p0"].Status, model.ProviderStatusError; got != want {
+		t.Fatalf("expected provider health %q, got %q", want, got)
+	}
+	if hit, fail := store.statsFor("t0"); hit != 0 || fail != 1 {
+		t.Fatalf("expected target stats 0 hits/1 failure, got %d/%d", hit, fail)
+	}
+	log, ok := store.LastLog()
+	if !ok || len(log.Chain) != 1 {
+		t.Fatalf("expected one chain entry, got ok=%v log=%+v", ok, log)
+	}
+	if log.Chain[0].Status != string(model.OutcomeTruncated) {
+		t.Fatalf("expected truncated, got %q", log.Chain[0].Status)
+	}
+	if !strings.Contains(log.Chain[0].Error, "server overloaded") || strings.Contains(log.Chain[0].Error, "client disconnect") {
+		t.Fatalf("expected upstream error attribution, got %q", log.Chain[0].Error)
+	}
+}
+
+func TestStreaming_ProtocolErrorCleanEOFKeepsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+	req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/responses", strings.NewReader(`{"model":"x","input":"hi","stream":true}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if !strings.Contains(string(body), "server overloaded") {
+		t.Fatalf("expected protocol error in response, got %q", string(body))
+	}
+	log := waitForLog(t, st)
+	if log.Error == "" || len(log.Chain) != 1 || log.Chain[0].Error == "" {
+		t.Fatalf("expected top-level and chain errors, got log=%+v", log)
+	}
+	if log.Chain[0].Status != string(model.OutcomeTruncated) || !strings.Contains(log.Error, "server overloaded") {
+		t.Fatalf("expected truncated protocol error, got top=%q chain=%+v", log.Error, log.Chain[0])
+	}
+}
+
 // TestStreaming_ClientDisconnectBeforeFirstByte_RecordsProviderIdentity is a
 // regression test for the production gap where a client disconnect BEFORE the
 // upstream sent response headers (Do error, context canceled) logged status

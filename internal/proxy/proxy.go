@@ -2682,6 +2682,23 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		FirstTokenMs:         int(firstByteTime.Milliseconds()),
 	}
 	markTransportAttempt(&chainEntry, c)
+	protocolFailure := func() string {
+		message := usageAcc.ErrorMessage()
+		if message == "" {
+			message = "upstream protocol error"
+		}
+		chainEntry.Status = string(model.OutcomeTruncated)
+		chainEntry.Error = message
+		if c.targetID != "" {
+			if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
+				slog.Error("proxy: increment target failure count (protocol stream error)", "err", err)
+			}
+		}
+		if err := p.store.UpdateProviderHealth(c.provider.ID, model.ProviderStatusError, message); err != nil {
+			slog.Error("proxy: update provider health", "err", err)
+		}
+		return message
+	}
 	if !committed {
 		if conversionErr != nil {
 			chainEntry.Status = string(model.AttemptOutcomeConversionError)
@@ -2712,6 +2729,20 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
 		logEntry.Error = chainEntry.Error
 		return streamAttemptResult{Status: model.AttemptOutcomeConversionError, StatusCode: upstreamStatus, Error: chainEntry.Error, AttemptStarted: true, LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()), StreamErr: conversionErr, Committed: committed}, attemptOrder
+	case usageAcc.Errored():
+		// A protocol error may be followed by context.Canceled when the
+		// client cancels after receiving the error event. Preserve the real
+		// upstream message and classify the committed attempt as truncated.
+		message := protocolFailure()
+		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		logEntry.Error = message
+		cause := errors.New(message)
+		return streamAttemptResult{
+			Status: model.OutcomeTruncated, AttemptStarted: true,
+			StatusCode: upstreamStatus, Error: message, Cause: cause,
+			LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()),
+			StreamErr: cause, Committed: true,
+		}, attemptOrder
 	case writeErr != nil && isClientDisconnect(writeErr):
 		// Client disconnected mid-stream. Do NOT penalize provider.
 		chainEntry.Status = "client_abort"
@@ -2808,7 +2839,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	default:
 		// Clean EOF. If [DONE] was not seen, this is a mid-stream
 		// failure and the provider misbehaved.
-		if !usageAcc.Successful() {
+		if usageAcc.Errored() {
+			message := protocolFailure()
+			logEntry.Error = message
+			cause := errors.New(message)
+			logEntry.Chain = append(logEntry.Chain, chainEntry)
+			return streamAttemptResult{
+				Status: model.OutcomeTruncated, AttemptStarted: true,
+				StatusCode: upstreamStatus, Error: message, Cause: cause,
+				LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()),
+				StreamErr: cause, Committed: committed,
+			}, attemptOrder
+		} else if !usageAcc.Successful() {
 			chainEntry.Status = "truncated"
 			if c.targetID != "" {
 				if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
