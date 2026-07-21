@@ -8,11 +8,12 @@ import { useRelativeTime } from '../composables/useRelativeTime'
 import { useProviderStyle } from '../composables/useProviderStyle'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
+import { usePolling } from '../composables/usePolling'
 import DropdownMenu from '@/components/DropdownMenu.vue'
 import ModelRuleTargetModal from '@/components/ModelRuleTargetModal.vue'
-import { model } from '../../wailsjs/go/models'
+import { model, type proxy } from '../../wailsjs/go/models'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { format } = useRelativeTime()
 const { color: providerColor, initial: providerLetter, textColor: providerTextColor } = useProviderStyle()
 const toast = useToast()
@@ -57,15 +58,12 @@ const targetModalOpen = ref(false)
 const targetModalRule = ref<model.ModelRule | null>(null)
 const targetModalTarget = ref<model.ModelRuleTarget | null>(null)
 const targetSaving = ref(false)
-const diagnostics = ref<model.TargetShadowScore[]>([])
-const diagnosticsLoading = ref(false)
-const diagnosticsError = ref(false)
-const diagnosticsRefreshId = ref(0)
 const shadowComparisons = ref<model.ModelRuleShadowComparison[]>([])
 const shadowLoading = ref(false)
 const shadowError = ref(false)
 const shadowRefreshId = ref(0)
 const shadowExpanded = ref<Set<string>>(new Set())
+const breakerStatuses = ref<proxy.TargetBreakerStatus[]>([])
 
 // The view is driven by a single interaction state. Server responses are merged
 // into this list by ID so nested target Sortable instances stay bound to the
@@ -113,6 +111,49 @@ const providerEnabledMap = computed(() => {
 
 function getTargetTimeout(target: model.ModelRuleTarget): number {
   return target.first_token_timeout_seconds ?? 0
+}
+
+const breakerByTarget = computed(() => {
+  const map = new Map<string, proxy.TargetBreakerStatus>()
+  for (const status of breakerStatuses.value) {
+    const current = map.get(status.target_id)
+    if (!current || status.state === 'open' || (current.state !== 'open' && status.failure_count > current.failure_count)) {
+      map.set(status.target_id, { ...status })
+      continue
+    }
+    current.last_success_ms = Math.max(current.last_success_ms || 0, status.last_success_ms || 0)
+    current.last_failure_ms = Math.max(current.last_failure_ms || 0, status.last_failure_ms || 0)
+    current.recovery_at_ms = Math.max(current.recovery_at_ms || 0, status.recovery_at_ms || 0)
+    if (!current.endpoint && status.endpoint) current.endpoint = status.endpoint
+  }
+  return map
+})
+
+function breakerFor(target: model.ModelRuleTarget): proxy.TargetBreakerStatus | undefined {
+  return target.id ? breakerByTarget.value.get(target.id) : undefined
+}
+
+function breakerStatusLabel(target: model.ModelRuleTarget): string {
+  const status = breakerFor(target)
+  return status?.state === 'open' ? t('modelRules.breaker.open') : status ? t('modelRules.breaker.normal') : t('modelRules.breaker.notRequested')
+}
+
+function breakerStatusClass(target: model.ModelRuleTarget): string {
+  const status = breakerFor(target)
+  return status?.state === 'open' ? 'breaker-open' : status ? 'breaker-normal' : 'breaker-idle'
+}
+
+function formatBreakerTime(ms: number): string {
+  if (!ms) return t('modelRules.breaker.notRequested')
+  return new Intl.DateTimeFormat(locale.value, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(ms))
+}
+
+async function loadBreakerStatuses() {
+  try {
+    breakerStatuses.value = await api.getTargetBreakerStatuses()
+  } catch {
+    // Runtime state is optional; keep configured targets visible.
+  }
 }
 
 function cloneTarget(target: model.ModelRuleTarget): model.ModelRuleTarget {
@@ -193,11 +234,18 @@ function shadowAvailabilityLabel(candidate: model.ShadowPlanCandidate): string {
   return shadowReasonLabel(candidate.reason)
 }
 
+type ShadowSkipReason = 'target_breaker_open' | 'circuit_open' | 'unavailable' | 'disabled' | 'cooldown'
+
+function isBreakerSkipReason(reason: string | undefined): reason is Extract<ShadowSkipReason, 'target_breaker_open' | 'circuit_open'> {
+  return reason === 'target_breaker_open' || reason === 'circuit_open'
+}
+
 function shadowReasonLabel(reason: string | undefined): string {
   switch (reason) {
     case 'unavailable': return t('modelRules.shadow.unavailable')
     case 'disabled': return t('modelRules.shadow.reasonDisabled')
-    case 'circuit_open': return t('modelRules.shadow.reasonCircuitOpen')
+    case 'target_breaker_open':
+    case 'circuit_open': return t('modelRules.shadow.reasonTargetBreakerOpen')
     case 'cooldown': return t('modelRules.shadow.reasonCooldown')
     default: return reason ? t('modelRules.shadow.reasonOther', { value: readableShadowValue(reason) }) : t('modelRules.shadow.unavailable')
   }
@@ -241,80 +289,6 @@ function formatSuccessRate(rule: model.ModelRule): string {
   }
   const rate = rule.today_success_rate ?? 0
   return `${rate.toFixed(1)}%`
-}
-
-function diagnosticKey(ruleId: string, targetId: string): string {
-  return `${ruleId}\u0000${targetId}`
-}
-
-const diagnosticsMap = computed(() => {
-  const map = new Map<string, model.TargetShadowScore>()
-  for (const item of diagnostics.value) {
-    map.set(diagnosticKey(item.rule_id, item.target_id), item)
-  }
-  return map
-})
-
-function diagnosticFor(rule: model.ModelRule, target: model.ModelRuleTarget): model.TargetShadowScore | undefined {
-  return diagnosticsMap.value.get(diagnosticKey(rule.id, target.id))
-}
-
-function targetDiagnostic(rule: model.ModelRule, target: model.ModelRuleTarget) {
-  return diagnosticFor(rule, target)
-}
-
-function diagnosticNumber(value: number | undefined, suffix = ''): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  return `${value % 1 === 0 ? value : value.toFixed(1)}${suffix}`
-}
-
-function diagnosticScore(value: number | undefined): string {
-  return diagnosticNumber(value)
-}
-
-function diagnosticSampleCount(diagnostic?: model.TargetShadowScore): number | undefined {
-  return diagnostic?.sample_count
-}
-
-function diagnosticCostStatus(diagnostic?: model.TargetShadowScore): string {
-  const costAvailable = diagnostic?.cost?.available
-  if (costAvailable === undefined) return t('modelRules.diagnostics.costUnavailable')
-  if (!costAvailable) return t('modelRules.diagnostics.priceUnknown')
-  return ''
-}
-
-function diagnosticStatus(rule: model.ModelRule, target: model.ModelRuleTarget): string {
-  if (diagnosticsLoading.value) return t('modelRules.diagnostics.loading')
-  if (diagnosticsError.value) return t('modelRules.diagnostics.unavailable')
-  const diagnostic = diagnosticFor(rule, target)
-  if (!diagnostic || !diagnostic.metrics_fresh) return t('modelRules.diagnostics.noSamplesDetail')
-  return ''
-}
-
-async function loadDiagnostics() {
-  const requestId = ++diagnosticsRefreshId.value
-  const snapshot = ruleSnapshotKey()
-  diagnosticsLoading.value = true
-  diagnosticsError.value = false
-  diagnostics.value = []
-  try {
-    const result = await api.getTargetDiagnostics()
-    if (requestId === diagnosticsRefreshId.value && snapshot === ruleSnapshotKey()) {
-      diagnostics.value = result
-    }
-  } catch {
-    // Diagnostics are optional and must never block or replace rules.
-    if (requestId === diagnosticsRefreshId.value) diagnosticsError.value = true
-  } finally {
-    if (requestId === diagnosticsRefreshId.value) diagnosticsLoading.value = false
-  }
-}
-
-function invalidateDiagnostics() {
-  diagnosticsRefreshId.value++
-  diagnostics.value = []
-  diagnosticsLoading.value = false
-  diagnosticsError.value = true
 }
 
 async function loadShadowComparisons() {
@@ -365,14 +339,12 @@ function ruleSnapshotKey(): string {
 async function loadRules() {
   const result = await fetchRules()
   if (!result) {
-    invalidateDiagnostics()
     invalidateShadowComparisons()
     return result
   }
 
   // useApi returns null on fetch failure and leaves ruleList unchanged. Only
   // after a successful authoritative rules response may dependent data refresh.
-  void loadDiagnostics()
   void loadShadowComparisons()
   return result
 }
@@ -789,6 +761,7 @@ function closeModal() {
 
 onMounted(() => {
   void loadRules()
+  usePolling(loadBreakerStatuses, 5000)
   loadProviders()
   loadSettings().catch((e: any) => toast.push(t('toast.loadSettingsFailed') + ': ' + (e?.message || e?.toString() || ''), 'error'))
 })
@@ -978,19 +951,13 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                         :title="t('modelRules.targets.providerDisabled')"
                       >{{ t('modelRules.targets.providerDisabled') }}</span>
                       </div>
-                      <div class="target-diagnostics" :class="{ 'target-diagnostics-empty': !targetDiagnostic(rule, target) || !targetDiagnostic(rule, target)?.metrics_fresh }">
-                        <template v-if="targetDiagnostic(rule, target)?.metrics_fresh">
-                          <span class="diag-score">{{ t('modelRules.diagnostics.score') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.overall) }}</span>
-                          <span>{{ t('modelRules.diagnostics.reliability') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.reliability) }}</span>
-                          <span>{{ t('modelRules.diagnostics.latencyScore') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.latency) }}</span>
-                          <span>{{ t('modelRules.diagnostics.ttftScore') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.ttft) }}</span>
-                          <span>{{ t('modelRules.diagnostics.capacity') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.capacity) }}</span>
-                          <span>{{ t('modelRules.diagnostics.costEfficiency') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.cost_efficiency) }}</span>
-                          <span>{{ t('modelRules.diagnostics.estimatedCost') }} {{ diagnosticNumber(targetDiagnostic(rule, target)?.estimated_cost, ' USD') }}</span>
-                          <span class="diag-samples" :title="t('modelRules.diagnostics.sampleBasis')">{{ t('modelRules.diagnostics.samples') }} {{ diagnosticNumber(diagnosticSampleCount(targetDiagnostic(rule, target))) }} · {{ t('modelRules.diagnostics.confidence') }} {{ diagnosticScore(targetDiagnostic(rule, target)?.confidence) }}</span>
-                          <span v-if="diagnosticCostStatus(targetDiagnostic(rule, target))" class="diag-note">{{ diagnosticCostStatus(targetDiagnostic(rule, target)) }}</span>
-                        </template>
-                        <span v-else class="diag-note">{{ diagnosticStatus(rule, target) }}</span>
+                      <div class="target-runtime" :class="breakerStatusClass(target)">
+                        <span class="target-runtime-status"><span class="target-runtime-dot"></span>{{ breakerStatusLabel(target) }}</span>
+                        <span v-if="breakerFor(target)" class="target-runtime-failures">{{ t('modelRules.breaker.failures', { count: breakerFor(target)?.failure_count || 0 }) }}</span>
+                        <span v-if="breakerFor(target)?.last_success_ms" class="target-runtime-meta">{{ t('modelRules.breaker.lastSuccess', { time: formatBreakerTime(breakerFor(target)?.last_success_ms || 0) }) }}</span>
+                        <span v-if="breakerFor(target)?.last_failure_ms" class="target-runtime-meta">{{ t('modelRules.breaker.lastFailure', { time: formatBreakerTime(breakerFor(target)?.last_failure_ms || 0) }) }}</span>
+                        <span v-if="breakerFor(target)?.state === 'open'" class="target-runtime-meta">{{ t('modelRules.breaker.recovery', { time: formatBreakerTime(breakerFor(target)?.recovery_at_ms || 0) }) }}</span>
+                        <span v-if="breakerFor(target)?.endpoint" class="target-runtime-endpoint text-mono" :title="breakerFor(target)?.endpoint">{{ breakerFor(target)?.endpoint }}</span>
                       </div>
                     </div>
                     <div class="target-counters">
@@ -1290,23 +1257,28 @@ html[data-theme="dark"] .rule-drag-handle:hover {
   flex-wrap: wrap;
   min-width: 0;
 }
-.target-diagnostics {
+.target-runtime {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
+  flex-basis: 100%;
   flex-wrap: wrap;
   margin-top: 4px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 10.5px;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
 }
-.target-diagnostics-empty { opacity: 0.72; }
-.diag-score { color: var(--fg); font-weight: 600; }
-.diag-samples { opacity: 0.8; }
+.target-runtime-status { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.target-runtime-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.breaker-normal { color: var(--positive); }
+.breaker-normal .target-runtime-dot { background: var(--positive); }
+.breaker-open { color: var(--warning); }
+.breaker-open .target-runtime-dot { background: var(--warning); }
+.breaker-idle { color: var(--muted); }
+.target-runtime-failures, .target-runtime-meta, .target-runtime-endpoint { color: var(--muted); }
+.target-runtime-endpoint { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diag-note { color: var(--warning); font-family: inherit; }
+.shadow-warning { color: var(--warning); font-weight: 600; }
 .shadow-comparison { margin-top: 12px; border-top: 1px dashed var(--rule-border); }
 .shadow-readonly { font-weight: 400; opacity: 0.8; }
 .shadow-changed { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
@@ -1496,10 +1468,6 @@ html[data-theme="dark"] .badge-provider-disabled {
   }
   .target-info {
     flex: 1;
-  }
-  .target-diagnostics {
-    flex-basis: 100%;
-    padding-left: calc(var(--target-icon-size) + var(--target-row-gap));
   }
   .target-counters {
     order: 3;

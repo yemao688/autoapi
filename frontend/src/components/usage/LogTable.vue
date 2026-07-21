@@ -79,9 +79,12 @@ function readableInternalValue(value: string): string {
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
 }
 
-function replayReasonLabel(reason: string | undefined): string {
+type ReplayReason = 'target_breaker_open' | 'circuit_open' | 'disabled' | 'cooldown'
+
+function replayReasonLabel(reason: ReplayReason | string | undefined): string {
   switch (reason) {
     case 'disabled': return t('usage.logTable.replayReasonDisabled')
+    case 'target_breaker_open':
     case 'circuit_open': return t('usage.logTable.replayReasonCircuitOpen')
     case 'cooldown': return t('usage.logTable.replayReasonCooldown')
     default: return reason ? t('usage.logTable.replayReasonOther', { value: readableInternalValue(reason) }) : ''
@@ -156,7 +159,7 @@ function chainLength(log: model.RequestLog): number {
 // chainStatusLabel maps a ChainEntry.status string to the i18n key
 // shown as a badge in the detail row. Unknown statuses fall through to
 // the raw string so future server-side additions don't render blank.
-type ChainStatus = model.RequestLogChainEntry['status'] | 'truncated' | 'downstream_error'
+type ChainStatus = model.RequestLogChainEntry['status'] | 'target_breaker_open' | 'truncated' | 'downstream_error'
 
 function chainStatusLabel(status: ChainStatus): string {
   switch (status) {
@@ -166,8 +169,9 @@ function chainStatusLabel(status: ChainStatus): string {
       return t('usage.logTable.statusRetryable')
     case 'non_retryable':
       return t('usage.logTable.statusNonRetryable')
+    case 'target_breaker_open':
     case 'circuit_open':
-      return t('usage.logTable.statusCircuitOpen')
+      return t('usage.logTable.statusBreakerSkipped')
     case 'preflight_error':
       return t('usage.logTable.statusPreflightError')
     case 'client_abort':
@@ -189,6 +193,7 @@ function chainStatusClass(status: ChainStatus): string {
     case 'success':
       return 'success'
     case 'retryable':
+    case 'target_breaker_open':
     case 'circuit_open':
     case 'client_abort':
     case 'downstream_error':
@@ -477,7 +482,9 @@ function apiKeyLabel(log: model.RequestLog): string {
                     <span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: entry.attempt_order }) }}</span>
                     <span class="log-detail-chain-provider">{{ entry.provider_name || '—' }}</span>
                     <span class="log-detail-chain-model text-mono">{{ entry.model_name || '—' }}</span>
-                    <span class="badge" :class="chainStatusClass(entry.status)">{{ chainStatusLabel(entry.status) }}</span><span class="log-detail-chain-latency text-muted" :title="costTitle(entry.request_cost_available)">· {{ costLabel(entry.request_cost, entry.request_cost_available, 4) }}</span>
+                    <span class="badge" :class="chainStatusClass(entry.status)">{{ chainStatusLabel(entry.status) }}</span>
+                    <span class="log-detail-chain-endpoint text-mono" :title="entry.endpoint || t('usage.logTable.endpointUnavailable')"><span class="log-detail-chain-endpoint-label">{{ t('usage.logTable.endpoint') }}</span> {{ entry.endpoint || '—' }}</span>
+                    <span class="log-detail-chain-latency text-muted" :title="costTitle(entry.request_cost_available)">· {{ costLabel(entry.request_cost, entry.request_cost_available, 4) }}</span>
                     <span class="log-detail-chain-latency text-muted">{{ formatLatency(entry.latency_ms) }}</span>
                     <span v-if="entry.first_token_ms > 0" class="log-detail-chain-latency text-muted" style="margin-left: 2px;">· {{ t('usage.logTable.ttft') }} {{ formatLatency(entry.first_token_ms) }}</span>
                     <span v-if="entry.status === 'downstream_error' && entry.error" class="log-detail-chain-downstream-error text-mono">
@@ -508,7 +515,7 @@ function apiKeyLabel(log: model.RequestLog): string {
                   <div v-if="replayFor(log)?.attempts?.length" class="replay-attempts">
                     <div class="replay-attempts-title">{{ t('usage.logTable.replayAttempts') }} · {{ t('usage.logTable.replayScores') }}</div>
                     <div v-for="(replayAttempt, index) in replayFor(log)?.attempts" :key="replayAttempt.attempt.attempt_order || index" class="replay-attempt">
-                      <div class="replay-attempt-main"><span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: replayAttemptEntry(replayAttempt).attempt_order }) }}</span><span class="replay-attempt-provider">{{ replayAttemptProvider(replayAttempt) }}</span><span class="text-mono text-muted">{{ replayAttemptModel(replayAttempt) }}</span><span v-if="replayAttempt.target_id" class="replay-target-id text-muted" :title="replayAttempt.target_id">{{ t('usage.logTable.replayTarget') }} {{ replayAttemptTargetId(replayAttempt) }}</span><span class="badge" :class="chainStatusClass(replayAttemptEntry(replayAttempt).status)">{{ chainStatusLabel(replayAttemptEntry(replayAttempt).status) }}</span></div>
+                      <div class="replay-attempt-main"><span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: replayAttemptEntry(replayAttempt).attempt_order }) }}</span><span class="replay-attempt-provider">{{ replayAttemptProvider(replayAttempt) }}</span><span class="text-mono text-muted">{{ replayAttemptModel(replayAttempt) }}</span><span v-if="replayAttempt.target_id" class="replay-target-id text-muted" :title="replayAttempt.target_id">{{ t('usage.logTable.replayTarget') }} {{ replayAttemptTargetId(replayAttempt) }}</span><span class="badge" :class="chainStatusClass(replayAttemptEntry(replayAttempt).status)">{{ chainStatusLabel(replayAttemptEntry(replayAttempt).status) }}</span><span class="replay-attempt-endpoint text-mono"><span class="log-detail-chain-endpoint-label">{{ t('usage.logTable.endpoint') }}</span> {{ replayAttemptEntry(replayAttempt).endpoint || '—' }}</span></div>
                       <div class="replay-score-grid"><span class="replay-score-overall">{{ t('modelRules.diagnostics.score') }} {{ replayScore(replayAttempt.score.overall) }}</span><span>{{ t('modelRules.diagnostics.reliabilityPlain') }} {{ replayScore(replayAttempt.score.reliability) }}</span><span>{{ t('modelRules.diagnostics.latencyPlain') }} {{ replayScore(replayAttempt.score.latency) }}</span><span>{{ t('modelRules.diagnostics.ttftPlain') }} {{ replayScore(replayAttempt.score.ttft) }}</span><span>{{ t('modelRules.diagnostics.capacityPlain') }} {{ replayScore(replayAttempt.score.capacity) }}</span><span>{{ t('modelRules.diagnostics.costEfficiencyPlain') }} {{ replayScore(replayAttempt.score.cost_efficiency) }}</span><span>{{ t('usage.logTable.replayEstimatedCost') }} {{ costLabel(replayAttempt.score.estimated_cost, replayAttempt.score.cost?.available, 4) }}</span><span>{{ t('usage.logTable.replayAvailability') }}: {{ availabilityLabel(replayAttempt.score.availability) }}<template v-if="replayAttempt.score.reason"> · {{ replayReasonLabel(replayAttempt.score.reason) }}</template></span></div>
                       <div v-if="replayAttempt.target_missing || replayAttempt.provider_missing || replayAttempt.replay_limitation || !replayAttempt.score.metrics_fresh" class="replay-attempt-notes"><span v-if="replayAttempt.target_missing">{{ t('usage.logTable.replayMissingTarget') }}</span><span v-if="replayAttempt.provider_missing">{{ t('usage.logTable.replayMissingProvider') }}</span><span v-if="!replayAttempt.score.metrics_fresh">{{ t('usage.logTable.replayNoSamples') }}</span><span v-if="replayAttempt.replay_limitation">{{ t('usage.logTable.replayLimitation') }}: {{ replayLimitationLabel(replayAttempt.replay_limitation) }}</span></div>
                     </div>
@@ -827,6 +834,13 @@ function apiKeyLabel(log: model.RequestLog): string {
   color: var(--muted, #6e6e73);
   font-size: 11.5px;
 }
+.log-detail-chain-endpoint {
+  color: var(--fg, #1d1d1f);
+  max-width: min(100%, 520px);
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.log-detail-chain-endpoint-label { color: var(--muted); font-family: var(--font-body); }
 .log-detail-chain-latency {
   font-size: 11.5px;
 }
@@ -875,6 +889,7 @@ function apiKeyLabel(log: model.RequestLog): string {
 .replay-attempts-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 .replay-attempt { padding: 7px 8px; border-radius: 6px; background: var(--bg, rgba(0, 0, 0, 0.02)); }
 .replay-attempt-provider { color: var(--fg); font-weight: 500; }
+.replay-attempt-endpoint { color: var(--fg); max-width: 100%; overflow-wrap: anywhere; font-size: 11px; }
 .replay-target-id { font-family: var(--font-mono); font-size: 10px; }
 .replay-score-grid { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 5px; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .replay-score-overall { color: var(--fg); font-weight: 600; }

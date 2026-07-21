@@ -184,8 +184,10 @@ type Proxy struct {
 	breakersMu sync.RWMutex
 	breakers   map[string]*CircuitBreaker
 
-	routeBreakersMu sync.RWMutex
-	routeBreakers   map[model.RouteModeKey]*CircuitBreaker
+	routeBreakersMu  sync.RWMutex
+	routeBreakers    map[model.RouteModeKey]*CircuitBreaker
+	targetBreakersMu sync.RWMutex
+	targetBreakers   map[model.RouteModeKey]*targetBreaker
 
 	explorationMu      sync.Mutex
 	exploration        map[explorationKey]*explorationState
@@ -229,6 +231,7 @@ func New(store storeProxy, service upstreamKeyProvider, defaultPort int, setting
 		transport:        transport,
 		breakers:         make(map[string]*CircuitBreaker),
 		routeBreakers:    make(map[model.RouteModeKey]*CircuitBreaker),
+		targetBreakers:   make(map[model.RouteModeKey]*targetBreaker),
 		exploration:      make(map[explorationKey]*explorationState),
 		explorationClock: time.Now,
 		writer:           newLogWriter(store),
@@ -804,7 +807,9 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 			candidates[i].requestPriceAvailable = true
 		}
 	}
-	return p.planCandidates(req, candidates), nil
+	// Active execution is deliberately limited to matcher filtering and the
+	// persisted target slice. Scoring and exploration are shadow-only.
+	return candidates, nil
 }
 
 func (p *Proxy) loadFeatureEnforcement() {
@@ -917,6 +922,94 @@ func (p *Proxy) routeModeWouldAllow(c candidate) bool {
 	return true
 }
 
+func (p *Proxy) targetBreakerFor(c candidate) *targetBreaker {
+	key := routeModeKeyForCandidate(c)
+	p.targetBreakersMu.Lock()
+	defer p.targetBreakersMu.Unlock()
+	if p.targetBreakers == nil {
+		p.targetBreakers = make(map[model.RouteModeKey]*targetBreaker)
+	}
+	if b := p.targetBreakers[key]; b != nil {
+		return b
+	}
+	b := &targetBreaker{}
+	p.targetBreakers[key] = b
+	return b
+}
+
+func (p *Proxy) TargetBreakerStatuses() []TargetBreakerStatus {
+	p.targetBreakersMu.RLock()
+	defer p.targetBreakersMu.RUnlock()
+	now := time.Now()
+	targets := make(map[string]struct {
+		provider  *model.Provider
+		modelName string
+		order     int
+	})
+	if p.store != nil {
+		if rules, err := p.store.ListModelRules(); err == nil {
+			for _, rule := range rules {
+				for order, target := range rule.Targets {
+					provider, providerErr := p.store.GetProvider(target.ProviderID)
+					if providerErr == nil && provider != nil {
+						targets[target.ID] = struct {
+							provider  *model.Provider
+							modelName string
+							order     int
+						}{provider: provider, modelName: target.ModelName, order: order}
+					}
+				}
+			}
+		}
+	}
+	out := make([]TargetBreakerStatus, 0, len(p.targetBreakers))
+	for key, b := range p.targetBreakers {
+		endpoint, order := "", 0
+		if config, ok := targets[key.TargetID]; ok {
+			endpoint = endpointForRoute(config.provider, config.modelName, key.UpstreamProtocol)
+			order = config.order
+		}
+		out = append(out, b.status(key, endpoint, order, now))
+	}
+	return out
+}
+
+func endpointForRoute(provider *model.Provider, modelName, protocol string) string {
+	if provider == nil {
+		return ""
+	}
+	path := "/v1/chat/completions"
+	switch protocol {
+	case string(ProtocolOpenAIResponses):
+		path = "/v1/responses"
+	case string(ProtocolAnthropicMessages):
+		path = "/v1/messages"
+	case string(ProtocolGemini):
+		path = "/v1beta/models/" + modelName + ":generateContent"
+	}
+	return store.JoinProviderURL(provider.BaseURL, path)
+}
+
+func endpointForCandidate(c candidate) string {
+	path := c.upstreamPath
+	if path == "" {
+		path = "/v1/chat/completions"
+	}
+	return store.JoinProviderURL(c.provider.BaseURL, path)
+}
+
+func normalizeChainEndpoints(chain []model.RequestLogChainEntry, candidates []candidate) {
+	endpoints := make(map[string]string, len(candidates))
+	for _, c := range candidates {
+		endpoints[c.targetID] = endpointForCandidate(c)
+	}
+	for i := range chain {
+		if chain[i].Endpoint == "" {
+			chain[i].Endpoint = endpoints[chain[i].TargetID]
+		}
+	}
+}
+
 type probeGuard struct {
 	breaker *CircuitBreaker
 	lease   BreakerLease
@@ -979,6 +1072,7 @@ func (p *Proxy) resetRouteBreakers() {
 // entry is the successful candidate (or the last attempted candidate when
 // every attempt failed) — the same data the rest of the proxy already used.
 func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body []byte, candidates []candidate, isStream bool, inputEstimate int, logEntry *model.RequestLog) {
+	defer func() { normalizeChainEndpoints(logEntry.Chain, candidates) }()
 	if isStream {
 		p.forwardStream(w, r, body, candidates, inputEstimate, logEntry)
 		return
@@ -1019,6 +1113,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// to stop iterating after the current candidate finishes its retry loop.
 	attemptsCapped := false
 	routeOnlySkipped := false
+	targetBreakerOnlySkipped := true
 	// outer is the label on the candidate loop. Used by the global attempt
 	// cap (maxTotalAttempts) to break out of BOTH the candidate and retry
 	// loops at once when the cap is reached. Plain `break` inside the retry
@@ -1032,6 +1127,28 @@ outer:
 			adapter = conversionAdapter{from: c.protocol, to: c.convertTo}
 		}
 		lastCandidate = c
+		targetCB := p.targetBreakerFor(c)
+		if !targetCB.allow(time.Now()) {
+			attemptOrder++
+			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: "target_breaker_open", Error: "model target failure breaker open"})
+			continue
+		}
+		targetBreakerOnlySkipped = false
+		targetSettled := false
+		recordTargetFailure := func(err error, status int, reason string) {
+			if targetSettled {
+				return
+			}
+			targetSettled = true
+			targetCB.recordFailure(time.Now(), reason)
+		}
+		recordTargetSuccess := func() {
+			if targetSettled {
+				return
+			}
+			targetSettled = true
+			targetCB.recordSuccess(time.Now())
+		}
 		providerBreaker := p.breakerFor(c.provider.ID)
 		allowed, providerLease := providerBreaker.Acquire()
 		if !allowed {
@@ -1132,6 +1249,7 @@ outer:
 		var succeeded bool
 		var finalCat ErrorCategory
 		var finalAttemptErr error
+		candidateAttempted := false
 		// Retry-After is local to this candidate. A target switch must never
 		// delay the first attempt on the next target.
 		retryAfter := time.Duration(0)
@@ -1141,6 +1259,9 @@ outer:
 			// checked BEFORE the per-target circuit check and backoff
 			// so a fully-spent budget is honored even mid-retry.
 			if totalAttempts >= maxTotalAttempts {
+				if candidateAttempted {
+					recordTargetFailure(nil, http.StatusServiceUnavailable, "global attempt cap")
+				}
 				providerProbe.cancel()
 				routeProbe.cancel()
 				attemptOrder++
@@ -1166,6 +1287,9 @@ outer:
 			// the whole chain with a budget_exceeded chain entry; the
 			// all-candidates-exhausted path then surfaces a 503.
 			if remaining := time.Until(firstByteDeadline); remaining <= 0 {
+				if candidateAttempted {
+					recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
+				}
 				providerProbe.cancel()
 				routeProbe.cancel()
 				attemptOrder++
@@ -1243,6 +1367,7 @@ outer:
 							"target", c.targetID)
 						return
 					} else {
+						recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
 						// First-byte budget exhausted during backoff.
 						lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
 						lastStatus = http.StatusServiceUnavailable
@@ -1255,6 +1380,7 @@ outer:
 				case <-time.After(delay):
 				}
 			}
+			candidateAttempted = true
 			totalAttempts++
 
 			if attempt > 0 && !providerProbe.canContinue() {
@@ -1446,6 +1572,7 @@ outer:
 					buf.body = bytes.NewBuffer(out)
 					buf.header.Del("Content-Length")
 				}
+				recordTargetSuccess()
 				routeProbe.success()
 				p.emitAttempt(c, r.URL.Path, middleware.GetReqID(r.Context()), model.AttemptOutcomeSuccess, effectiveStatus, false, 0, 0)
 				copyBufferedResponse(w, buf)
@@ -1543,6 +1670,9 @@ outer:
 					"err", lastErr.Error())
 				return
 			case CategoryNonRetryable:
+				if targetFailure(attemptErr, effectiveStatus) {
+					recordTargetFailure(attemptErr, effectiveStatus, lastErr.Error())
+				}
 				routeProbe.cancel()
 				p.writeError(w, buf.statusCode, "invalid_request_error", lastErr.Error())
 				logEntry.StatusCode = buf.statusCode
@@ -1648,6 +1778,9 @@ outer:
 				slog.Error("proxy: update provider health", "err", err)
 			}
 		}
+		if targetFailure(finalAttemptErr, lastStatus) {
+			recordTargetFailure(finalAttemptErr, lastStatus, lastErr.Error())
+		}
 		providerProbe.cancel()
 		routeProbe.cancel()
 	}
@@ -1660,6 +1793,9 @@ outer:
 	}
 	status := http.StatusBadGateway
 	if routeOnlySkipped && lastStatus == 0 {
+		status = http.StatusServiceUnavailable
+	}
+	if targetBreakerOnlySkipped && len(logEntry.Chain) > 0 {
 		status = http.StatusServiceUnavailable
 	}
 	if !lastFailureWasConversion && lastStatus >= 500 {
@@ -1738,6 +1874,7 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	// candidate's retry loop completes.
 	attemptsCapped := false
 	routeOnlySkipped := false
+	targetBreakerOnlySkipped := true
 
 	// outer is the label on the candidate loop. The global attempt cap
 	// uses a labeled break to exit BOTH loops at once. Plain `break` in
@@ -1750,6 +1887,28 @@ outer:
 			adapter = conversionAdapter{from: c.protocol, to: c.convertTo}
 		}
 		lastCandidate = c
+		targetCB := p.targetBreakerFor(c)
+		if !targetCB.allow(time.Now()) {
+			attemptOrder++
+			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: "target_breaker_open", Error: "model target failure breaker open"})
+			continue
+		}
+		targetBreakerOnlySkipped = false
+		targetSettled := false
+		recordTargetFailure := func(err error, status int, reason string) {
+			if targetSettled {
+				return
+			}
+			targetSettled = true
+			targetCB.recordFailure(time.Now(), reason)
+		}
+		recordTargetSuccess := func() {
+			if targetSettled {
+				return
+			}
+			targetSettled = true
+			targetCB.recordSuccess(time.Now())
+		}
 		providerBreaker := p.breakerFor(c.provider.ID)
 		allowed, providerLease := providerBreaker.Acquire()
 		if !allowed {
@@ -1846,10 +2005,14 @@ outer:
 		// immediately when this target has no retry remaining.
 		retryAfter := time.Duration(0)
 		var finalCause error
+		candidateAttempted := false
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
 			// Global attempt cap: stops the N×(M+1) explosion when
 			// many candidates each have a high MaxRetries.
 			if totalAttempts >= maxTotalAttempts {
+				if candidateAttempted {
+					recordTargetFailure(nil, http.StatusServiceUnavailable, "global attempt cap")
+				}
 				routeProbe.cancel()
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
@@ -1877,6 +2040,9 @@ outer:
 			// client-disconnect signal stays in the backoff select
 			// below where it can be distinguished via r.Context().
 			if remaining := time.Until(firstByteDeadline); remaining <= 0 {
+				if candidateAttempted {
+					recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
+				}
 				routeProbe.cancel()
 				attemptOrder++
 				logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
@@ -1948,6 +2114,7 @@ outer:
 						return
 					} else {
 						// First-byte budget exhausted during backoff.
+						recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
 						lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
 						lastStatus = http.StatusServiceUnavailable
 						attemptsCapped = true
@@ -1979,7 +2146,13 @@ outer:
 
 			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, prep, attemptOrder, inputEstimate, logEntry)
 			attemptOrder = newOrder
+			if result.AttemptStarted {
+				candidateAttempted = true
+			}
 			if result.BudgetExceeded {
+				if candidateAttempted {
+					recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
+				}
 				providerProbe.cancel()
 				routeProbe.cancel()
 				attemptOrder++
@@ -2006,6 +2179,7 @@ outer:
 
 			switch result.Status {
 			case model.OutcomeSuccess:
+				recordTargetSuccess()
 				providerProbe.success()
 				routeProbe.success()
 				// Top-level FirstTokenMs = Σ prior failed chain
@@ -2031,6 +2205,7 @@ outer:
 				// retry the same wire mode; move directly to the next candidate.
 				continue outer
 			case model.OutcomeTruncated:
+				recordTargetFailure(finalCause, result.StatusCode, result.Error)
 				// An upstream stream that ends before its terminal marker is a
 				// provider-wide transport failure. The owning guard records it
 				// once; downstream/client termination uses CancelProbe below.
@@ -2061,6 +2236,9 @@ outer:
 				succeeded = true
 				return
 			case model.AttemptOutcomeNonRetryable:
+				if targetFailure(finalCause, result.StatusCode) {
+					recordTargetFailure(finalCause, result.StatusCode, result.Error)
+				}
 				routeProbe.cancel()
 				logEntry.StatusCode = result.StatusCode
 				logEntry.Error = result.Error
@@ -2128,6 +2306,9 @@ outer:
 				slog.Error("proxy: update provider health", "err", err)
 			}
 		}
+		if targetFailure(finalCause, lastStatus) {
+			recordTargetFailure(finalCause, lastStatus, lastErr.Error())
+		}
 		providerProbe.cancel()
 		routeProbe.cancel()
 		slog.Info("proxy: stream failing over to next candidate",
@@ -2142,6 +2323,9 @@ outer:
 	}
 	status := http.StatusBadGateway
 	if routeOnlySkipped && lastStatus == 0 {
+		status = http.StatusServiceUnavailable
+	}
+	if targetBreakerOnlySkipped && len(logEntry.Chain) > 0 {
 		status = http.StatusServiceUnavailable
 	}
 	if lastStatus >= 500 {

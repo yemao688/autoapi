@@ -114,6 +114,10 @@ export function GetSystemHealth() {
   return window['go']['api']['App']['GetSystemHealth']();
 }
 
+export function GetTargetBreakerStatuses() {
+  return window['go']['api']['App']['GetTargetBreakerStatuses']();
+}
+
 export function GetTargetDiagnostics() {
   return window['go']['api']['App']['GetTargetDiagnostics']();
 }

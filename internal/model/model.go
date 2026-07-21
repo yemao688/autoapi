@@ -356,6 +356,7 @@ type RequestLogChainEntry struct {
 	ProviderName string `json:"provider_name"`
 	ModelName    string `json:"model_name"`
 	TargetID     string `json:"target_id"`
+	Endpoint     string `json:"endpoint"`
 	Status       string `json:"status"` // success, retryable, non_retryable, circuit_open, preflight_error, client_abort, truncated, downstream_error
 	StatusCode   int    `json:"status_code"`
 	Error        string `json:"error"`

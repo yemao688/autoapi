@@ -70,6 +70,7 @@ type candidate struct {
 	ruleID                     string
 	ruleLabel                  string
 	targetID                   string
+	targetOrder                int
 	maxRetries                 int
 	firstByteBudget            time.Duration
 	targetFirstBodyByteTimeout time.Duration
@@ -160,7 +161,7 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 	// Resolve the rule's first-byte budget ONCE; every candidate in
 	// the same rule shares the same budget.
 	firstByteBudget := firstByteTimeout(rule.FirstByteTimeoutSeconds)
-	for _, t := range rule.Targets {
+	for targetOrder, t := range rule.Targets {
 		// Disabled targets are skipped during candidate selection. The slice
 		// order (tier) is the source of truth for failover ordering, so this
 		// `continue` preserves the relative order of the remaining targets.
@@ -193,7 +194,9 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 		}
 		if capabilities.supportsModel(p.ID, modelName, protocol) {
 			if nativeFeaturesSupported(&normalizedReq, capabilities, p.ID, modelName, protocol) {
-				out = append(out, makeCandidate(p, modelName, protocol, req.Endpoint, rule, t, firstByteBudget))
+				c := makeCandidate(p, modelName, protocol, req.Endpoint, rule, t, firstByteBudget)
+				c.targetOrder = targetOrder
+				out = append(out, c)
 				continue
 			}
 			rejectedWireRoute = true
@@ -207,6 +210,7 @@ func selectCandidates(req *InboundRequest, rules []model.ModelRule, breakers map
 				continue
 			}
 			candidate := makeCandidate(p, modelName, protocol, edge.UpstreamPath, rule, t, firstByteBudget)
+			candidate.targetOrder = targetOrder
 			candidate.convertTo = edge.To
 			out = append(out, candidate)
 			break

@@ -1,5 +1,5 @@
 import * as wails from '../../wailsjs/go/api/App'
-import type { model, api as apiModels } from '../../wailsjs/go/models'
+import type { model, proxy, api as apiModels } from '../../wailsjs/go/models'
 
 export type ExportFormat = Parameters<typeof wails.ExportData>[0]
 
@@ -180,6 +180,10 @@ export const api = {
   getModelRuleShadowComparisons: (): Promise<model.ModelRuleShadowComparison[]> => {
     ensureWails()
     return wails.GetModelRuleShadowComparisons() as Promise<model.ModelRuleShadowComparison[]>
+  },
+  getTargetBreakerStatuses: (): Promise<proxy.TargetBreakerStatus[]> => {
+    ensureWails()
+    return wails.GetTargetBreakerStatuses() as Promise<proxy.TargetBreakerStatus[]>
   },
   replayLog: (id: string): Promise<model.ReplayResult> => {
     ensureWails()

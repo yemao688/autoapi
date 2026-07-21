@@ -66,8 +66,9 @@ type explorationState struct {
 
 const maxExplorationScopes = 1024
 
-// planCandidates creates one immutable execution order after matcher filtering.
-// Planning errors deliberately fail open to the already-safe priority order.
+// planCandidates builds the legacy shadow plan for diagnostics and compatibility
+// tooling. Production resolution does not call it; target slice order is the
+// only active execution order.
 func (p *Proxy) planCandidates(req *InboundRequest, candidates []candidate) []candidate {
 	if len(candidates) == 0 || !activeStrategy(candidates[0].strategy) {
 		return candidates
@@ -325,6 +326,9 @@ func (p *Proxy) emitPlanDiagnostics(d planDiagnostics) {
 
 func (p *Proxy) resetPlanningState() {
 	p.resetRouteBreakers()
+	p.targetBreakersMu.Lock()
+	p.targetBreakers = make(map[model.RouteModeKey]*targetBreaker)
+	p.targetBreakersMu.Unlock()
 	p.explorationMu.Lock()
 	p.exploration = make(map[explorationKey]*explorationState)
 	p.explorationLastNow = time.Time{}

@@ -2599,8 +2599,8 @@ func TestHandlerPlansCandidatesOnceBeforeRetryAndFailover(t *testing.T) {
 	if rec.Code != http.StatusOK || p0Hits != 2 || p1Hits != 1 {
 		t.Fatalf("response=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
 	}
-	if metricsSpy.calls != 2 || store.calls != 2 {
-		t.Fatalf("resolve planning calls repeated during retry/failover: metrics=%d prices=%d, want 2 each", metricsSpy.calls, store.calls)
+	if metricsSpy.calls != 0 || store.calls != 2 {
+		t.Fatalf("active routing performed shadow planning work: metrics=%d prices=%d, want 0 metrics and 2 price lookups", metricsSpy.calls, store.calls)
 	}
 }
 

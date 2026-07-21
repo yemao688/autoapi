@@ -188,6 +188,10 @@ type breakerStatusProvider interface {
 	BreakerStatuses() map[string]proxy.BreakerStatus
 }
 
+type targetBreakerStatusProvider interface {
+	TargetBreakerStatuses() []proxy.TargetBreakerStatus
+}
+
 // App is the single struct bound to the Wails runtime. All methods here are
 // auto-generated as TypeScript bindings under frontend/wailsjs/go/main/App.
 type App struct {
@@ -198,6 +202,15 @@ type App struct {
 	visibility          string
 	initiallyBackground bool
 	quitting            atomic.Bool
+}
+
+// GetTargetBreakerStatuses returns the in-memory rolling failure state for
+// model-rule targets. Runtime breaker state is intentionally not persisted.
+func (a *App) GetTargetBreakerStatuses() []proxy.TargetBreakerStatus {
+	if p, ok := a.deps.Proxy.(targetBreakerStatusProvider); ok {
+		return p.TargetBreakerStatuses()
+	}
+	return []proxy.TargetBreakerStatus{}
 }
 
 // GetTargetDiagnostics computes shadow-only diagnostics from detached snapshots.
