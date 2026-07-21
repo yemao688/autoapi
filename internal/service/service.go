@@ -554,14 +554,20 @@ func (s *Service) TestModelChat(providerID, modelName, protocol string, stream b
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
-		return result(false, "", fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(errBody)), ""), nil
+		out := result(false, "", fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(errBody)), "")
+		out.HTTPStatus = resp.StatusCode
+		return out, nil
 	}
 
 	if stream {
+		var out *model.ModelChatTestResult
 		if protocol == "chat" {
-			return s.parseChatStream(resp.Body, start), nil
+			out = s.parseChatStream(resp.Body, start)
+		} else {
+			out = s.parseGenericStream(resp.Body, start)
 		}
-		return s.parseGenericStream(resp.Body, start), nil
+		out.HTTPStatus = resp.StatusCode
+		return out, nil
 	}
 
 	// Non-stream mode: read up to 64 KiB + 1 byte so we can detect overflow.
@@ -569,15 +575,23 @@ func (s *Service) TestModelChat(providerID, modelName, protocol string, stream b
 	limitedReader := io.LimitReader(resp.Body, maxBodySize)
 	respBody, err := io.ReadAll(limitedReader)
 	if err != nil {
-		return result(false, "", fmt.Sprintf("read body: %v", err), ""), nil
+		out := result(false, "", fmt.Sprintf("read body: %v", err), "")
+		out.HTTPStatus = resp.StatusCode
+		return out, nil
 	}
 	if len(respBody) == maxBodySize {
-		return result(false, "", "response body too large (>64 KiB)", ""), nil
+		out := result(false, "", "response body too large (>64 KiB)", "")
+		out.HTTPStatus = resp.StatusCode
+		return out, nil
 	}
+	var out *model.ModelChatTestResult
 	if protocol == "chat" {
-		return s.parseChatNonStream(respBody, start), nil
+		out = s.parseChatNonStream(respBody, start)
+	} else {
+		out = parseGenericNonStream(respBody, start)
 	}
-	return parseGenericNonStream(respBody, start), nil
+	out.HTTPStatus = resp.StatusCode
+	return out, nil
 }
 
 func (s *Service) CancelModelTest(testID string) bool {
@@ -590,6 +604,138 @@ func (s *Service) CancelModelTest(testID string) bool {
 	return ok
 }
 
+// ListUpstreamMonitorModels returns active models belonging to enabled
+// providers, choosing the first enabled native protocol configured for the
+// model (then provider). A model capability row overrides its provider row.
+func (s *Service) ListUpstreamMonitorModels() ([]model.UpstreamMonitorModel, error) {
+	providers, err := s.store.ListProviders()
+	if err != nil {
+		return nil, err
+	}
+	protocols := []string{"openai_responses", "anthropic_messages", "gemini", "openai_chat"}
+	out := make([]model.UpstreamMonitorModel, 0)
+	for _, p := range providers {
+		if !p.Enabled {
+			continue
+		}
+		pc, err := s.store.ListProviderCapabilities(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		pvals := make(map[string]bool)
+		for _, c := range pc {
+			if c.Feature == "native" && c.Source == "manual" {
+				pvals[c.Protocol] = c.Enabled
+			}
+		}
+		legacy := map[string]bool{"openai_responses": p.ResponsesEnabled, "anthropic_messages": p.MessagesEnabled, "gemini": p.GeminiEnabled, "openai_chat": true}
+		for k, v := range legacy {
+			if _, ok := pvals[k]; !ok {
+				pvals[k] = v
+			}
+		}
+		models, err := s.store.ListModels(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range models {
+			if !m.Active {
+				continue
+			}
+			mc, err := s.store.ListModelCapabilities(p.ID, m.Name)
+			if err != nil {
+				return nil, err
+			}
+			vals := make(map[string]bool)
+			for k, v := range pvals {
+				vals[k] = v
+			}
+			for _, c := range mc {
+				if c.Feature == "native" && c.Source == "manual" {
+					vals[c.Protocol] = c.Enabled
+				}
+			}
+			for _, proto := range protocols {
+				if vals[proto] {
+					out = append(out, model.UpstreamMonitorModel{ProviderID: p.ID, ProviderName: p.Name, ModelName: m.Name, Protocol: monitorProbeProtocol(proto), Enabled: true})
+					break
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func monitorProbeProtocol(capabilityProtocol string) string {
+	switch capabilityProtocol {
+	case "openai_responses":
+		return "responses"
+	case "anthropic_messages":
+		return "messages"
+	case "openai_chat":
+		return "chat"
+	default:
+		return capabilityProtocol
+	}
+}
+
+func (s *Service) ProbeUpstreamMonitorModel(row model.UpstreamMonitorSelection) (model.UpstreamMonitorResult, error) {
+	r := model.UpstreamMonitorResult{ProviderID: row.ProviderID, ModelName: row.ModelName, Protocol: row.Protocol}
+	probe, err := s.TestModelChat(row.ProviderID, row.ModelName, row.Protocol, true, fmt.Sprintf("monitor-%d", time.Now().UnixNano()))
+	if err != nil {
+		r.Status, r.Error, r.Detail = "error", err.Error(), err.Error()
+		return r, nil
+	}
+	if probe == nil {
+		r.Status, r.Error, r.Detail = "error", "empty probe result", "empty probe result"
+		return r, nil
+	}
+	r.HTTPStatus = probe.HTTPStatus
+	r.Response, r.Error, r.FirstByteLatencyMs, r.TotalLatencyMs = probe.Response, probe.Error, probe.FirstByteLatencyMs, probe.LatencyMs
+	if probe.OK {
+		r.Status, r.Detail = "available", probe.Response
+	} else if strings.Contains(strings.ToLower(probe.Error), "empty") {
+		r.Status, r.Detail = "empty", probe.Error
+	} else {
+		r.Status, r.Detail = "error", probe.Error
+	}
+	return r, nil
+}
+
+func (s *Service) ProbeUpstreamMonitorModels(rows []model.UpstreamMonitorSelection) (*model.UpstreamMonitorBatch, error) {
+	start := time.Now()
+	type item struct {
+		i int
+		r model.UpstreamMonitorResult
+	}
+	ch := make(chan item, len(rows))
+	for i, row := range rows {
+		i, row := i, row
+		go func() {
+			r, _ := s.ProbeUpstreamMonitorModel(row)
+			ch <- item{i, r}
+		}()
+	}
+	out := &model.UpstreamMonitorBatch{Results: make([]model.UpstreamMonitorResult, len(rows)), Total: len(rows)}
+	for range rows {
+		x := <-ch
+		out.Results[x.i] = x.r
+	}
+	// Count after all workers have completed; each probe has its own timeout.
+	for _, r := range out.Results {
+		switch r.Status {
+		case "available":
+			out.Available++
+		case "empty":
+			out.Empty++
+		default:
+			out.Errors++
+		}
+	}
+	out.CompletionMs, out.CompletedAtMs = int(time.Since(start).Milliseconds()), time.Now().UnixMilli()
+	return out, nil
+}
+
 func parseGenericNonStream(body []byte, start time.Time) *model.ModelChatTestResult {
 	var v interface{}
 	if err := json.Unmarshal(body, &v); err != nil {
@@ -599,7 +745,8 @@ func parseGenericNonStream(body []byte, start time.Time) *model.ModelChatTestRes
 	if text == "" {
 		return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: int(time.Since(start).Milliseconds())}
 	}
-	return &model.ModelChatTestResult{OK: true, Response: text, LatencyMs: int(time.Since(start).Milliseconds())}
+	latency := int(time.Since(start).Milliseconds())
+	return &model.ModelChatTestResult{OK: true, Response: text, FirstByteLatencyMs: latency, LatencyMs: latency}
 }
 func genericText(v interface{}) string {
 	var b strings.Builder
@@ -631,6 +778,7 @@ func (s *Service) parseGenericStream(body io.Reader, start time.Time) *model.Mod
 	scanner := bufio.NewScanner(io.LimitReader(cr, 256*1024))
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 	var b strings.Builder
+	firstByteMs := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "data:") {
@@ -641,7 +789,13 @@ func (s *Service) parseGenericStream(body io.Reader, start time.Time) *model.Mod
 		}
 		var v interface{}
 		if json.Unmarshal([]byte(line), &v) == nil {
-			b.WriteString(genericText(v))
+			text := genericText(v)
+			if text != "" {
+				if firstByteMs == 0 {
+					firstByteMs = int(time.Since(start).Milliseconds())
+				}
+				b.WriteString(text)
+			}
 		}
 	}
 	if scanner.Err() != nil {
@@ -650,7 +804,7 @@ func (s *Service) parseGenericStream(body io.Reader, start time.Time) *model.Mod
 	if strings.TrimSpace(b.String()) == "" {
 		return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: int(time.Since(start).Milliseconds())}
 	}
-	return &model.ModelChatTestResult{OK: true, Response: b.String(), LatencyMs: int(time.Since(start).Milliseconds())}
+	return &model.ModelChatTestResult{OK: true, Response: b.String(), FirstByteLatencyMs: firstByteMs, LatencyMs: int(time.Since(start).Milliseconds())}
 }
 
 func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.ModelChatTestResult {
@@ -691,10 +845,11 @@ func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.Mo
 		}
 	}
 	return &model.ModelChatTestResult{
-		OK:           true,
-		Response:     response,
-		LatencyMs:    latencyMs(),
-		FinishReason: finishReason,
+		OK:                 true,
+		Response:           response,
+		LatencyMs:          latencyMs(),
+		FirstByteLatencyMs: latencyMs(),
+		FinishReason:       finishReason,
 	}
 }
 
@@ -758,6 +913,7 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 
 	var builder strings.Builder
 	finishReason := ""
+	firstByteMs := 0
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -821,6 +977,9 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 				finishReason = chunk.Choices[0].FinishReason
 			}
 			if delta != "" {
+				if firstByteMs == 0 {
+					firstByteMs = latencyMs()
+				}
 				if builder.Len()+len(delta) > maxContentBytes {
 					return &model.ModelChatTestResult{
 						OK:        false,
@@ -854,10 +1013,11 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 		}
 	}
 	return &model.ModelChatTestResult{
-		OK:           true,
-		Response:     builder.String(),
-		LatencyMs:    latencyMs(),
-		FinishReason: finishReason,
+		OK:                 true,
+		Response:           builder.String(),
+		LatencyMs:          latencyMs(),
+		FirstByteLatencyMs: firstByteMs,
+		FinishReason:       finishReason,
 	}
 }
 

@@ -628,7 +628,9 @@ export namespace model {
 	export class ModelChatTestResult {
 	    ok: boolean;
 	    response: string;
+	    http_status: number;
 	    latency_ms: number;
+	    first_byte_latency_ms?: number;
 	    finish_reason?: string;
 	    error?: string;
 	
@@ -640,7 +642,9 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
 	        this.response = source["response"];
+	        this.http_status = source["http_status"];
 	        this.latency_ms = source["latency_ms"];
+	        this.first_byte_latency_ms = source["first_byte_latency_ms"];
 	        this.finish_reason = source["finish_reason"];
 	        this.error = source["error"];
 	    }
@@ -1350,6 +1354,115 @@ export namespace model {
 	
 	
 	
+	export class UpstreamMonitorResult {
+	    provider_id: string;
+	    model_name: string;
+	    protocol: string;
+	    status: string;
+	    http_status: number;
+	    detail?: string;
+	    response?: string;
+	    error?: string;
+	    first_byte_latency_ms: number;
+	    total_latency_ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpstreamMonitorResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.model_name = source["model_name"];
+	        this.protocol = source["protocol"];
+	        this.status = source["status"];
+	        this.http_status = source["http_status"];
+	        this.detail = source["detail"];
+	        this.response = source["response"];
+	        this.error = source["error"];
+	        this.first_byte_latency_ms = source["first_byte_latency_ms"];
+	        this.total_latency_ms = source["total_latency_ms"];
+	    }
+	}
+	export class UpstreamMonitorBatch {
+	    results: UpstreamMonitorResult[];
+	    completed_at_ms: number;
+	    completion_ms: number;
+	    total: number;
+	    available: number;
+	    empty: number;
+	    errors: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpstreamMonitorBatch(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.results = this.convertValues(source["results"], UpstreamMonitorResult);
+	        this.completed_at_ms = source["completed_at_ms"];
+	        this.completion_ms = source["completion_ms"];
+	        this.total = source["total"];
+	        this.available = source["available"];
+	        this.empty = source["empty"];
+	        this.errors = source["errors"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class UpstreamMonitorModel {
+	    provider_id: string;
+	    provider_name: string;
+	    model_name: string;
+	    protocol: string;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpstreamMonitorModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.provider_name = source["provider_name"];
+	        this.model_name = source["model_name"];
+	        this.protocol = source["protocol"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	
+	export class UpstreamMonitorSelection {
+	    provider_id: string;
+	    model_name: string;
+	    protocol: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpstreamMonitorSelection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.model_name = source["model_name"];
+	        this.protocol = source["protocol"];
+	    }
+	}
 	export class UsageStats {
 	    token_stats: Stat[];
 	    providers: ProviderShare[];

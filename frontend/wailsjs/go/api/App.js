@@ -166,6 +166,10 @@ export function ListProviders() {
   return window['go']['api']['App']['ListProviders']();
 }
 
+export function ListUpstreamMonitorModels() {
+  return window['go']['api']['App']['ListUpstreamMonitorModels']();
+}
+
 export function NavigateTo(arg1) {
   return window['go']['api']['App']['NavigateTo'](arg1);
 }
@@ -176,6 +180,14 @@ export function OpenStorageFolder() {
 
 export function PingLogEvent() {
   return window['go']['api']['App']['PingLogEvent']();
+}
+
+export function ProbeUpstreamMonitorModel(arg1) {
+  return window['go']['api']['App']['ProbeUpstreamMonitorModel'](arg1);
+}
+
+export function ProbeUpstreamMonitorModels(arg1) {
+  return window['go']['api']['App']['ProbeUpstreamMonitorModels'](arg1);
 }
 
 export function PurgeLogs(arg1) {

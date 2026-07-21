@@ -161,11 +161,52 @@ type ModelTestResult struct {
 
 // ModelChatTestResult is returned by the per-provider model chat test.
 type ModelChatTestResult struct {
-	OK           bool   `json:"ok"`
-	Response     string `json:"response"`
-	LatencyMs    int    `json:"latency_ms"`
-	FinishReason string `json:"finish_reason,omitempty"`
-	Error        string `json:"error,omitempty"`
+	OK                 bool   `json:"ok"`
+	Response           string `json:"response"`
+	HTTPStatus         int    `json:"http_status"`
+	LatencyMs          int    `json:"latency_ms"`
+	FirstByteLatencyMs int    `json:"first_byte_latency_ms,omitempty"`
+	FinishReason       string `json:"finish_reason,omitempty"`
+	Error              string `json:"error,omitempty"`
+}
+
+// UpstreamMonitorModel identifies one enabled upstream model that can be
+// probed by the monitoring screen.
+type UpstreamMonitorModel struct {
+	ProviderID   string `json:"provider_id"`
+	ProviderName string `json:"provider_name"`
+	ModelName    string `json:"model_name"`
+	Protocol     string `json:"protocol"`
+	Enabled      bool   `json:"enabled"`
+}
+
+type UpstreamMonitorSelection struct {
+	ProviderID string `json:"provider_id"`
+	ModelName  string `json:"model_name"`
+	Protocol   string `json:"protocol"`
+}
+
+type UpstreamMonitorResult struct {
+	ProviderID         string `json:"provider_id"`
+	ModelName          string `json:"model_name"`
+	Protocol           string `json:"protocol"`
+	Status             string `json:"status"` // available, empty, or error
+	HTTPStatus         int    `json:"http_status"`
+	Detail             string `json:"detail,omitempty"`
+	Response           string `json:"response,omitempty"`
+	Error              string `json:"error,omitempty"`
+	FirstByteLatencyMs int    `json:"first_byte_latency_ms"`
+	TotalLatencyMs     int    `json:"total_latency_ms"`
+}
+
+type UpstreamMonitorBatch struct {
+	Results       []UpstreamMonitorResult `json:"results"`
+	CompletedAtMs int64                   `json:"completed_at_ms"`
+	CompletionMs  int                     `json:"completion_ms"`
+	Total         int                     `json:"total"`
+	Available     int                     `json:"available"`
+	Empty         int                     `json:"empty"`
+	Errors        int                     `json:"errors"`
 }
 
 // ApiKey is an access token for the autoapi proxy. The token value is the row

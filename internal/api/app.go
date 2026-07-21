@@ -152,6 +152,9 @@ type BusinessService interface {
 	TestModelLatency(providerID, modelName string) (*model.ModelTestResult, error)
 	TestModelChat(providerID, modelName, protocol string, stream bool, testID string) (*model.ModelChatTestResult, error)
 	CancelModelTest(testID string) bool
+	ListUpstreamMonitorModels() ([]model.UpstreamMonitorModel, error)
+	ProbeUpstreamMonitorModel(model.UpstreamMonitorSelection) (model.UpstreamMonitorResult, error)
+	ProbeUpstreamMonitorModels([]model.UpstreamMonitorSelection) (*model.UpstreamMonitorBatch, error)
 	GetSystemHealth() (*model.ServiceHealth, error)
 
 	// Secret encryption. Encrypt produces ciphertext+nonce for storage in the
@@ -861,6 +864,27 @@ func (a *App) CancelModelTest(testID string) bool {
 		return false
 	}
 	return a.deps.Service.CancelModelTest(testID)
+}
+
+func (a *App) ListUpstreamMonitorModels() ([]model.UpstreamMonitorModel, error) {
+	if a.deps.Service == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Service.ListUpstreamMonitorModels()
+}
+
+func (a *App) ProbeUpstreamMonitorModels(rows []model.UpstreamMonitorSelection) (*model.UpstreamMonitorBatch, error) {
+	if a.deps.Service == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Service.ProbeUpstreamMonitorModels(rows)
+}
+
+func (a *App) ProbeUpstreamMonitorModel(row model.UpstreamMonitorSelection) (model.UpstreamMonitorResult, error) {
+	if a.deps.Service == nil {
+		return model.UpstreamMonitorResult{}, errNotImpl
+	}
+	return a.deps.Service.ProbeUpstreamMonitorModel(row)
 }
 
 func (a *App) SetModelsActive(providerID string, modelNames []string, active bool) error {

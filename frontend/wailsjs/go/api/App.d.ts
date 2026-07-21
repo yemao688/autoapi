@@ -86,11 +86,17 @@ export function ListProviderCapabilities(arg1:string):Promise<Array<model.Provid
 
 export function ListProviders():Promise<Array<model.Provider>>;
 
+export function ListUpstreamMonitorModels():Promise<Array<model.UpstreamMonitorModel>>;
+
 export function NavigateTo(arg1:string):Promise<void>;
 
 export function OpenStorageFolder():Promise<void>;
 
 export function PingLogEvent():Promise<void>;
+
+export function ProbeUpstreamMonitorModel(arg1:model.UpstreamMonitorSelection):Promise<model.UpstreamMonitorResult>;
+
+export function ProbeUpstreamMonitorModels(arg1:Array<model.UpstreamMonitorSelection>):Promise<model.UpstreamMonitorBatch>;
 
 export function PurgeLogs(arg1:number):Promise<number>;
 

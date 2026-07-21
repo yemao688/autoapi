@@ -4,6 +4,7 @@ import ProvidersView from './views/ProvidersView.vue'
 import ModelRulesView from './views/ModelRulesView.vue'
 import ApiKeysView from './views/ApiKeysView.vue'
 import UsageStatsView from './views/UsageStatsView.vue'
+import UpstreamMonitoringView from './views/UpstreamMonitoringView.vue'
 import SettingsView from './views/SettingsView.vue'
 
 const routes = [
@@ -13,6 +14,7 @@ const routes = [
   { path: '/model-rules', name: 'model-rules', component: ModelRulesView },
   { path: '/api-keys', name: 'api-keys', component: ApiKeysView },
   { path: '/usage-stats', name: 'usage-stats', component: UsageStatsView },
+  { path: '/upstream-monitoring', name: 'upstream-monitoring', component: UpstreamMonitoringView },
   { path: '/settings', name: 'settings', component: SettingsView },
 ]
 

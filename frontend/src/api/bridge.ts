@@ -135,6 +135,14 @@ export const api = {
     ensureWails()
     return wails.CancelModelTest(testId)
   },
+  listUpstreamMonitorModels: (): Promise<model.UpstreamMonitorModel[]> => {
+    ensureWails()
+    return wails.ListUpstreamMonitorModels() as Promise<model.UpstreamMonitorModel[]>
+  },
+  probeUpstreamMonitorModel: (row: model.UpstreamMonitorSelection): Promise<model.UpstreamMonitorResult> => {
+    ensureWails()
+    return wails.ProbeUpstreamMonitorModel(row)
+  },
 
   // Model rules
   modelRules: (): Promise<model.ModelRule[]> => {

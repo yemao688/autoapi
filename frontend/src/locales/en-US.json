@@ -7,10 +7,53 @@
     "main": "Main",
     "dashboard": "Dashboard",
     "providers": "Upstreams",
+    "upstreamMonitoring": "Upstream monitoring",
     "modelRules": "Model rules",
     "apiKeys": "API Keys",
     "usage": "Usage",
     "settings": "Settings"
+  },
+  "monitoring": {
+    "title": "Upstream monitoring",
+    "subtitle": "Check live responses from enabled models",
+    "run": "Run concurrent check",
+    "running": "Checking…",
+    "loading": "Loading monitoring models…",
+    "loadFailed": "Monitoring models failed to load",
+    "runFailed": "Concurrent check failed",
+    "runPartial": "Some model checks failed; see the affected rows",
+    "httpStatus": "HTTP {code}",
+    "retry": "Retry",
+    "empty": "No models available to monitor",
+    "runHint": "Run a concurrent check to test the enabled models.",
+    "returnedResult": "Returned result",
+    "noResult": "No result returned",
+    "showDetails": "Show details",
+    "hideDetails": "Hide details",
+    "enable": "Include in monitoring",
+    "disable": "Remove from monitoring",
+    "status": {
+      "available": "Available",
+      "empty": "Empty",
+      "error": "Error",
+      "checking": "Checking"
+    },
+    "summary": {
+      "total": "Total models",
+      "completed": "Last completed",
+      "duration": "Run duration",
+      "available": "Available",
+      "abnormal": "Abnormal"
+    },
+    "columns": {
+      "upstream": "Upstream",
+      "model": "Model",
+      "status": "Status",
+      "firstToken": "First token",
+      "totalTime": "Total time",
+      "details": "Details",
+      "enabled": "Check"
+    }
   },
   "settings": {
     "title": "Settings",
