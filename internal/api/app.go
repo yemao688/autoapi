@@ -1237,15 +1237,22 @@ func replayShadowScore(s scoring.TargetScore, snapshot metrics.Snapshot, endpoin
 			ClientAborts: snapshot.ClientAborts,
 			Truncated:    snapshot.Truncated,
 			Downstream:   snapshot.Downstream,
-			LastUsed:     snapshot.LastUsed,
-			LastSuccess:  snapshot.LastSuccess,
-			LastFailure:  snapshot.LastFailure,
+			LastUsed:     unixMilliOrZero(snapshot.LastUsed),
+			LastSuccess:  unixMilliOrZero(snapshot.LastSuccess),
+			LastFailure:  unixMilliOrZero(snapshot.LastFailure),
 		},
 		MetricsFresh:    !snapshot.LastUsed.IsZero(),
 		Endpoint:        endpoint,
 		EndpointAssumed: true,
 		Cost:            cost,
 	}
+}
+
+func unixMilliOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
 
 func outcomeFor(log model.RequestLog) string {

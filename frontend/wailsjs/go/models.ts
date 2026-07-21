@@ -1055,14 +1055,10 @@ export namespace model {
 	    client_aborts: number;
 	    truncated: number;
 	    downstream: number;
-	    // Go type: time
-	    last_used: any;
-	    // Go type: time
-	    last_success: any;
-	    // Go type: time
-	    last_failure: any;
-	    // Go type: time
-	    updated_at: any;
+	    last_used: number;
+	    last_success: number;
+	    last_failure: number;
+	    updated_at: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new TargetRuntimeSummary(source);
@@ -1081,10 +1077,10 @@ export namespace model {
 	        this.client_aborts = source["client_aborts"];
 	        this.truncated = source["truncated"];
 	        this.downstream = source["downstream"];
-	        this.last_used = this.convertValues(source["last_used"], null);
-	        this.last_success = this.convertValues(source["last_success"], null);
-	        this.last_failure = this.convertValues(source["last_failure"], null);
-	        this.updated_at = this.convertValues(source["updated_at"], null);
+	        this.last_used = source["last_used"];
+	        this.last_success = source["last_success"];
+	        this.last_failure = source["last_failure"];
+	        this.updated_at = source["updated_at"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

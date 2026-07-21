@@ -48,6 +48,20 @@ func maxTime(a, b time.Time) time.Time {
 	return b
 }
 
+func summaryTime(v int64) time.Time {
+	if v == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(v).UTC()
+}
+
+func summaryMS(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
 // Snapshot is a detached view of one target's counters. Samples are bounded
 // observations, not a promise of a percentile or a complete event history.
 type Snapshot struct {
@@ -117,13 +131,13 @@ func (r *Registry) Restore(items []model.TargetRuntimeSummary, now time.Time) {
 	// capacity is deterministic: retain the first unique keys in input order.
 	for _, v := range items {
 		k := v.Key.Normalized()
-		if v.Validate() != nil || v.LastUsed.After(now) || now.Sub(v.LastUsed) > r.ttl {
+		if v.Validate() != nil || v.LastUsed > now.UnixMilli() || now.Sub(time.UnixMilli(v.LastUsed)) > r.ttl {
 			continue
 		}
 		if _, exists := r.entries[k]; !exists && len(r.entries) >= r.capacity {
 			break
 		}
-		r.entries[k] = &aggregate{requests: v.Requests, attempts: v.Attempts, successes: v.Successes, failures: v.Failures, status429: v.Status429, status5xx: v.Status5xx, transport: v.Transport, clientAborts: v.ClientAborts, truncated: v.Truncated, downstream: v.Downstream, lastUsed: v.LastUsed, lastSuccess: v.LastSuccess, lastFailure: v.LastFailure}
+		r.entries[k] = &aggregate{requests: v.Requests, attempts: v.Attempts, successes: v.Successes, failures: v.Failures, status429: v.Status429, status5xx: v.Status5xx, transport: v.Transport, clientAborts: v.ClientAborts, truncated: v.Truncated, downstream: v.Downstream, lastUsed: summaryTime(v.LastUsed), lastSuccess: summaryTime(v.LastSuccess), lastFailure: summaryTime(v.LastFailure)}
 	}
 }
 

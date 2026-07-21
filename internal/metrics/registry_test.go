@@ -240,7 +240,7 @@ func TestRouteRecentStoreIsolationCategoriesRequestAndRestore(t *testing.T) {
 	if nativeGot := r.CurrentRouteSnapshot(native); nativeGot.Attempts != 1 || nativeGot.Successes != 1 {
 		t.Fatalf("native/conversion route modes not isolated: %+v", nativeGot)
 	}
-	r.Restore([]model.TargetRuntimeSummary{{Key: key("t"), Attempts: 10, Failures: 10, LastUsed: now, UpdatedAt: now}}, now)
+	r.Restore([]model.TargetRuntimeSummary{{Key: key("t"), Attempts: 10, Failures: 10, LastUsed: now.UnixMilli(), UpdatedAt: now.UnixMilli()}}, now)
 	if got := r.CurrentRouteSnapshot(conversion); got.Attempts != 0 {
 		t.Fatalf("restore recreated route recent state: %+v", got)
 	}

@@ -159,10 +159,10 @@ type TargetRuntimeSummary struct {
 	ClientAborts int64           `json:"client_aborts"`
 	Truncated    int64           `json:"truncated"`
 	Downstream   int64           `json:"downstream"`
-	LastUsed     time.Time       `json:"last_used"`
-	LastSuccess  time.Time       `json:"last_success"`
-	LastFailure  time.Time       `json:"last_failure"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	LastUsed     int64           `json:"last_used"`
+	LastSuccess  int64           `json:"last_success"`
+	LastFailure  int64           `json:"last_failure"`
+	UpdatedAt    int64           `json:"updated_at"`
 }
 
 // Validate accepts only persisted, real upstream target summaries.
@@ -175,10 +175,10 @@ func (s TargetRuntimeSummary) Validate() error {
 			return fmt.Errorf("negative %s", name)
 		}
 	}
-	if s.LastUsed.IsZero() || s.UpdatedAt.IsZero() || s.LastUsed.After(time.Now().UTC().Add(time.Second)) {
+	if s.LastUsed == 0 || s.UpdatedAt == 0 || s.LastUsed > time.Now().UTC().Add(time.Second).UnixMilli() {
 		return fmt.Errorf("invalid last_used")
 	}
-	if (!s.LastSuccess.IsZero() && s.LastSuccess.After(s.LastUsed)) || (!s.LastFailure.IsZero() && s.LastFailure.After(s.LastUsed)) {
+	if (s.LastSuccess != 0 && s.LastSuccess > s.LastUsed) || (s.LastFailure != 0 && s.LastFailure > s.LastUsed) {
 		return fmt.Errorf("event time after last_used")
 	}
 	return nil

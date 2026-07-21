@@ -7,7 +7,8 @@ import (
 )
 
 func summary(now time.Time, n int64) model.TargetRuntimeSummary {
-	return model.TargetRuntimeSummary{Key: model.TargetMetricKey{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "e"}, Requests: n, LastUsed: now, UpdatedAt: now}
+	ms := now.UnixMilli()
+	return model.TargetRuntimeSummary{Key: model.TargetMetricKey{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "e"}, Requests: n, LastUsed: ms, UpdatedAt: ms}
 }
 func TestRuntimeSummaryBatchValidationAndOverwrite(t *testing.T) {
 	s := newTestStore(t)

@@ -92,7 +92,7 @@ func (c *Checkpoint) summaries() []model.TargetRuntimeSummary {
 		if !v.Key.Valid() {
 			continue
 		}
-		out = append(out, model.TargetRuntimeSummary{Key: v.Key, Requests: v.Requests, Attempts: v.Attempts, Successes: v.Successes, Failures: v.Failures, Status429: v.Status429, Status5xx: v.Status5xx, Transport: v.Transport, ClientAborts: v.ClientAborts, Truncated: v.Truncated, Downstream: v.Downstream, LastUsed: v.LastUsed, LastSuccess: v.LastSuccess, LastFailure: v.LastFailure, UpdatedAt: now})
+		out = append(out, model.TargetRuntimeSummary{Key: v.Key, Requests: v.Requests, Attempts: v.Attempts, Successes: v.Successes, Failures: v.Failures, Status429: v.Status429, Status5xx: v.Status5xx, Transport: v.Transport, ClientAborts: v.ClientAborts, Truncated: v.Truncated, Downstream: v.Downstream, LastUsed: summaryMS(v.LastUsed), LastSuccess: summaryMS(v.LastSuccess), LastFailure: summaryMS(v.LastFailure), UpdatedAt: now.UnixMilli()})
 	}
 	return out
 }
