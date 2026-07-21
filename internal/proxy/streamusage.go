@@ -95,15 +95,16 @@ type streamUsageAccumulator struct {
 	// one — this is correct for OpenAI (single final usage event) and
 	// Anthropic (cumulative usage that may be re-emitted as the model
 	// generates more output).
-	input         int
-	output        int
-	cacheHit      int64
-	cacheCreation int64
-	seenDone      bool
-	terminal      string
-	lastEvent     string
-	errored       bool
-	errorMessage  string
+	input          int
+	output         int
+	cacheHit       int64
+	cacheCreation  int64
+	seenDone       bool
+	terminal       string
+	lastEvent      string
+	errored        bool
+	errorMessage   string
+	producedOutput bool
 }
 
 // Feed processes the next chunk of SSE bytes. It extracts any complete
@@ -181,6 +182,9 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 	var u streamUsageJSON
 	if err := json.Unmarshal(data, &u); err != nil {
 		return
+	}
+	if streamEventProducesOutput(data, u.Type) {
+		a.producedOutput = true
 	}
 	// If the data looks like Gemini, attach usage from Gemini's usageMetadata.
 	if u.Usage == nil && u.Response == nil && len(u.Message) == 0 {
@@ -284,6 +288,143 @@ func (a *streamUsageAccumulator) processLine(line []byte) {
 			}
 		}
 	}
+}
+
+// ProducedOutput is deliberately independent from usage and terminal state:
+// lifecycle, usage-only, and empty terminal events are not output.
+func (a *streamUsageAccumulator) ProducedOutput() bool { return a.producedOutput }
+
+func streamEventProducesOutput(data []byte, typ string) bool {
+	var v struct {
+		Choices []struct {
+			Delta struct {
+				Content          string            `json:"content"`
+				Refusal          string            `json:"refusal"`
+				Reasoning        string            `json:"reasoning"`
+				ReasoningContent string            `json:"reasoning_content"`
+				ToolCalls        []json.RawMessage `json:"tool_calls"`
+				FunctionCall     json.RawMessage   `json:"function_call"`
+				Audio            json.RawMessage   `json:"audio"`
+			} `json:"delta"`
+			Message struct {
+				Content          string            `json:"content"`
+				Refusal          string            `json:"refusal"`
+				Reasoning        string            `json:"reasoning"`
+				ReasoningContent string            `json:"reasoning_content"`
+				ToolCalls        []json.RawMessage `json:"tool_calls"`
+				FunctionCall     json.RawMessage   `json:"function_call"`
+				Audio            json.RawMessage   `json:"audio"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Output   []json.RawMessage `json:"output"`
+		Response *struct {
+			Output []json.RawMessage `json:"output"`
+		} `json:"response"`
+		Delta struct {
+			Text        string `json:"text"`
+			Refusal     string `json:"refusal"`
+			PartialJSON string `json:"partial_json"`
+		} `json:"delta"`
+		ContentBlock struct {
+			Text        string          `json:"text"`
+			Type        string          `json:"type"`
+			InputSchema json.RawMessage `json:"input"`
+		} `json:"content_block"`
+		Content    []json.RawMessage `json:"content"`
+		Candidates []struct {
+			Content struct {
+				Parts []json.RawMessage `json:"parts"`
+			} `json:"content"`
+			FinishReason string `json:"finishReason"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		// Responses uses a string delta for output_text/refusal and an
+		// object delta for function arguments. Keep this probe tolerant of
+		// those dialect-specific shapes.
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(data, &raw) != nil {
+			return false
+		}
+		if typ == "response.output_text.delta" || typ == "response.refusal.delta" || typ == "response.reasoning_text.delta" || typ == "response.reasoning_summary_text.delta" {
+			var s string
+			return json.Unmarshal(raw["delta"], &s) == nil && s != ""
+		}
+		if typ == "response.function_call_arguments.delta" {
+			var s string
+			return json.Unmarshal(raw["delta"], &s) == nil && s != ""
+		}
+		return false
+	}
+	for _, c := range v.Choices {
+		if c.Delta.Content != "" || c.Delta.Refusal != "" || c.Delta.Reasoning != "" || c.Delta.ReasoningContent != "" || len(c.Delta.ToolCalls) > 0 || rawJSONPresent(c.Delta.FunctionCall) || rawJSONPresent(c.Delta.Audio) ||
+			c.Message.Content != "" || c.Message.Refusal != "" || c.Message.Reasoning != "" || c.Message.ReasoningContent != "" || len(c.Message.ToolCalls) > 0 || rawJSONPresent(c.Message.FunctionCall) || rawJSONPresent(c.Message.Audio) || c.FinishReason == "content_filter" || c.FinishReason == "refusal" {
+			return true
+		}
+	}
+	if strings.HasPrefix(typ, "response.output_") || strings.HasPrefix(typ, "response.content_part") || typ == "response.reasoning_summary_text.delta" || typ == "response.reasoning_text.delta" {
+		if typ == "response.output_item.added" || typ == "response.output_item.done" {
+			var raw struct {
+				Item json.RawMessage `json:"item"`
+			}
+			return json.Unmarshal(data, &raw) == nil && len(raw.Item) > 0 && string(bytes.TrimSpace(raw.Item)) != "null"
+		}
+		if typ == "response.output_text.delta" || typ == "response.refusal.delta" || typ == "response.function_call_arguments.delta" {
+			var raw struct {
+				Delta json.RawMessage `json:"delta"`
+			}
+			if json.Unmarshal(data, &raw) != nil {
+				return false
+			}
+			var s string
+			return json.Unmarshal(raw.Delta, &s) == nil && s != ""
+		}
+		if typ == "response.reasoning_text.delta" || typ == "response.reasoning_summary_text.delta" {
+			var raw struct {
+				Delta json.RawMessage `json:"delta"`
+			}
+			if json.Unmarshal(data, &raw) == nil {
+				var s string
+				return json.Unmarshal(raw.Delta, &s) == nil && s != ""
+			}
+			return false
+		}
+		if typ == "response.content_part.added" {
+			var raw struct {
+				Part json.RawMessage `json:"part"`
+			}
+			return json.Unmarshal(data, &raw) == nil && len(raw.Part) > 0 && string(bytes.TrimSpace(raw.Part)) != "null"
+		}
+		return len(v.Content) > 0 || v.Delta.Text != "" || v.Delta.Refusal != "" || v.Delta.PartialJSON != ""
+	}
+	if len(v.Output) > 0 || v.Response != nil && len(v.Response.Output) > 0 {
+		return true
+	}
+	if typ == "content_block_start" {
+		// A block declaration is a structural commitment even when text is
+		// initially empty; tool blocks likewise carry semantic output in the
+		// block shape itself.
+		return v.ContentBlock.Type != "" || v.ContentBlock.Text != "" || len(v.ContentBlock.InputSchema) > 0
+	}
+	if typ == "content_block_delta" {
+		return v.Delta.Text != "" || v.Delta.Refusal != "" || v.Delta.PartialJSON != ""
+	}
+	if typ == "message_stop" && len(v.Content) > 0 {
+		return true
+	}
+	for _, c := range v.Candidates {
+		// Gemini finishReason is terminal policy metadata, but a non-empty
+		// finish reason is still the provider's semantic completion signal.
+		if len(c.Content.Parts) > 0 || c.FinishReason != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func rawJSONPresent(raw json.RawMessage) bool {
+	return len(raw) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 // Usage returns the accumulated input/output/cache tokens. Returns the

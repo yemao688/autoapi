@@ -699,8 +699,8 @@ func TestHandlerStreamMetricsSuccessAndTruncate(t *testing.T) {
 		name, body string
 		want       model.RequestOutcome
 	}{
-		{"success", "data: {\"id\":\"x\"}\n\ndata: [DONE]\n\n", model.RequestOutcomeSuccess},
-		{"truncate", "data: {\"id\":\"x\"}\n\n", model.RequestOutcomePartial},
+		{"success", "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", model.RequestOutcomeSuccess},
+		{"truncate", "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n", model.RequestOutcomePartial},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1821,6 +1821,173 @@ func TestResponsesNativeStreamingPassthroughE2E(t *testing.T) {
 	}
 }
 
+func TestResponsesNativeEmptyTerminalFailsOverE2E(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/p0/") {
+			p0Hits++
+			_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"empty\"}}\n\n"+
+				"event: response.in_progress\ndata: {\"type\":\"response.in_progress\"}\n\n"+"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, responsesSuccessSSE("p1"))
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true, ResponsesEnabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 1 || !strings.Contains(rec.Body.String(), "p1") || strings.Contains(rec.Body.String(), "empty") {
+		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v, want retryable -> success", log.Chain)
+	}
+	if log.Chain[0].StatusCode != http.StatusOK || !strings.Contains(log.Chain[0].Error, "without producing output") {
+		t.Fatalf("empty P0 chain=%+v", log.Chain[0])
+	}
+	if log.ProviderID != "p1" || log.Chain[1].ProviderID != "p1" || log.Chain[1].TargetID != "t1" {
+		t.Fatalf("final attribution log=%+v", log)
+	}
+	if hit, fail := st.statsFor("t0"); hit != 0 || fail != 1 {
+		t.Fatalf("P0 stats=(%d,%d), want (0,1)", hit, fail)
+	}
+}
+
+func TestResponsesNativeAllEmptyTerminalsReturn502E2E(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{}}\n\n"+
+			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "without producing output") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if log.StatusCode != http.StatusBadGateway || !strings.Contains(log.Error, "without producing output") || len(log.Chain) != 1 {
+		t.Fatalf("log=%+v", log)
+	}
+}
+
+func TestResponsesToChatDoneOnlyConversionFailsOverE2E(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/p0/") {
+			p0Hits++
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"+
+			"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"p1\"}}]}\n\n"+"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+"data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true, ResponsesEnabled: false},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true, ResponsesEnabled: false},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 1 || !strings.Contains(rec.Body.String(), "p1") {
+		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "response_id") && strings.Contains(rec.Body.String(), "p0") {
+		t.Fatal("P0 converted bytes leaked into downstream response")
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeConversionError) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v, want conversion_error -> success", log.Chain)
+	}
+}
+
+func TestResponsesNativeLifecycleStallDeadlineFailoverE2E(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/p0/") {
+			p0Hits++
+			f, _ := w.(http.Flusher)
+			_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"p0\"}}\n\n")
+			if f != nil {
+				f.Flush()
+			}
+			time.Sleep(1200 * time.Millisecond)
+			_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"late-p0\"}\n\n")
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, responsesSuccessSSE("p1"))
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true, ResponsesEnabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", FirstTokenTimeoutSeconds: 1, Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || p0Hits != 1 || p1Hits != 1 || strings.Contains(rec.Body.String(), "p0") || !strings.Contains(rec.Body.String(), "p1") {
+		t.Fatalf("status=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v, want retryable -> success", log.Chain)
+	}
+	if log.Chain[0].StatusCode != http.StatusOK || log.Chain[0].Error == "" {
+		t.Fatalf("P0 chain=%+v", log.Chain[0])
+	}
+}
+
 func TestStreamingConversionPostCommitFailure(t *testing.T) {
 	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2282,11 +2449,11 @@ func TestStreaming_PassThrough(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\ndata: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\ndata: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 
@@ -2693,7 +2860,7 @@ func TestStreaming_CapturesTTFTAndStatus(t *testing.T) {
 		}
 		// Delay the first chunk so TTFT is non-trivial and measurable.
 		time.Sleep(30 * time.Millisecond)
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -2775,8 +2942,8 @@ func TestStreaming_ClientDisconnect_BreakerNotTripped(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
-		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{\"content\":\"more\"}}]}\n\n"))
 	}))
 	defer srv.Close()
 
@@ -2872,7 +3039,7 @@ func TestStreaming_RetriesOnRetryable5xxBeforeFirstByte(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -2961,7 +3128,7 @@ func TestStreaming_RetriesPerTargetBeforeFailover(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 	}))
 	defer srv.Close()
 
@@ -3052,7 +3219,7 @@ func TestStreaming_FailoverOnNetworkError(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 	}))
 	defer okSrv.Close()
 
@@ -3132,7 +3299,7 @@ func TestStreaming_FailoverOnFirstByteTimeout(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 	}))
 	defer okSrv.Close()
 
@@ -3206,12 +3373,12 @@ func TestStreaming_TruePassThrough(t *testing.T) {
 			f.Flush()
 		}
 		// First chunk: TTFT is recorded at this point.
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 		time.Sleep(50 * time.Millisecond)
-		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -3380,7 +3547,7 @@ func TestStreaming_FirstByteTimeoutFailover(t *testing.T) {
 		}
 		// Small sleep before first byte so TTFT is non-trivial.
 		time.Sleep(20 * time.Millisecond)
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -3500,7 +3667,7 @@ func TestStreaming_CumulativeLatency(t *testing.T) {
 		}
 		// First byte at ~50ms after the request hits P2.
 		time.Sleep(50 * time.Millisecond)
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -3710,7 +3877,7 @@ func TestStreaming_MidStreamFailureBreaker(t *testing.T) {
 		// Send one chunk, then abruptly close (no [DONE] marker).
 		// Hijack to force a connection close so the client sees an
 		// error rather than a clean EOF.
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -3839,7 +4006,7 @@ func TestStreaming_LongBodyNotKilledByFirstByteTimeout(t *testing.T) {
 		}
 		// First chunk arrives immediately. TTFT is captured here;
 		// well within the 300ms first-byte budget.
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -3849,7 +4016,7 @@ func TestStreaming_LongBodyNotKilledByFirstByteTimeout(t *testing.T) {
 		// ResponseHeaderTimeout fix, body reads are unbounded
 		// once headers have arrived.
 		time.Sleep(800 * time.Millisecond)
-		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{\"content\":\"more\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -3985,14 +4152,14 @@ func TestStreaming_FirstByteBudgetExcludesBodyTime(t *testing.T) {
 		}
 		// First chunk: TTFT is captured here; well within the 1s
 		// first-byte budget.
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 		// Sleep 3s — well beyond the 1s first-byte budget. The
 		// body must NOT be killed by the budget deadline.
 		time.Sleep(3 * time.Second)
-		_, _ = w.Write([]byte("data: {\"id\":\"c2\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{\"content\":\"more\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -4142,7 +4309,7 @@ func TestStreaming_ClientDisconnectDuringBodyReadNoBreakerPenalty(t *testing.T) 
 			f.Flush()
 		}
 		// First chunk: TTFT recorded here.
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -4275,8 +4442,8 @@ func TestStreaming_ProtocolErrorThenClientCancelIsTruncated(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		_, _ = w.Write([]byte("data: {\"id\":\"r\",\"choices\":[{\"delta\":{\"content\":\"visible\"}}]}\n\n" +
-			"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n"))
+		_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible\"}\n\n" +
+			"event: error\ndata: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -4362,8 +4529,8 @@ func TestStreaming_ProtocolErrorThenClientCancelIsTruncated(t *testing.T) {
 func TestStreaming_ProtocolErrorCleanEOFKeepsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"id\":\"r\",\"choices\":[{\"delta\":{\"content\":\"visible\"}}]}\n\n"+
-			"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n")
+		_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible\"}\n\n"+
+			"event: error\ndata: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n")
 	}))
 	defer srv.Close()
 	st := &mockStore{
@@ -4545,7 +4712,7 @@ func TestStreaming_DoneThenClientCancel_IsSuccess(t *testing.T) {
 			flusher.Flush()
 		}
 		// Send a complete SSE stream: a data chunk with usage, then [DONE].
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -6208,7 +6375,7 @@ func TestChar_ChatStreamingCleanEOFWithoutDoneIsTruncated(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}

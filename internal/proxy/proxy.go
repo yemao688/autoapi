@@ -2215,6 +2215,9 @@ outer:
 				// forwarding any upstream body bytes.
 				logEntry.StatusCode = result.StatusCode
 				logEntry.Error = result.Error
+				if result.Partial {
+					return
+				}
 				// A committed stream cannot be represented as a normal HTTP
 				// response after the upstream ended unexpectedly. Abort the
 				// server-side connection so net/http closes the downstream
@@ -2251,7 +2254,7 @@ outer:
 				return
 			case model.AttemptOutcomeRetryable:
 				firstByteCumulativeMs += result.LatencyMs
-				if result.StatusCode != 0 {
+				if result.StatusCode >= 400 {
 					lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, result.StatusCode)
 					lastStatus = result.StatusCode
 				} else {
@@ -2753,7 +2756,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				out = pending
 				pending = nil
 			} else {
-				firstEvent, meaningful, complete := firstMeaningfulSSEEvent(pending)
+				_, meaningful, complete := firstMeaningfulSSEEvent(pending)
 				if !complete {
 					return nil
 				}
@@ -2765,10 +2768,16 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				// below, when they are written.
 				probe := *usageAcc
 				probe.buf = append([]byte(nil), usageAcc.buf...)
-				probe.Feed(firstEvent)
-				if probe.Errored() {
-					streamErr = errors.New(probe.ErrorMessage())
-					return streamErr
+				// Probe all complete staged events. A lifecycle event may be
+				// followed by semantic output in the same read; gating only on
+				// the first event would incorrectly hold the valid stream.
+				probe.Feed(pending)
+				if !probe.ProducedOutput() {
+					if probe.Errored() {
+						streamErr = errors.New(probe.ErrorMessage())
+						return streamErr
+					}
+					return nil
 				}
 				sseGate = false
 				out = pending
@@ -2839,27 +2848,23 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			conversionErr = cerr
 			streamErr = cerr
 		} else if len(out) > 0 {
-			if !committed {
-				ww.Header().Set("Content-Type", "text/event-stream")
-				ww.Header().Del("Content-Length")
-				ww.Header().Del("Content-Encoding")
-				ww.WriteHeader(upstreamStatus)
-				committed = true
-				firstByteTime = time.Since(attemptStart)
-			}
-			usageAcc.Feed(out)
-			if _, writeErr = ww.Write(out); writeErr == nil && flusher != nil {
-				flusher.Flush()
+			if writeErr = writeConverted(out); writeErr != nil {
+				streamErr = writeErr
 			}
 		}
 	}
 	if !committed && streamErr == nil {
+		if len(pending) > 0 {
+			usageAcc.Feed(pending)
+		}
 		// A converter may buffer an incomplete event. Since no client
 		// bytes were committed, the caller may safely fail over.
 		if conversionErr != nil {
 			streamErr = conversionErr
 		} else if writeErr != nil {
 			streamErr = writeErr
+		} else if usageAcc.Successful() && !usageAcc.ProducedOutput() {
+			streamErr = errors.New("upstream stream completed without producing output")
 		} else {
 			streamErr = io.ErrUnexpectedEOF
 		}
@@ -2938,7 +2943,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		chainEntry.Status = "retryable"
 		chainEntry.Error = streamErr.Error()
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
-		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: 0, Error: chainEntry.Error, Cause: streamErr, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: streamErr, Committed: false}, attemptOrder
+		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: upstreamStatus, Error: chainEntry.Error, Cause: streamErr, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: streamErr, Committed: false}, attemptOrder
 	}
 
 	switch {
@@ -3010,6 +3015,13 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		// right after receiving the full response) is NOT a failure
 		// of any kind — treat it as a clean completion.
 		if usageAcc.Successful() {
+			if !usageAcc.ProducedOutput() {
+				chainEntry.Status = "truncated"
+				chainEntry.Error = "upstream stream completed without producing output"
+				logEntry.Chain = append(logEntry.Chain, chainEntry)
+				logEntry.Error = chainEntry.Error
+				return streamAttemptResult{Status: model.OutcomeTruncated, StatusCode: upstreamStatus, Error: chainEntry.Error, AttemptStarted: true, LatencyMs: attemptLatencyMs, FirstTokenMs: int(firstByteTime.Milliseconds()), Committed: true, Partial: true}, attemptOrder
+			}
 			p.recordStreamSuccess(c)
 			logEntry.Chain = append(logEntry.Chain, chainEntry)
 			return streamAttemptResult{
@@ -3085,17 +3097,25 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 				slog.Error("proxy: update provider health", "err", err)
 			}
 		}
-		if usageAcc.Successful() {
+		if usageAcc.Successful() && usageAcc.ProducedOutput() {
 			p.recordStreamSuccess(c)
 		}
+		if usageAcc.Successful() && !usageAcc.ProducedOutput() {
+			chainEntry.Status = "truncated"
+			chainEntry.Error = "upstream stream completed without producing output"
+			logEntry.Error = chainEntry.Error
+		}
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
+		partialEmptyTerminal := usageAcc.Successful() && !usageAcc.ProducedOutput()
+		// A syntactically complete terminal with no semantic output is a
+		// partial result: it must not trigger an abort after bytes were sent.
 		return streamAttemptResult{
 			Status:         model.AttemptOutcome(chainEntry.Status),
 			AttemptStarted: true,
 			StatusCode:     upstreamStatus,
 			LatencyMs:      attemptLatencyMs,
 			FirstTokenMs:   int(firstByteTime.Milliseconds()),
-			Committed:      committed,
+			Committed:      committed, Partial: partialEmptyTerminal,
 		}, attemptOrder
 	}
 }
@@ -3402,6 +3422,7 @@ type streamAttemptResult struct {
 	LatencyMs      int // attempt wall-clock (for retryable entries; sum from caller)
 	FirstTokenMs   int // success only: time from attemptStart to first committed event
 	Committed      bool
+	Partial        bool // syntactically complete after safety-valve commit, but no semantic output
 
 	// RetryAfter is the upstream's Retry-After header value (parsed
 	// via parseRetryAfter) for retryable 429/503 responses. Non-zero
