@@ -1547,6 +1547,60 @@ func TestStreamingConversionPreCommitFailover(t *testing.T) {
 	}
 }
 
+func TestStreamingHTTP200SSEErrorFailsOverBeforeCommit(t *testing.T) {
+	var firstHits, secondHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/first/") {
+			firstHits++
+			// Heartbeats and metadata-only events must remain staged. Also split
+			// the first data field prefix across reads to exercise SSE framing.
+			flusher, _ := w.(http.Flusher)
+			_, _ = io.WriteString(w, ": ping\n\nid: heartbeat\n\nretry: 1\n\nda")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			time.Sleep(2 * time.Millisecond)
+			_, _ = io.WriteString(w, "ta: {\"type\":\"error\",\"message\":\"rate limit: concurrency limit reached\"}\n\n")
+			return
+		}
+		secondHits++
+		_, _ = io.WriteString(w, responsesSuccessSSE("healthy"))
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"first":  {ID: "first", Name: "First", BaseURL: srv.URL + "/first", Enabled: true, ResponsesEnabled: true},
+			"second": {ID: "second", Name: "Second", BaseURL: srv.URL + "/second", Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t-first", ProviderID: "first", ModelName: "first-model", MaxRetries: 0, Enabled: true},
+			{ID: "t-second", ProviderID: "second", ModelName: "second-model", MaxRetries: 0, Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || firstHits != 1 || secondHits != 1 {
+		t.Fatalf("status=%d first=%d second=%d body=%s", rec.Code, firstHits, secondHits, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "healthy") || strings.Contains(rec.Body.String(), "concurrency limit") {
+		t.Fatalf("client received unexpected stream: %s", rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v, want retryable -> success", log.Chain)
+	}
+	if !strings.Contains(log.Chain[0].Error, "concurrency limit") || log.Chain[0].StatusCode != http.StatusOK {
+		t.Fatalf("first chain entry=%+v, want retryable HTTP 200 semantic error", log.Chain[0])
+	}
+}
+
 func TestStreamingConversionPartialByteStallDeadlineFailover(t *testing.T) {
 	var p0Hits, p1Hits int
 	p0Done := make(chan struct{})
@@ -1626,6 +1680,64 @@ func TestStreamingConversionPartialByteStallDeadlineFailover(t *testing.T) {
 	}
 	if log.FirstTokenMs <= log.Chain[1].FirstTokenMs {
 		t.Fatalf("request TTFT=%d should include A delay beyond B attempt TTFT=%d", log.FirstTokenMs, log.Chain[1].FirstTokenMs)
+	}
+}
+
+func TestStreamingNativeSSEPartialEventStallDeadlineFailover(t *testing.T) {
+	var firstHits, secondHits int
+	firstDone := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(r.URL.Path, "/first/") {
+			firstHits++
+			flusher, _ := w.(http.Flusher)
+			_, _ = io.WriteString(w, "data: ")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+				close(firstDone)
+			case <-time.After(5 * time.Second):
+				t.Error("first native SSE attempt was not cancelled")
+			}
+			return
+		}
+		secondHits++
+		_, _ = io.WriteString(w, responsesSuccessSSE("native-healthy"))
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"first":  {ID: "first", Name: "First", BaseURL: srv.URL + "/first", Enabled: true, ResponsesEnabled: true},
+			"second": {ID: "second", Name: "Second", BaseURL: srv.URL + "/second", Enabled: true, ResponsesEnabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t-first", ProviderID: "first", ModelName: "first-model", MaxRetries: 0, FirstTokenTimeoutSeconds: 1, Enabled: true},
+			{ID: "t-second", ProviderID: "second", ModelName: "second-model", MaxRetries: 0, Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for native SSE first attempt cancellation")
+	}
+	if rec.Code != http.StatusOK || firstHits != 1 || secondHits != 1 {
+		t.Fatalf("status=%d first=%d second=%d body=%s", rec.Code, firstHits, secondHits, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "native-healthy") {
+		t.Fatalf("client received unexpected stream: %s", rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 2 || log.Chain[0].Status != string(model.AttemptOutcomeRetryable) || log.Chain[1].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("chain=%+v, want retryable -> success", log.Chain)
 	}
 }
 
@@ -4163,7 +4275,8 @@ func TestStreaming_ProtocolErrorThenClientCancelIsTruncated(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		_, _ = w.Write([]byte("data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"r\",\"choices\":[{\"delta\":{\"content\":\"visible\"}}]}\n\n" +
+			"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -4249,7 +4362,8 @@ func TestStreaming_ProtocolErrorThenClientCancelIsTruncated(t *testing.T) {
 func TestStreaming_ProtocolErrorCleanEOFKeepsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n")
+		_, _ = io.WriteString(w, "data: {\"id\":\"r\",\"choices\":[{\"delta\":{\"content\":\"visible\"}}]}\n\n"+
+			"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"server overloaded\"}\n\n")
 	}))
 	defer srv.Close()
 	st := &mockStore{

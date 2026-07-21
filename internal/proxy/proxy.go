@@ -1683,23 +1683,18 @@ outer:
 }
 
 // forwardStream proxies a streaming request to one of the available
-// candidates. It performs best-effort failover and per-target retry BEFORE
-// committing the first byte to the client: each upstream attempt runs under
-// a per-candidate first-byte timeout (Option A: single cumulative deadline
-// = headers arrival + first byte read), and only when a 2xx response is
-// received do we copy headers and start streaming the body. After the
+// candidates. It performs best-effort failover and per-target retry before
+// committing downstream headers: each upstream attempt has a cumulative
+// pre-commit budget, including the first meaningful SSE event. After the
 // 2xx commit, failover stops — the client has already seen the status — and
 // the upstream body is forwarded chunk-by-chunk in real time (http.Flusher
 // after every Write, preserving SSE compatibility).
 //
-// True pass-through: there is no buffered body. The first byte through
-// the wrapper triggers a single point of success (breaker Record(true),
-// hit counter, provider health) so we never double-count. The SSE usage
-// parser (streamUsageAccumulator) processes data lines incrementally while
-// chunks are forwarded to the client; the [DONE] marker is observed via
-// Done() — if the body closes before [DONE], the breaker is penalized
-// once via Record(false). Client disconnects (broken pipe writing to the
-// client) do NOT penalize the provider.
+// After the gate opens there is no buffered body. The first meaningful output
+// triggers a single point of success (breaker Record(true), hit counter,
+// provider health) so we never double-count. The SSE usage parser processes
+// data lines incrementally while chunks are forwarded; [DONE] is observed via
+// Done(). Client disconnects do NOT penalize the provider.
 //
 // Per-chain TTFT/latency semantics:
 //   - Failed chain entry: LatencyMs = attempt wall-clock; FirstTokenMs = 0.
@@ -1710,7 +1705,7 @@ outer:
 //     forwardStream; handler.go sets the top-level LatencyMs as the
 //     overall wall-clock and never needs to be touched here.)
 //
-// Once we start streaming (i.e. headers are committed), we do NOT retry:
+// Once a meaningful stream event is committed, we do NOT retry:
 // the client has already seen the response status, so failover would
 // produce a malformed or duplicated stream.
 func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byte, candidates []candidate, inputEstimate int, logEntry *model.RequestLog) {
@@ -2525,13 +2520,10 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			ww.Header().Add(k, v)
 		}
 	}
-	// TTFT is captured inline on the first body Read that returns
-	// n>0. This is the single point of success: breaker Record(true),
-	// hit counter, provider health all fire here. Body reads are
-	// not bounded by any timeout (the per-candidate first-byte
-	// window is enforced via Transport.ResponseHeaderTimeout on the
-	// Do call, not on body reads), so a long LLM stream can run for
-	// arbitrarily long.
+	// FirstTokenMs is captured when the first meaningful output is committed.
+	// This is the single point of success: breaker Record(true), hit counter,
+	// provider health all fire here. Body reads after the gate opens are not
+	// bounded by the first-byte timeout, so a long LLM stream can run normally.
 	var firstByteTime time.Duration
 	usageAcc := &streamUsageAccumulator{}
 
@@ -2540,19 +2532,21 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	var writeErr error
 	var conversionErr error
 	var converter StreamConverter
+	var pending []byte
+	sseGate := false
 	if prep.NewStreamConverter != nil {
 		converter = prep.NewStreamConverter()
 	}
-	// A converted stream cannot commit on the first raw byte: the converter
-	// may need a complete SSE event. Keep the candidate first-byte budget alive
-	// until the first non-empty converted output is available. Native streams
-	// retain their existing header/first-raw-byte semantics.
-	conversionDeadline := time.Time{}
-	if converter != nil {
-		conversionDeadline = effectiveAttemptFirstBodyByteDeadline(attemptStart, attemptStart.Add(c.firstByteBudget), c.targetFirstBodyByteTimeout)
-		if dl, ok := ctx.Deadline(); ok && (conversionDeadline.IsZero() || dl.Before(conversionDeadline)) {
-			conversionDeadline = dl
-		}
+	// A stream cannot commit on the first raw byte: conversion may need a
+	// complete SSE event, and native SSE must not commit a heartbeat or partial
+	// event. Keep the candidate first-byte budget alive until meaningful output
+	// is available.
+	// Keep the pre-commit event deadline for native SSE as well as converted
+	// streams. The initial body read may return only part of an SSE event; a
+	// follow-up read must not revert to an unbounded body read in that case.
+	conversionDeadline := effectiveAttemptFirstBodyByteDeadline(attemptStart, attemptStart.Add(c.firstByteBudget), c.targetFirstBodyByteTimeout)
+	if dl, ok := ctx.Deadline(); ok && (conversionDeadline.IsZero() || dl.Before(conversionDeadline)) {
+		conversionDeadline = dl
 	}
 	writeConverted := func(input []byte) error {
 		out, err := convertStreamChunk(converter, input)
@@ -2561,7 +2555,41 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			return err
 		}
 		if len(out) == 0 {
-			return err
+			return nil
+		}
+		if sseGate {
+			pending = append(pending, out...)
+			// A converter is normally fed an SSE stream, but keep the
+			// converter contract usable for non-SSE test/adaptor streams too.
+			// Once output cannot be an SSE field prefix, it is safe to use the
+			// ordinary first-byte path. Partial "da"/"eve" prefixes remain
+			// staged and therefore cannot bypass the event gate.
+			if converter != nil && !couldBeSSEPrefix(pending) {
+				sseGate = false
+				out = pending
+				pending = nil
+			} else {
+				firstEvent, meaningful, complete := firstMeaningfulSSEEvent(pending)
+				if !complete {
+					return nil
+				}
+				if !meaningful {
+					return nil
+				}
+				// Probe the first complete outbound event without changing the
+				// real accumulator. The real bytes are accounted exactly once
+				// below, when they are written.
+				probe := *usageAcc
+				probe.buf = append([]byte(nil), usageAcc.buf...)
+				probe.Feed(firstEvent)
+				if probe.Errored() {
+					streamErr = errors.New(probe.ErrorMessage())
+					return streamErr
+				}
+				sseGate = false
+				out = pending
+				pending = nil
+			}
 		}
 		if !committed {
 			if converter != nil {
@@ -2584,7 +2612,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		return conversionErr
 	}
-	if writeErr = writeConverted(initial); writeErr != nil { /* handled below */
+	// Stream protocols use SSE framing even when the first TCP read ends in
+	// the middle of "data:" or "event:". Determine that before inspecting
+	// body bytes, then hold output through the first event boundary.
+	sseGate = converter != nil || isSSEContentType(resp.Header.Get("Content-Type")) || isSSEProtocol(c.protocol)
+	if writeErr = writeConverted(initial); writeErr != nil {
+		// handled below
 	}
 	if writeErr == nil && initialErr != nil && initialErr != io.EOF {
 		streamErr = initialErr
@@ -2595,7 +2628,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		var chunk []byte
 		var readErr error
-		if converter != nil && !committed {
+		if !committed && (converter != nil || sseGate) {
 			chunk, readErr = readBodyChunk(r.Context(), resp.Body, len(buf), conversionDeadline)
 		} else {
 			var n int
@@ -2698,6 +2731,15 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		return message
 	}
 	if !committed {
+		if usageAcc.Errored() {
+			chainEntry.Status = string(model.AttemptOutcomeRetryable)
+			chainEntry.Error = usageAcc.ErrorMessage()
+			if chainEntry.Error == "" {
+				chainEntry.Error = "upstream protocol error"
+			}
+			logEntry.Chain = append(logEntry.Chain, chainEntry)
+			return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: upstreamStatus, Error: chainEntry.Error, Cause: errors.New(chainEntry.Error), AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: errors.New(chainEntry.Error), Committed: false}, attemptOrder
+		}
 		if conversionErr != nil {
 			chainEntry.Status = string(model.AttemptOutcomeConversionError)
 			chainEntry.Error = conversionErr.Error()
@@ -2872,6 +2914,89 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			Committed:      committed,
 		}, attemptOrder
 	}
+}
+
+// splitFirstSSEEvent returns the first complete SSE event and any bytes read
+// after it. It intentionally only stages one event so later stream errors keep
+// the existing post-commit behavior.
+func splitFirstSSEEvent(data []byte) (event, remainder []byte, complete bool) {
+	end := -1
+	for i := 0; i+1 < len(data); i++ {
+		if data[i] == '\n' && data[i+1] == '\n' {
+			end = i + 2
+			break
+		}
+		if i+3 < len(data) && data[i] == '\r' && data[i+1] == '\n' && data[i+2] == '\r' && data[i+3] == '\n' {
+			end = i + 4
+			break
+		}
+	}
+	if end < 0 {
+		return nil, nil, false
+	}
+	return data[:end], data[end:], true
+}
+
+// firstMeaningfulSSEEvent skips complete SSE records that cannot produce
+// client-visible protocol output. Comment heartbeats and metadata-only
+// records must not commit the downstream response.
+func firstMeaningfulSSEEvent(data []byte) (event []byte, meaningful, complete bool) {
+	for len(data) > 0 {
+		var remainder []byte
+		var ok bool
+		event, remainder, ok = splitFirstSSEEvent(data)
+		if !ok {
+			return nil, false, false
+		}
+		if sseEventHasData(event) {
+			return event, true, true
+		}
+		data = remainder
+	}
+	return nil, false, true
+}
+
+func sseEventHasData(event []byte) bool {
+	for len(event) > 0 {
+		lineEnd := bytes.IndexByte(event, '\n')
+		if lineEnd < 0 {
+			lineEnd = len(event)
+		}
+		line := bytes.TrimSuffix(event[:lineEnd], []byte{'\r'})
+		if bytes.HasPrefix(line, []byte("data:")) && len(bytes.TrimSpace(line[len("data:"):])) > 0 {
+			return true
+		}
+		if lineEnd == len(event) {
+			break
+		}
+		event = event[lineEnd+1:]
+	}
+	return false
+}
+
+func isSSEContentType(contentType string) bool {
+	mediaType := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
+	return strings.EqualFold(mediaType, "text/event-stream")
+}
+
+func isSSEProtocol(protocol Protocol) bool {
+	return protocol == ProtocolOpenAIChat || protocol == ProtocolOpenAIResponses || protocol == ProtocolAnthropicMessages
+}
+
+func couldBeSSEPrefix(data []byte) bool {
+	data = bytes.TrimLeft(data, " \t\r\n")
+	if len(data) == 0 {
+		return true
+	}
+	for _, prefix := range []string{"data:", "event:"} {
+		if len(data) <= len(prefix) && strings.HasPrefix(prefix, string(data)) {
+			return true
+		}
+		if strings.HasPrefix(string(data), prefix) {
+			return true
+		}
+	}
+	return bytes.Contains(data, []byte("\n\n")) || bytes.Contains(data, []byte("\r\n\r\n"))
 }
 
 func convertStreamChunk(converter StreamConverter, input []byte) ([]byte, error) {
@@ -3091,7 +3216,7 @@ type streamAttemptResult struct {
 	AttemptStarted bool
 	BudgetExceeded bool
 	LatencyMs      int // attempt wall-clock (for retryable entries; sum from caller)
-	FirstTokenMs   int // success only: time from attemptStart to first body byte
+	FirstTokenMs   int // success only: time from attemptStart to first committed event
 	Committed      bool
 
 	// RetryAfter is the upstream's Retry-After header value (parsed
