@@ -213,6 +213,13 @@ func New(store storeProxy, service upstreamKeyProvider, defaultPort int, setting
 		defaultPort = 8344
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSHandshakeTimeout = 20 * time.Second
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 10
+	transport.DialContext = (&net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
 	transport.ResponseHeaderTimeout = upstreamResponseHeaderTimeout
 	p := &Proxy{
 		store:            store,

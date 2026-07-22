@@ -387,7 +387,17 @@ func (s *Service) FetchUpstreamModels(providerID string) ([]model.Model, error) 
 	req.Header.Set("Authorization", "Bearer "+upstreamKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSHandshakeTimeout = 20 * time.Second
+	transport.MaxIdleConnsPerHost = 10
+	transport.DialContext = (&net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   25 * time.Second,
+	}
 	resp, err := client.Do(req)
 	latencyMs := int(time.Since(start).Milliseconds())
 	if err != nil {
