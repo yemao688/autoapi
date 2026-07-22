@@ -583,6 +583,14 @@ ALTER TABLE provider_capabilities_new RENAME TO provider_capabilities;`,
 		ID:  "034_request_logs_api_key_index",
 		SQL: `CREATE INDEX IF NOT EXISTS idx_request_logs_api_key_ts ON request_logs(api_key_id, timestamp_ms);`,
 	},
+	{
+		ID: "035_api_key_model_rule_allowlist",
+		SQL: `CREATE TABLE IF NOT EXISTS api_key_model_rules (
+    api_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    model_rule_id TEXT NOT NULL REFERENCES model_rules(id) ON DELETE CASCADE,
+    PRIMARY KEY (api_key_id, model_rule_id)
+);`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

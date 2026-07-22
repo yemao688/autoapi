@@ -599,29 +599,29 @@ func (p *Proxy) loadModelRules() []model.ModelRule {
 // authenticate validates the Bearer token against autoapi API keys. The token
 // is expected to be the api_keys.id UUID. Disabled or expired keys are
 // rejected.
-func (p *Proxy) authenticate(r *http.Request) (apiKeyID, apiKeyName string, ok bool, err error) {
+func (p *Proxy) authenticate(r *http.Request) (apiKeyID, apiKeyName string, allowedRuleIDs []string, ok bool, err error) {
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(auth, prefix) {
-		return "", "", false, nil
+		return "", "", nil, false, nil
 	}
 	token := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
 	if token == "" {
-		return "", "", false, nil
+		return "", "", nil, false, nil
 	}
 
 	k, err := p.store.GetAPIKey(token)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return "", "", false, nil
+			return "", "", nil, false, nil
 		}
-		return "", "", false, err
+		return "", "", nil, false, err
 	}
 	now := time.Now().UnixMilli()
 	if !k.Enabled || (k.ExpiresAt > 0 && k.ExpiresAt < now) {
-		return "", "", false, nil
+		return "", "", nil, false, nil
 	}
-	return k.ID, k.Name, true, nil
+	return k.ID, k.Name, k.AllowedRuleIDs, true, nil
 }
 
 // writeError writes an OpenAI-compatible error JSON body.
@@ -694,6 +694,19 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 	req.Enforcement = model.NormalizeFeatureCapabilityEnforcement(p.featureEnforcementMode())
 
 	rules := p.loadModelRules()
+	if len(req.AllowedRuleIDs) > 0 {
+		allowed := make(map[string]struct{}, len(req.AllowedRuleIDs))
+		for _, id := range req.AllowedRuleIDs {
+			allowed[id] = struct{}{}
+		}
+		filtered := rules[:0]
+		for _, rule := range rules {
+			if _, ok := allowed[rule.ID]; ok {
+				filtered = append(filtered, rule)
+			}
+		}
+		rules = filtered
+	}
 	providerIDs := make([]string, 0)
 	seen := make(map[string]bool)
 	for _, r := range rules {

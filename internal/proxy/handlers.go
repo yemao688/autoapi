@@ -91,7 +91,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, allowedRuleIDs, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -116,7 +116,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = respReq.Model, respReq.Model, respReq.Stream
-	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream, Protocol: ProtocolOpenAIResponses, Requirements: reqs}
+	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream, Protocol: ProtocolOpenAIResponses, Requirements: reqs, AllowedRuleIDs: allowedRuleIDs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
@@ -153,7 +153,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, allowedRuleIDs, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -178,7 +178,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = msgReq.Model, msgReq.Model, msgReq.Stream
-	inbound := &InboundRequest{Model: msgReq.Model, Header: extractHeaders(r.Header), Task: "messages", TimeHour: time.Now().Hour(), Endpoint: "/v1/messages", Stream: msgReq.Stream, Protocol: ProtocolAnthropicMessages, Requirements: reqs}
+	inbound := &InboundRequest{Model: msgReq.Model, Header: extractHeaders(r.Header), Task: "messages", TimeHour: time.Now().Hour(), Endpoint: "/v1/messages", Stream: msgReq.Stream, Protocol: ProtocolAnthropicMessages, Requirements: reqs, AllowedRuleIDs: allowedRuleIDs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
@@ -213,7 +213,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, allowedRuleIDs, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -258,7 +258,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = modelName, modelName, stream
-	inbound := &InboundRequest{Model: modelName, Header: extractHeaders(r.Header), Task: "gemini", TimeHour: time.Now().Hour(), Endpoint: r.URL.Path, Stream: stream, Protocol: ProtocolGemini, Requirements: reqs}
+	inbound := &InboundRequest{Model: modelName, Header: extractHeaders(r.Header), Task: "gemini", TimeHour: time.Now().Hour(), Endpoint: r.URL.Path, Stream: stream, Protocol: ProtocolGemini, Requirements: reqs, AllowedRuleIDs: allowedRuleIDs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
 	if err != nil {
@@ -375,7 +375,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, allowedRuleIDs, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -427,6 +427,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Stream:          chatReq.Stream,
 		Protocol:        ProtocolOpenAIChat,
 		Requirements:    reqs,
+		AllowedRuleIDs:  allowedRuleIDs,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 
@@ -475,7 +476,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, allowedRuleIDs, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -523,6 +524,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		TimeHour:        time.Now().Hour(),
 		Endpoint:        r.URL.Path,
 		Protocol:        ProtocolOpenAI,
+		AllowedRuleIDs:  allowedRuleIDs,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 	p.insertPendingLog(logEntry)
@@ -567,7 +569,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	defer p.emitRequest(logEntry, r.URL.Path)
 	defer func() { logEntry.LatencyMs = int(time.Since(start).Milliseconds()) }()
 
-	apiKeyID, apiKeyName, ok, err := p.authenticate(r)
+	apiKeyID, apiKeyName, allowedRuleIDs, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {
@@ -634,6 +636,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		TimeHour:        time.Now().Hour(),
 		Endpoint:        r.URL.Path,
 		Protocol:        ProtocolOpenAI,
+		AllowedRuleIDs:  allowedRuleIDs,
 	}
 	logEntry.InputTokens = inbound.EstimatedTokens
 	p.insertPendingLog(logEntry)
@@ -659,11 +662,29 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 // than by the upstream lookup table, so /v1/models only shows models that
 // the operator has explicitly exposed through a rule.
 func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
+	_, _, allowedRuleIDs, authenticated, authErr := p.authenticate(r)
+	if authErr != nil {
+		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to authenticate API key")
+		return
+	}
 	rules, err := p.store.ListModelRules()
 	if err != nil {
 		slog.Error("proxy: list models failed", "err", err)
 		p.writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list models")
 		return
+	}
+	if authenticated && len(allowedRuleIDs) > 0 {
+		allowed := make(map[string]struct{}, len(allowedRuleIDs))
+		for _, id := range allowedRuleIDs {
+			allowed[id] = struct{}{}
+		}
+		filtered := rules[:0]
+		for _, rule := range rules {
+			if _, ok := allowed[rule.ID]; ok {
+				filtered = append(filtered, rule)
+			}
+		}
+		rules = filtered
 	}
 	data := make([]modelItem, 0, len(rules))
 	seen := make(map[string]struct{}, len(rules))
@@ -688,7 +709,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) handleTokenStats(w http.ResponseWriter, r *http.Request) {
-	_, _, ok, err := p.authenticate(r)
+	_, _, _, ok, err := p.authenticate(r)
 	if err != nil || !ok {
 		status := http.StatusUnauthorized
 		if err != nil {

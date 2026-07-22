@@ -556,6 +556,11 @@
     "createdAt": "Created",
     "lastUsed": "Last used",
     "neverUsed": "Never",
+    "access": {
+      "unrestricted": "All model rules",
+      "allowed": "Allowed: {names}",
+      "allowedMany": "{count} rules · {names} + more"
+    },
     "today": "Today",
     "last30Days": "Last 30 days",
     "tokenUnit": "tokens",
@@ -572,6 +577,14 @@
       "namePlaceholder": "e.g. production",
       "expires": "Expires",
       "expiresHelp": "Local time. Leave empty to never expire.",
+      "ruleAccess": "Model rule access",
+      "unrestricted": "Unrestricted",
+      "unrestrictedHelp": "This token can use every model rule.",
+      "rulesSelected": "{count} model rules selected",
+      "ruleAccessHelp": "Choose specific model rules, or leave unrestricted.",
+      "rulesLoading": "Loading model rules…",
+      "rulesLoadFailed": "Model rules could not be loaded.",
+      "noRules": "No model rules available.",
       "done": "Done"
     }
   },

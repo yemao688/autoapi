@@ -51,6 +51,7 @@ type InboundRequest struct {
 	Protocol        Protocol
 	Requirements    *model.RequestRequirements
 	Enforcement     string
+	AllowedRuleIDs  []string
 }
 
 // candidate is one possible provider/model the proxy can forward a request to.

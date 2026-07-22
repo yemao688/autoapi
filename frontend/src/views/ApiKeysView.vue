@@ -24,6 +24,13 @@ const {
   execute: loadKeys,
 } = useApi(() => api.apiKeys())
 
+const {
+  data: modelRules,
+  loading: modelRulesLoading,
+  error: modelRulesError,
+  execute: loadModelRules,
+} = useApi(() => api.modelRules())
+
 const search = ref('')
 const modalOpen = ref(false)
 const modalMode = ref<'create' | 'edit'>('create')
@@ -32,9 +39,12 @@ const saving = ref(false)
 const deleting = ref(false)
 const revealedToken = ref('')
 
-const form = ref<model.ApiKeyInput>({
+type ApiKeyForm = model.ApiKeyInput & { allowed_rule_ids: string[] }
+
+const form = ref<ApiKeyForm>({
   name: '',
   expires_at: 0,
+  allowed_rule_ids: [],
 })
 
 const filteredKeys = computed(() => {
@@ -78,6 +88,36 @@ function formatUsage(value: number | boolean | undefined): string {
 function formatLastUsed(key: model.ApiKey): string {
   const value = keyField(key, 'last_used_at')
   return typeof value === 'number' && value > 0 ? format(value) : t('apiKeys.neverUsed')
+}
+
+function keyAllowedRuleIds(key: model.ApiKey): string[] {
+  return ((key as unknown as { allowed_rule_ids?: string[] }).allowed_rule_ids || []).filter(Boolean)
+}
+
+function ruleName(id: string): string {
+  const rule = (modelRules.value || []).find((item) => item.id === id)
+  return rule?.name || id
+}
+
+function formatRuleAccess(key: model.ApiKey): string {
+  const ids = keyAllowedRuleIds(key)
+  if (!ids.length) return t('apiKeys.access.unrestricted')
+  const names = ids.map(ruleName)
+  const preview = names.slice(0, 2).join(', ')
+  return names.length > 2
+    ? t('apiKeys.access.allowedMany', { count: names.length, names: preview })
+    : t('apiKeys.access.allowed', { names: preview })
+}
+
+function toggleRule(id: string, checked: boolean) {
+  const next = new Set(form.value.allowed_rule_ids)
+  if (checked) next.add(id)
+  else next.delete(id)
+  form.value.allowed_rule_ids = [...next]
+}
+
+function setUnrestricted() {
+  form.value.allowed_rule_ids = []
 }
 
 async function toggleKeyEnabled(key: model.ApiKey) {
@@ -131,6 +171,7 @@ function openCreateModal() {
   form.value = {
     name: '',
     expires_at: 0,
+    allowed_rule_ids: [],
   }
   modalOpen.value = true
 }
@@ -142,6 +183,7 @@ function openEditModal(key: model.ApiKey) {
   form.value = {
     name: key.name,
     expires_at: key.expires_at,
+    allowed_rule_ids: keyAllowedRuleIds(key),
   }
   modalOpen.value = true
 }
@@ -174,6 +216,7 @@ async function saveKey() {
 
 onMounted(() => {
   loadKeys()
+  loadModelRules()
 })
 </script>
 
@@ -243,6 +286,9 @@ onMounted(() => {
                 <td>
                   <div style="font-weight: 500;">{{ key.name }}</div>
                   <div class="text-muted" style="font-size: 11.5px; margin-top: 1px;">{{ t('apiKeys.createdAt') }} · {{ format(key.created_at) }}</div>
+                  <div class="api-key-access" :title="formatRuleAccess(key)">
+                    <span>{{ formatRuleAccess(key) }}</span>
+                  </div>
                 </td>
                 <td>
                   <div class="row" style="gap: 6px;">
@@ -335,6 +381,29 @@ onMounted(() => {
             >
             <div class="field-help">{{ t('apiKeys.modal.expiresHelp') }}</div>
           </div>
+          <div class="field">
+            <label class="field-label">{{ t('apiKeys.modal.ruleAccess') }}</label>
+            <details class="rule-picker">
+              <summary class="rule-picker-trigger">
+                <span>{{ form.allowed_rule_ids.length ? t('apiKeys.modal.rulesSelected', { count: form.allowed_rule_ids.length }) : t('apiKeys.modal.unrestricted') }}</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <div class="rule-picker-panel">
+                <label class="rule-option rule-option-unrestricted">
+                  <input type="checkbox" :checked="form.allowed_rule_ids.length === 0" @change="setUnrestricted">
+                  <span><strong>{{ t('apiKeys.modal.unrestricted') }}</strong><small>{{ t('apiKeys.modal.unrestrictedHelp') }}</small></span>
+                </label>
+                <div v-if="modelRulesLoading" class="rule-picker-message">{{ t('apiKeys.modal.rulesLoading') }}</div>
+                <div v-else-if="modelRulesError" class="rule-picker-message rule-picker-error">{{ t('apiKeys.modal.rulesLoadFailed') }}</div>
+                <div v-else-if="!modelRules?.length" class="rule-picker-message">{{ t('apiKeys.modal.noRules') }}</div>
+                <label v-for="rule in modelRules || []" v-else :key="rule.id" class="rule-option">
+                  <input type="checkbox" :checked="form.allowed_rule_ids.includes(rule.id)" @change="toggleRule(rule.id, ($event.target as HTMLInputElement).checked)">
+                  <span>{{ rule.name || rule.id }}</span>
+                </label>
+              </div>
+            </details>
+            <div class="field-help">{{ t('apiKeys.modal.ruleAccessHelp') }}</div>
+          </div>
           <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
             <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
             <button class="btn btn-primary" :disabled="saving" @click="saveKey">{{ saving ? t('common.processing') : t('common.save') }}</button>
@@ -344,3 +413,70 @@ onMounted(() => {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.api-key-access {
+  display: flex;
+  max-width: 260px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rule-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  list-style: none;
+}
+
+.rule-picker-trigger::-webkit-details-marker { display: none; }
+.rule-picker-trigger svg { width: 15px; height: 15px; color: var(--muted); flex: 0 0 auto; }
+.rule-picker[open] .rule-picker-trigger { border-color: var(--accent); }
+.rule-picker-panel {
+  display: grid;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 5px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 10%);
+}
+.rule-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 6px;
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+.rule-option:hover { background: var(--accent-soft); }
+.rule-option input { margin-top: 2px; accent-color: var(--accent); }
+.rule-option-unrestricted { border-bottom: 1px solid var(--border); margin-bottom: 2px; }
+.rule-option strong, .rule-option small { display: block; }
+.rule-option small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.rule-picker-message { padding: 9px 6px; color: var(--muted); font-size: 12px; }
+.rule-picker-error { color: var(--negative); }
+
+@media (max-width: 720px) {
+  .api-key-access { max-width: 180px; }
+}
+</style>

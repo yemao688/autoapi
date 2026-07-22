@@ -212,15 +212,16 @@ type UpstreamMonitorBatch struct {
 // ApiKey is an access token for the autoapi proxy. The token value is the row
 // ID itself; no secret material is stored in this table.
 type ApiKey struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	ExpiresAt       int64  `json:"expires_at"` // ms; 0 = no expiry
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
-	Enabled         bool   `json:"enabled"`
-	LastUsedAt      int64  `json:"last_used_at"`
-	TodayTokens     int64  `json:"today_tokens"`
-	ThirtyDayTokens int64  `json:"thirty_day_tokens"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	ExpiresAt       int64    `json:"expires_at"` // ms; 0 = no expiry
+	CreatedAt       int64    `json:"created_at"`
+	UpdatedAt       int64    `json:"updated_at"`
+	Enabled         bool     `json:"enabled"`
+	LastUsedAt      int64    `json:"last_used_at"`
+	TodayTokens     int64    `json:"today_tokens"`
+	ThirtyDayTokens int64    `json:"thirty_day_tokens"`
+	AllowedRuleIDs  []string `json:"allowed_rule_ids"`
 }
 
 // ModelRule is the client-facing model definition. A rule's Name is the model
@@ -638,8 +639,9 @@ type Endpoint struct {
 // ApiKeyInput is the payload for creating/updating an API key.
 // API keys are simple access tokens; only the name and expiry are editable.
 type ApiKeyInput struct {
-	Name      string `json:"name"`
-	ExpiresAt int64  `json:"expires_at"`
+	Name           string   `json:"name"`
+	ExpiresAt      int64    `json:"expires_at"`
+	AllowedRuleIDs []string `json:"allowed_rule_ids"`
 }
 
 // ----- Provider test result -----

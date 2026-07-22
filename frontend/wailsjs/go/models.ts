@@ -79,6 +79,7 @@ export namespace model {
 	    last_used_at: number;
 	    today_tokens: number;
 	    thirty_day_tokens: number;
+	    allowed_rule_ids: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ApiKey(source);
@@ -95,11 +96,13 @@ export namespace model {
 	        this.last_used_at = source["last_used_at"];
 	        this.today_tokens = source["today_tokens"];
 	        this.thirty_day_tokens = source["thirty_day_tokens"];
+	        this.allowed_rule_ids = source["allowed_rule_ids"];
 	    }
 	}
 	export class ApiKeyInput {
 	    name: string;
 	    expires_at: number;
+	    allowed_rule_ids: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ApiKeyInput(source);
@@ -109,6 +112,7 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.expires_at = source["expires_at"];
+	        this.allowed_rule_ids = source["allowed_rule_ids"];
 	    }
 	}
 	export class AppInfo {

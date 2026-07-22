@@ -34,10 +34,20 @@ func (s *Store) ListAPIKeys() ([]model.ApiKey, error) {
 		}
 		out = append(out, k)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i := range out {
+		out[i].AllowedRuleIDs, err = apiKeyAllowedRuleIDs(s.db, out[i].ID)
+		if err != nil {
+			return nil, fmt.Errorf("store: load api key allowlist: %w", err)
+		}
+	}
 	if out == nil {
 		out = []model.ApiKey{}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // CreateAPIKey creates a simple access token. The generated row ID is the token
@@ -47,11 +57,12 @@ func (s *Store) CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error) {
 	id := makeID()
 
 	k := &model.ApiKey{
-		ID:        id,
-		Name:      in.Name,
-		ExpiresAt: in.ExpiresAt,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             id,
+		Name:           in.Name,
+		ExpiresAt:      in.ExpiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		AllowedRuleIDs: append([]string{}, in.AllowedRuleIDs...),
 	}
 
 	if err := s.execTx(func(tx *sql.Tx) error {
@@ -59,7 +70,10 @@ func (s *Store) CreateAPIKey(in model.ApiKeyInput) (*model.ApiKey, error) {
 			INSERT INTO api_keys (id, name, expires_at, created_at, updated_at, enabled)
 			VALUES (?, ?, ?, ?, ?, 1)`,
 			k.ID, k.Name, k.ExpiresAt, k.CreatedAt, k.UpdatedAt)
-		return err
+		if err != nil {
+			return err
+		}
+		return replaceAPIKeyAllowlist(tx, k.ID, in.AllowedRuleIDs)
 	}); err != nil {
 		return nil, fmt.Errorf("store: create api key: %w", err)
 	}
@@ -100,7 +114,7 @@ func (s *Store) UpdateAPIKey(id string, in model.ApiKeyInput) (*model.ApiKey, er
 		if n == 0 {
 			return fmt.Errorf("store: update api key %q: %w", id, ErrNotFound)
 		}
-		return nil
+		return replaceAPIKeyAllowlist(tx, id, in.AllowedRuleIDs)
 	}); err != nil {
 		return nil, err
 	}
@@ -142,5 +156,39 @@ func (s *Store) getAPIKeyByID(id string) (*model.ApiKey, error) {
 		}
 		return nil, fmt.Errorf("store: get api key %q: %w", id, err)
 	}
+	allowed, err := apiKeyAllowedRuleIDs(s.db, k.ID)
+	if err != nil {
+		return nil, fmt.Errorf("store: load api key allowlist: %w", err)
+	}
+	k.AllowedRuleIDs = allowed
 	return &k, nil
+}
+
+func replaceAPIKeyAllowlist(tx *sql.Tx, keyID string, ruleIDs []string) error {
+	if _, err := tx.Exec(`DELETE FROM api_key_model_rules WHERE api_key_id = ?`, keyID); err != nil {
+		return err
+	}
+	for _, ruleID := range ruleIDs {
+		if _, err := tx.Exec(`INSERT INTO api_key_model_rules (api_key_id, model_rule_id) VALUES (?, ?)`, keyID, ruleID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func apiKeyAllowedRuleIDs(db *sql.DB, keyID string) ([]string, error) {
+	rows, err := db.Query(`SELECT model_rule_id FROM api_key_model_rules WHERE api_key_id = ? ORDER BY model_rule_id`, keyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
