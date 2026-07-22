@@ -68,7 +68,7 @@ func TestTargetBreakerSkippedChainAndCurrentConfigStatus(t *testing.T) {
 	logEntry := &model.RequestLog{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
 	p.forwardWithFailover(httptest.NewRecorder(), req, []byte(`{}`), []candidate{c}, false, 0, logEntry)
-	if len(logEntry.Chain) != 1 || logEntry.Chain[0].Status != "target_breaker_open" || logEntry.Chain[0].Endpoint != "https://current.example/api/v1/chat/completions" {
+	if len(logEntry.Chain) != 1 || logEntry.Chain[0].Status != "target_breaker_open" || logEntry.Chain[0].Endpoint != "/v1/chat/completions" {
 		t.Fatalf("chain=%+v", logEntry.Chain)
 	}
 }

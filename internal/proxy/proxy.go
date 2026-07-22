@@ -1010,7 +1010,7 @@ func endpointForCandidate(c candidate) string {
 	if path == "" {
 		path = "/v1/chat/completions"
 	}
-	return store.JoinProviderURL(c.provider.BaseURL, path)
+	return path
 }
 
 func normalizeChainEndpoints(chain []model.RequestLogChainEntry, candidates []candidate) {
