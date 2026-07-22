@@ -192,6 +192,8 @@ type targetBreakerStatusProvider interface {
 	TargetBreakerStatuses() []proxy.TargetBreakerStatus
 }
 
+type targetBreakerResetter interface{ ResetTargetBreakers() }
+
 // App is the single struct bound to the Wails runtime. All methods here are
 // auto-generated as TypeScript bindings under frontend/wailsjs/go/main/App.
 type App struct {
@@ -211,6 +213,12 @@ func (a *App) GetTargetBreakerStatuses() []proxy.TargetBreakerStatus {
 		return p.TargetBreakerStatuses()
 	}
 	return []proxy.TargetBreakerStatus{}
+}
+
+func (a *App) ResetTargetBreakers() {
+	if p, ok := a.deps.Proxy.(targetBreakerResetter); ok {
+		p.ResetTargetBreakers()
+	}
 }
 
 // GetTargetDiagnostics computes shadow-only diagnostics from detached snapshots.

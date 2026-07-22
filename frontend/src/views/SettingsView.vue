@@ -6,6 +6,7 @@ import { api } from '@/api/bridge'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { useTheme } from '@/composables/useTheme'
 import { LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, type AppLocale } from '@/locales'
 import i18n from '@/locales'
@@ -23,6 +24,7 @@ const {
   execute: fetchSettings,
 } = useApi(api.getSettings)
 const toast = useToast()
+const confirm = useConfirm()
 const { activeTheme, saveTheme } = useTheme()
 
 const isDirty = ref(false)
@@ -117,6 +119,8 @@ function defaultSettings(): model.Settings {
       experimental: false,
       http_proxy: 'system',
       feature_capability_enforcement: 'observe',
+      target_breaker_threshold: 5,
+      target_breaker_window_seconds: 300,
     },
     logging: {
       enabled: true,
@@ -157,6 +161,8 @@ const currentLanguage = computed({
 
 function applySettings(value: model.Settings) {
   settings.value = JSON.parse(JSON.stringify(value)) as model.Settings
+  settings.value.advanced.target_breaker_threshold ||= 5
+  settings.value.advanced.target_breaker_window_seconds ||= 300
   normalizeLifecycleSettings(settings.value)
   activeTheme.value = settings.value.appearance.theme as any
   settingsLoaded.value = true
@@ -193,6 +199,28 @@ function markSettingsDirty() {
   isDirty.value = true
 }
 
+function normalizeBreakerSettings() {
+  const advanced = settings.value.advanced
+  advanced.target_breaker_threshold = Math.min(50, Math.max(1, Math.round(Number(advanced.target_breaker_threshold) || 5)))
+  advanced.target_breaker_window_seconds = Math.min(3600, Math.max(30, Math.round(Number(advanced.target_breaker_window_seconds) || 300)))
+}
+
+async function resetTargetBreakers() {
+  const ok = await confirm.open({
+    title: t('settings.breaker.resetTitle'),
+    message: t('settings.breaker.resetMessage'),
+    confirmText: t('settings.breaker.reset'),
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await api.resetTargetBreakers()
+    toast.push(t('settings.breaker.resetDone'), 'success')
+  } catch (e: any) {
+    toast.push(t('settings.breaker.resetFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
+  }
+}
+
 // Enforce cross-setting invariants: without a tray icon, the user has no
 // way to restore a hidden window, so background close and hidden start are
 // forced off. Also normalizes legacy startup_action values. The backend
@@ -217,6 +245,7 @@ function onMenuBarItemChange() {
 
 async function saveChanges() {
   if (!settingsLoaded.value) return
+  normalizeBreakerSettings()
   try {
     await api.saveSettings(settings.value)
     isDirty.value = false
@@ -234,7 +263,13 @@ async function discardChanges() {
 
 async function restoreDefaults() {
   if (!settingsLoaded.value) return
-  if (!confirm(t('confirm.restoreDefaultsMessage'))) return
+  const confirmed = await confirm.open({
+    title: t('confirm.restoreDefaultsTitle'),
+    message: t('confirm.restoreDefaultsMessage'),
+    confirmText: t('common.confirm'),
+    danger: true,
+  })
+  if (!confirmed) return
   try {
     const defaults = await api.resetSettings()
     settings.value = defaults
@@ -402,6 +437,15 @@ watch(activeTheme, (t) => {
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 0M7 8l4 8M17 8l-4 8"/></svg>
               <span>{{ t('settings.sections.routing') }}</span>
+            </a>
+            <a
+              class="sub-nav-item"
+              :class="{ active: activeSection === 'advanced' }"
+              href="#advanced"
+              @click.prevent="scrollToSection('advanced')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="7" r="2"/><circle cx="7" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+              <span>{{ t('settings.sections.advanced') }}</span>
             </a>
             <a
               class="sub-nav-item"
@@ -662,6 +706,42 @@ watch(activeTheme, (t) => {
                   <div class="field-help">{{ t('settings.routing.streamingSseHelp') }}</div>
                 </div>
                 <label class="toggle"><input type="checkbox" v-model="settings.routing.streaming_sse" @change="markSettingsDirty"><span class="toggle-slider"></span></label>
+              </div>
+            </div>
+          </section>
+
+          <section class="card" id="advanced">
+            <div class="section-head">
+              <div>
+                <div class="section-title">{{ t('settings.advanced.title') }}</div>
+                <div class="section-sub">{{ t('settings.advanced.subtitle') }}</div>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">{{ t('settings.advanced.breakerThreshold') }}</div>
+              <input class="input mono" style="max-width: 160px;" type="number" min="1" max="50" step="1" v-model.number="settings.advanced.target_breaker_threshold" @input="markSettingsDirty" @change="normalizeBreakerSettings">
+              <div class="field-help">{{ t('settings.advanced.breakerThresholdHelp') }}</div>
+            </div>
+            <div class="h-divider"></div>
+
+            <div class="field">
+              <div class="field-label">{{ t('settings.advanced.breakerWindow') }}</div>
+              <div class="row" style="gap: 8px; align-items: baseline; flex-wrap: wrap;">
+                <input class="input mono" style="max-width: 160px;" type="number" min="30" max="3600" step="1" v-model.number="settings.advanced.target_breaker_window_seconds" @input="markSettingsDirty" @change="normalizeBreakerSettings">
+                <span class="text-muted" style="font-size: 12.5px;">{{ t('settings.advanced.seconds') }}</span>
+              </div>
+              <div class="field-help">{{ t('settings.advanced.breakerWindowHelp') }}</div>
+            </div>
+            <div class="h-divider"></div>
+
+            <div class="field" style="margin-bottom: 0;">
+              <div class="row-between" style="margin-bottom: 0; gap: 16px; flex-wrap: wrap;">
+                <div>
+                  <div class="field-label" style="color: var(--negative);">{{ t('settings.breaker.resetLabel') }}</div>
+                  <div class="field-help">{{ t('settings.breaker.resetHelp') }}</div>
+                </div>
+                <button class="btn" style="background: rgba(217, 48, 37, 0.08); color: var(--negative); font-size: 12.5px; padding: 5px 12px;" @click="resetTargetBreakers">{{ t('settings.breaker.reset') }}</button>
               </div>
             </div>
           </section>

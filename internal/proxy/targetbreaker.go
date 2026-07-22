@@ -31,10 +31,17 @@ type TargetBreakerStatus struct {
 	LastFailureMs int64              `json:"last_failure_ms"`
 	RecoveryAtMs  int64              `json:"recovery_at_ms"`
 	FailureReason string             `json:"failure_reason,omitempty"`
+	Threshold     int                `json:"threshold"`
 }
 
-func (b *targetBreaker) prune(now time.Time) {
-	cutoff := now.Add(-targetFailureWindow)
+func (p *Proxy) ResetTargetBreakers() {
+	p.targetBreakersMu.Lock()
+	p.targetBreakers = make(map[model.RouteModeKey]*targetBreaker)
+	p.targetBreakersMu.Unlock()
+}
+
+func (b *targetBreaker) prune(now time.Time, window time.Duration) {
+	cutoff := now.Add(-window)
 	i := 0
 	for i < len(b.failures) && !b.failures[i].After(cutoff) {
 		i++
@@ -43,28 +50,28 @@ func (b *targetBreaker) prune(now time.Time) {
 		b.failures = append([]time.Time(nil), b.failures[i:]...)
 	}
 }
-func (b *targetBreaker) allow(now time.Time) bool {
+func (b *targetBreaker) allow(now time.Time, threshold int, window time.Duration) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.prune(now)
-	return len(b.failures) < targetFailureThreshold
+	b.prune(now, window)
+	return len(b.failures) < threshold
 }
-func (b *targetBreaker) recordFailure(now time.Time, reason string) {
+func (b *targetBreaker) recordFailure(now time.Time, reason string, window time.Duration) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.prune(now)
+	b.prune(now, window)
 	b.failures = append(b.failures, now)
 	b.lastFailure, b.lastReason = now, reason
 }
 func (b *targetBreaker) recordSuccess(now time.Time) { b.mu.Lock(); b.lastSuccess = now; b.mu.Unlock() }
-func (b *targetBreaker) status(key model.RouteModeKey, endpoint string, order int, now time.Time) TargetBreakerStatus {
+func (b *targetBreaker) status(key model.RouteModeKey, endpoint string, order, threshold int, window time.Duration, now time.Time) TargetBreakerStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.prune(now)
-	s := TargetBreakerStatus{Key: key, TargetID: key.TargetID, Order: order, Endpoint: endpoint, State: "closed", FailureCount: len(b.failures), WindowSeconds: int(targetFailureWindow.Seconds()), FailureReason: b.lastReason}
-	if len(b.failures) >= targetFailureThreshold {
+	b.prune(now, window)
+	s := TargetBreakerStatus{Key: key, TargetID: key.TargetID, Order: order, Endpoint: endpoint, State: "closed", FailureCount: len(b.failures), WindowSeconds: int(window.Seconds()), FailureReason: b.lastReason, Threshold: threshold}
+	if len(b.failures) >= threshold {
 		s.State = "open"
-		s.RecoveryAtMs = b.failures[0].Add(targetFailureWindow).UnixMilli()
+		s.RecoveryAtMs = b.failures[0].Add(window).UnixMilli()
 	}
 	if !b.lastSuccess.IsZero() {
 		s.LastSuccessMs = b.lastSuccess.UnixMilli()

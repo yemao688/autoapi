@@ -185,6 +185,10 @@ export const api = {
     ensureWails()
     return wails.GetTargetBreakerStatuses() as Promise<proxy.TargetBreakerStatus[]>
   },
+  resetTargetBreakers: (): Promise<void> => {
+    ensureWails()
+    return wails.ResetTargetBreakers() as Promise<void>
+  },
   replayLog: (id: string): Promise<model.ReplayResult> => {
     ensureWails()
     return wails.ReplayLog(id)

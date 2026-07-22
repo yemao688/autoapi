@@ -52,6 +52,8 @@ export namespace model {
 	    experimental: boolean;
 	    http_proxy: string;
 	    feature_capability_enforcement: string;
+	    target_breaker_threshold: number;
+	    target_breaker_window_seconds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedSettings(source);
@@ -63,6 +65,8 @@ export namespace model {
 	        this.experimental = source["experimental"];
 	        this.http_proxy = source["http_proxy"];
 	        this.feature_capability_enforcement = source["feature_capability_enforcement"];
+	        this.target_breaker_threshold = source["target_breaker_threshold"];
+	        this.target_breaker_window_seconds = source["target_breaker_window_seconds"];
 	    }
 	}
 	export class ApiKey {
@@ -1608,6 +1612,7 @@ export namespace proxy {
 	    last_failure_ms: number;
 	    recovery_at_ms: number;
 	    failure_reason?: string;
+	    threshold: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new TargetBreakerStatus(source);
@@ -1626,6 +1631,7 @@ export namespace proxy {
 	        this.last_failure_ms = source["last_failure_ms"];
 	        this.recovery_at_ms = source["recovery_at_ms"];
 	        this.failure_reason = source["failure_reason"];
+	        this.threshold = source["threshold"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

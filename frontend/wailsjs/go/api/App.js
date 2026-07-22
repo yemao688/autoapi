@@ -222,6 +222,10 @@ export function ResetSettings() {
   return window['go']['api']['App']['ResetSettings']();
 }
 
+export function ResetTargetBreakers() {
+  return window['go']['api']['App']['ResetTargetBreakers']();
+}
+
 export function RestartProxy() {
   return window['go']['api']['App']['RestartProxy']();
 }

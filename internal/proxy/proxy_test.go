@@ -359,9 +359,6 @@ func TestRestartSameAddressIsNoOp(t *testing.T) {
 	if p.listener != oldListener || p.server != oldServer {
 		t.Fatal("same-address restart replaced listener or server")
 	}
-	p.explorationMu.Lock()
-	p.exploration[explorationKey{ruleID: "r", tier: 0}] = &explorationState{qualified: 19}
-	p.explorationMu.Unlock()
 	key := model.RouteModeKey{TargetID: "t", InboundProtocol: string(ProtocolOpenAIChat), UpstreamProtocol: string(ProtocolOpenAIResponses)}
 	cb := p.routeBreakerFor(key)
 	for i := 0; i < 3; i++ {
@@ -372,9 +369,6 @@ func TestRestartSameAddressIsNoOp(t *testing.T) {
 	}
 	if _, ok := p.routeBreakerState(key); ok {
 		t.Fatal("successful no-op restart did not clear route breakers")
-	}
-	if len(p.exploration) != 0 {
-		t.Fatal("successful no-op restart did not clear exploration scheduler")
 	}
 }
 
@@ -433,20 +427,11 @@ func TestRestartSamePortBindFailureRestoresOldListener(t *testing.T) {
 		return net.Listen(network, address)
 	}
 	settings = &model.Settings{Server: model.ServerSettings{Port: port, BindAddress: "0.0.0.0"}}
-	p.explorationMu.Lock()
-	p.exploration[explorationKey{ruleID: "r", tier: 0}] = &explorationState{qualified: 19}
-	p.explorationMu.Unlock()
 	if err := p.Restart(); !errors.Is(err, wantErr) {
 		t.Fatalf("Restart error = %v, want %v", err, wantErr)
 	}
 	if !p.IsRunning() || p.URL() != fmt.Sprintf("http://127.0.0.1:%d", port) {
 		t.Fatalf("old listener not restored: running=%v url=%q", p.IsRunning(), p.URL())
-	}
-	p.explorationMu.Lock()
-	_, explorationRetained := p.exploration[explorationKey{ruleID: "r", tier: 0}]
-	p.explorationMu.Unlock()
-	if !explorationRetained {
-		t.Fatal("failed restart discarded exploration scheduler state")
 	}
 	p.mu.RLock()
 	active := p.activeSettings
@@ -591,7 +576,6 @@ func TestFailover_P0FailsP1Succeeds(t *testing.T) {
 		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
 	}
 	p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
-	defer p.Shutdown()
 	defer p.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
@@ -2152,7 +2136,7 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 	}
 }
 
-func TestFailover_NonRetryableStopsLoop(t *testing.T) {
+func TestFailover_Upstream400RetriesAndFailsOver(t *testing.T) {
 	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/p0/") {
@@ -2191,14 +2175,66 @@ func TestFailover_NonRetryableStopsLoop(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 to stop failover, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected failover success after upstream 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if p0Hits != 1 {
 		t.Fatalf("expected P0 hit once, got %d", p0Hits)
 	}
-	if p1Hits != 0 {
-		t.Fatalf("expected P1 not hit, got %d", p1Hits)
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once, got %d", p1Hits)
+	}
+	targetStatuses := p.TargetBreakerStatuses()
+	if p.breakerFor("p0").ConsecutiveFailures() != 0 || len(targetStatuses) != 1 || targetStatuses[0].FailureCount != 0 {
+		t.Fatalf("upstream 400 incorrectly penalized breaker state: provider=%d targets=%+v", p.breakerFor("p0").ConsecutiveFailures(), targetStatuses)
+	}
+}
+
+func TestFailover_AllTargetsUpstream400Returns400WithoutBreakerPenalty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"provider rejected request"}}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "all-400", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", MaxRetries: 1, Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"all-400","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "provider rejected request") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if p.breakerFor("p").ConsecutiveFailures() != 0 {
+		t.Fatal("400 penalized provider breaker")
+	}
+	for _, status := range p.TargetBreakerStatuses() {
+		if status.FailureCount != 0 {
+			t.Fatalf("400 penalized target breaker: %+v", status)
+		}
+	}
+}
+
+func TestFailover_StreamAllTargetsUpstream400Returns400(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"stream provider rejected request"}}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "stream-all-400", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"stream-all-400","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "stream provider rejected request") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if p.breakerFor("p").ConsecutiveFailures() != 0 || p.TargetBreakerStatuses()[0].FailureCount != 0 {
+		t.Fatal("stream upstream 400 penalized a breaker")
 	}
 }
 
@@ -2725,7 +2761,7 @@ func TestFailover_RetryBoundedSucceedsWithinBudget(t *testing.T) {
 	}
 }
 
-func TestHandlerPlansCandidatesOnceBeforeRetryAndFailover(t *testing.T) {
+func TestHandlerPreservesConfiguredTargetOrderBeforeRetryAndFailover(t *testing.T) {
 	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/p0/") {
@@ -2739,7 +2775,7 @@ func TestHandlerPlansCandidatesOnceBeforeRetryAndFailover(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	store := &planningPriceStore{mockStore: &mockStore{
+	store := &mockStore{
 		providers: map[string]*model.Provider{
 			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
 			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
@@ -2752,10 +2788,8 @@ func TestHandlerPlansCandidatesOnceBeforeRetryAndFailover(t *testing.T) {
 			},
 		}},
 		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
-	}}
-	metricsSpy := &planningMetricSpy{byID: map[string]metrics.Snapshot{}}
+	}
 	p := New(store, &mockService{}, 0, nil)
-	p.metricSink = metricsSpy
 	t.Cleanup(func() { _ = p.Shutdown() })
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x","messages":[]}`))
@@ -2765,9 +2799,6 @@ func TestHandlerPlansCandidatesOnceBeforeRetryAndFailover(t *testing.T) {
 
 	if rec.Code != http.StatusOK || p0Hits != 2 || p1Hits != 1 {
 		t.Fatalf("response=%d p0=%d p1=%d body=%s", rec.Code, p0Hits, p1Hits, rec.Body.String())
-	}
-	if metricsSpy.calls != 0 || store.calls != 2 {
-		t.Fatalf("active routing performed shadow planning work: metrics=%d prices=%d, want 0 metrics and 2 price lookups", metricsSpy.calls, store.calls)
 	}
 }
 
@@ -5671,6 +5702,37 @@ func TestFailover_StreamRuleFirstByteBudgetExceeded(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || envelope.Error.Type == "" {
 		t.Fatalf("expected standard stream error envelope, body=%s err=%v", rec.Body.String(), err)
+	}
+}
+
+func TestFailover_StreamInvalid200BeforeCommitUsesNextTarget(t *testing.T) {
+	var firstHits, secondHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			firstHits++
+			_, _ = io.WriteString(w, "data: unsupported image model for this provider\n\n")
+			return
+		}
+		secondHits++
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{providers: map[string]*model.Provider{
+		"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+		"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+	}, rules: []model.ModelRule{{ID: "r", Name: "invalid-stream", Enabled: true, Targets: []model.ModelRuleTarget{
+		{ID: "t0", ProviderID: "p0", ModelName: "m0", Enabled: true},
+		{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+	}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"invalid-stream","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || firstHits != 1 || secondHits != 1 || !strings.Contains(rec.Body.String(), "ok") || strings.Contains(rec.Body.String(), "unsupported image") {
+		t.Fatalf("status=%d first=%d second=%d body=%q", rec.Code, firstHits, secondHits, rec.Body.String())
 	}
 }
 

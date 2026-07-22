@@ -17,7 +17,7 @@ func TestCategorizeError_StatusCodes(t *testing.T) {
 		// Non-retryable: explicit list. Per RFC 9110 / OpenAI
 		// semantics, these are "request itself is malformed" — no
 		// other provider will succeed.
-		{400, CategoryNonRetryable},
+		{400, CategoryRetryable},
 		{405, CategoryNonRetryable},
 		{406, CategoryNonRetryable},
 		{413, CategoryNonRetryable},

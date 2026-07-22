@@ -35,6 +35,7 @@ const { data: settings, execute: loadSettings } = useApi(api.getSettings)
 
 const modalOpen = ref(false)
 const editingId = ref('')
+const retainedStrategy = ref('priority_first')
 const saving = ref(false)
 const deleting = ref(false)
 
@@ -44,12 +45,10 @@ const form = ref<{
   name: string
   enabled: boolean
   first_byte_timeout_seconds: number
-  strategy: string
 }>({
   name: '',
   enabled: true,
   first_byte_timeout_seconds: 0,
-  strategy: 'priority_first',
 })
 const formTargets = ref<model.ModelRuleTarget[]>([])
 
@@ -58,11 +57,6 @@ const targetModalOpen = ref(false)
 const targetModalRule = ref<model.ModelRule | null>(null)
 const targetModalTarget = ref<model.ModelRuleTarget | null>(null)
 const targetSaving = ref(false)
-const shadowComparisons = ref<model.ModelRuleShadowComparison[]>([])
-const shadowLoading = ref(false)
-const shadowError = ref(false)
-const shadowRefreshId = ref(0)
-const shadowExpanded = ref<Set<string>>(new Set())
 const breakerStatuses = ref<proxy.TargetBreakerStatus[]>([])
 
 // The view is driven by a single interaction state. Server responses are merged
@@ -109,10 +103,6 @@ const providerEnabledMap = computed(() => {
   return map
 })
 
-function getTargetTimeout(target: model.ModelRuleTarget): number {
-  return target.first_token_timeout_seconds ?? 0
-}
-
 const breakerByTarget = computed(() => {
   const map = new Map<string, proxy.TargetBreakerStatus>()
   for (const status of breakerStatuses.value) {
@@ -143,6 +133,13 @@ function breakerStatusClass(target: model.ModelRuleTarget): string {
   return status?.state === 'open' ? 'breaker-open' : status ? 'breaker-normal' : 'breaker-idle'
 }
 
+function breakerThreshold(status?: proxy.TargetBreakerStatus): number {
+  const runtimeThreshold = status && (status as unknown as { threshold?: unknown }).threshold
+  if (typeof runtimeThreshold === 'number' && Number.isFinite(runtimeThreshold)) return runtimeThreshold
+  const configured = settings.value?.advanced?.target_breaker_threshold
+  return typeof configured === 'number' && configured >= 1 ? configured : 5
+}
+
 function formatBreakerTime(ms: number): string {
   if (!ms) return t('modelRules.breaker.notRequested')
   return new Intl.DateTimeFormat(locale.value, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(ms))
@@ -153,6 +150,23 @@ async function loadBreakerStatuses() {
     breakerStatuses.value = await api.getTargetBreakerStatuses()
   } catch {
     // Runtime state is optional; keep configured targets visible.
+  }
+}
+
+async function resetTargetBreakers() {
+  const ok = await confirm.open({
+    title: t('modelRules.breaker.resetTitle'),
+    message: t('modelRules.breaker.resetMessage'),
+    confirmText: t('modelRules.breaker.reset'),
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await api.resetTargetBreakers()
+    await loadBreakerStatuses()
+    toast.push(t('modelRules.breaker.resetDone'), 'success')
+  } catch (e: any) {
+    toast.push(t('modelRules.breaker.resetFailed') + ': ' + (e?.message || e?.toString() || ''), 'error')
   }
 }
 
@@ -204,81 +218,6 @@ function targetProviderName(target: model.ModelRuleTarget): string {
   return providerNameMap.value[target.provider_id] || t('common.unknown')
 }
 
-function shadowTarget(rule: model.ModelRule, targetId: string): model.ModelRuleTarget | undefined {
-  return rule.targets.find((target) => target.id === targetId)
-}
-
-function shortTargetId(targetId: string): string {
-  return targetId ? targetId.slice(0, 8) : '—'
-}
-
-function shadowTargetLabel(rule: model.ModelRule, targetId: string, tier?: number): string {
-  const target = shadowTarget(rule, targetId)
-  if (!target) return t('modelRules.shadow.unknownTarget', { id: shortTargetId(targetId) })
-  const name = [targetProviderName(target), target.model_name || t('modelRules.targetDefault')].join(' / ')
-  const targetTier = typeof tier === 'number' ? tier : target.tier
-  return `${name} · T${targetTier > 0 ? targetTier : 1}`
-}
-
-function shadowStrategyLabel(strategy: string | undefined): string {
-  switch (strategy) {
-    case 'priority_first': return t('modelRules.shadow.strategyPriority')
-    case 'score_within_tier': return t('modelRules.shadow.strategyScore')
-    case 'cost_first': return t('modelRules.shadow.strategyCost')
-    default: return strategy ? t('modelRules.shadow.strategyOther', { value: readableShadowValue(strategy) }) : '—'
-  }
-}
-
-function shadowAvailabilityLabel(candidate: model.ShadowPlanCandidate): string {
-  if (candidate.available) return t('modelRules.shadow.available')
-  return shadowReasonLabel(candidate.reason)
-}
-
-type ShadowSkipReason = 'target_breaker_open' | 'circuit_open' | 'unavailable' | 'disabled' | 'cooldown'
-
-function isBreakerSkipReason(reason: string | undefined): reason is Extract<ShadowSkipReason, 'target_breaker_open' | 'circuit_open'> {
-  return reason === 'target_breaker_open' || reason === 'circuit_open'
-}
-
-function shadowReasonLabel(reason: string | undefined): string {
-  switch (reason) {
-    case 'unavailable': return t('modelRules.shadow.unavailable')
-    case 'disabled': return t('modelRules.shadow.reasonDisabled')
-    case 'target_breaker_open':
-    case 'circuit_open': return t('modelRules.shadow.reasonTargetBreakerOpen')
-    case 'cooldown': return t('modelRules.shadow.reasonCooldown')
-    default: return reason ? t('modelRules.shadow.reasonOther', { value: readableShadowValue(reason) }) : t('modelRules.shadow.unavailable')
-  }
-}
-
-function shadowCircuitLabel(state: string | undefined): string {
-  switch (state) {
-    case 'closed': return t('modelRules.shadow.circuitClosed')
-    case 'open': return t('modelRules.shadow.circuitOpen')
-    case 'half_open': return t('modelRules.shadow.circuitHalfOpen')
-    default: return state ? t('modelRules.shadow.circuitOther', { value: readableShadowValue(state) }) : ''
-  }
-}
-
-function readableShadowValue(value: string): string {
-  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase())
-}
-
-function shadowAssumptionLabel(assumption: string): string {
-  switch (assumption) {
-    case 'capabilities_assumed_satisfied': return t('modelRules.shadow.assumeCapabilities')
-    case 'budget_assumed_satisfied': return t('modelRules.shadow.assumeBudget')
-    case 'cooldown_state_assumed_inactive': return t('modelRules.shadow.assumeCooldown')
-    case 'retry_and_stream_unchanged': return t('modelRules.shadow.assumeRetryStream')
-    case 'circuit_state_assumed_closed/unavailable': return t('modelRules.shadow.assumeCircuit')
-    default:
-      if (assumption.startsWith('circuit_state_observed:')) return t('modelRules.shadow.assumeCircuitObserved', { state: shadowCircuitLabel(assumption.slice('circuit_state_observed:'.length)) })
-      if (assumption.startsWith('provider_error:')) return t('modelRules.shadow.assumeProviderError')
-      if (assumption.startsWith('price_error:')) return t('modelRules.shadow.assumePriceError')
-      return t('modelRules.shadow.assumeOther', { value: readableShadowValue(assumption) })
-  }
-}
-
 function formatHits(n: number): string {
   return n.toLocaleString()
 }
@@ -291,77 +230,9 @@ function formatSuccessRate(rule: model.ModelRule): string {
   return `${rate.toFixed(1)}%`
 }
 
-async function loadShadowComparisons() {
-  const requestId = ++shadowRefreshId.value
-  const snapshot = ruleSnapshotKey()
-  shadowLoading.value = true
-  shadowError.value = false
-  shadowComparisons.value = []
-  try {
-    const comparisons = await api.getModelRuleShadowComparisons()
-    if (requestId === shadowRefreshId.value && snapshot === ruleSnapshotKey()) {
-      shadowComparisons.value = comparisons
-    }
-  } catch {
-    if (requestId === shadowRefreshId.value) shadowError.value = true
-  } finally {
-    if (requestId === shadowRefreshId.value) shadowLoading.value = false
-  }
-}
-
-function invalidateShadowComparisons() {
-  // A failed rules refresh leaves ruleList untouched, so any in-flight or
-  // previously loaded comparison must not be presented as current data for it.
-  shadowRefreshId.value++
-  shadowComparisons.value = []
-  shadowLoading.value = false
-  shadowError.value = true
-}
-
-function ruleSnapshotKey(): string {
-  return JSON.stringify(ruleList.value.map((rule) => ({
-    id: rule.id,
-    enabled: rule.enabled,
-    strategy: rule.strategy,
-    first_byte_timeout_seconds: rule.first_byte_timeout_seconds,
-    targets: rule.targets.map((target) => ({
-      id: target.id,
-      provider_id: target.provider_id,
-      model_name: target.model_name,
-      max_retries: target.max_retries,
-      first_token_timeout_seconds: target.first_token_timeout_seconds,
-      enabled: target.enabled,
-      tier: target.tier,
-    })),
-  })))
-}
-
 async function loadRules() {
   const result = await fetchRules()
-  if (!result) {
-    invalidateShadowComparisons()
-    return result
-  }
-
-  // useApi returns null on fetch failure and leaves ruleList unchanged. Only
-  // after a successful authoritative rules response may dependent data refresh.
-  void loadShadowComparisons()
   return result
-}
-
-function shadowFor(rule: model.ModelRule): model.ModelRuleShadowComparison | undefined {
-  return shadowComparisons.value.find((comparison) => comparison.rule_id === rule.id)
-}
-
-function shadowArray<T>(value: T[] | undefined | null): T[] {
-  return Array.isArray(value) ? value : []
-}
-
-function toggleShadow(ruleId: string) {
-  const next = new Set(shadowExpanded.value)
-  if (next.has(ruleId)) next.delete(ruleId)
-  else next.add(ruleId)
-  shadowExpanded.value = next
 }
 
 function openCreate() {
@@ -370,8 +241,8 @@ function openCreate() {
     name: '',
     enabled: true,
     first_byte_timeout_seconds: 0,
-    strategy: 'priority_first',
   }
+  retainedStrategy.value = 'priority_first'
   // New rules still need at least one default target; it is managed inline afterward.
   formTargets.value = [cloneTarget(new model.ModelRuleTarget({ provider_id: '', model_name: '', max_retries: 0, enabled: true }))]
   modalOpen.value = true
@@ -383,8 +254,8 @@ function openEdit(rule: model.ModelRule) {
     name: rule.name,
     enabled: rule.enabled,
     first_byte_timeout_seconds: rule.first_byte_timeout_seconds || 0,
-    strategy: rule.strategy || 'priority_first',
   }
+  retainedStrategy.value = rule.strategy || 'priority_first'
   // Preserve existing targets even though they are edited outside the modal.
   formTargets.value = rule.targets.map(cloneTarget)
   modalOpen.value = true
@@ -397,7 +268,7 @@ async function saveRule() {
       name: form.value.name,
       enabled: form.value.enabled,
       first_byte_timeout_seconds: form.value.first_byte_timeout_seconds,
-      strategy: form.value.strategy || 'priority_first',
+      strategy: retainedStrategy.value,
       targets: targetsToInput(formTargets.value),
     })
     if (editingId.value) {
@@ -594,7 +465,6 @@ async function onTargetsReorder(rule: model.ModelRule) {
       await recoverTargetRule(rule)
     } else {
       // The drag has already mutated rule.targets in place; no full reload.
-      void loadShadowComparisons()
       toast.push(t('toast.reorderSaved'), 'success')
     }
   } catch (e: any) {
@@ -646,7 +516,6 @@ async function onRulesReorder() {
       toast.push(t('toast.reorderConflict'), 'error')
       await reconcileRulesOrder()
     } else {
-      void loadShadowComparisons()
       toast.push(t('toast.reorderSaved'), 'success')
     }
   } catch (e: any) {
@@ -831,6 +700,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
     <div class="main-actions">
       <button class="btn btn-secondary" @click="importJSON">{{ t('modelRules.import') }}</button>
       <button class="btn btn-secondary" @click="exportJSON">{{ t('modelRules.export') }}</button>
+      <button class="btn btn-secondary" @click="resetTargetBreakers">{{ t('modelRules.breaker.reset') }}</button>
       <button class="btn btn-primary" @click="openCreate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         {{ t('modelRules.new') }}
@@ -953,7 +823,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                       </div>
                       <div class="target-runtime" :class="breakerStatusClass(target)">
                         <span class="target-runtime-status"><span class="target-runtime-dot"></span>{{ breakerStatusLabel(target) }}</span>
-                        <span v-if="breakerFor(target)" class="target-runtime-failures">{{ t('modelRules.breaker.failures', { count: breakerFor(target)?.failure_count || 0 }) }}</span>
+                        <span v-if="breakerFor(target)" class="target-runtime-failures">{{ t('modelRules.breaker.failures', { count: breakerFor(target)?.failure_count || 0, threshold: breakerThreshold(breakerFor(target)) }) }}</span>
                         <span v-if="breakerFor(target)?.last_success_ms" class="target-runtime-meta">{{ t('modelRules.breaker.lastSuccess', { time: formatBreakerTime(breakerFor(target)?.last_success_ms || 0) }) }}</span>
                         <span v-if="breakerFor(target)?.last_failure_ms" class="target-runtime-meta">{{ t('modelRules.breaker.lastFailure', { time: formatBreakerTime(breakerFor(target)?.last_failure_ms || 0) }) }}</span>
                         <span v-if="breakerFor(target)?.state === 'open'" class="target-runtime-meta">{{ t('modelRules.breaker.recovery', { time: formatBreakerTime(breakerFor(target)?.recovery_at_ms || 0) }) }}</span>
@@ -997,26 +867,6 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                   </li>
                   <li v-if="!rule.targets.length" class="text-muted" style="font-size: 12px;">{{ t('modelRules.empty') }}</li>
                 </VueDraggable>
-                <section class="shadow-comparison" :class="{ 'shadow-comparison-open': shadowExpanded.has(rule.id) }">
-                  <button class="shadow-comparison-toggle" type="button" :aria-expanded="shadowExpanded.has(rule.id)" @click="toggleShadow(rule.id)">
-                    <span>{{ t('modelRules.shadow.title') }} <span class="shadow-readonly">{{ t('modelRules.shadow.readonly') }}</span></span>
-                    <span v-if="shadowFor(rule)?.changed" class="badge shadow-changed">{{ t('modelRules.shadow.changed') }}</span>
-                    <span class="shadow-chevron">›</span>
-                  </button>
-                  <div v-if="shadowExpanded.has(rule.id)" class="shadow-comparison-body">
-                    <div v-if="shadowLoading" class="text-muted">{{ t('modelRules.shadow.loading') }}</div>
-                    <div v-else-if="shadowError" class="diag-note">{{ t('modelRules.shadow.error') }}</div>
-                    <div v-else-if="!shadowFor(rule)" class="text-muted">{{ t('modelRules.shadow.empty') }}</div>
-                    <template v-else>
-                      <div class="shadow-meta"><span>{{ t('modelRules.shadow.strategy') }}: {{ shadowStrategyLabel(shadowFor(rule)?.strategy) }}</span></div>
-                      <div class="shadow-order"><strong>{{ t('modelRules.shadow.original') }}</strong><div class="shadow-sequence"><span v-for="targetId in shadowArray(shadowFor(rule)?.original_order)" :key="targetId" class="shadow-chip" :title="targetId">{{ shadowTargetLabel(rule, targetId) }}</span><span v-if="!shadowArray(shadowFor(rule)?.original_order).length" class="text-muted">—</span></div></div>
-                      <div class="shadow-order"><strong>{{ t('modelRules.shadow.planned') }}</strong><div class="shadow-sequence"><span v-for="targetId in shadowArray(shadowFor(rule)?.planned_order)" :key="targetId" class="shadow-chip shadow-chip-planned" :title="targetId">{{ shadowTargetLabel(rule, targetId) }}</span><span v-if="!shadowArray(shadowFor(rule)?.planned_order).length" class="text-muted">—</span></div></div>
-                      <div v-if="shadowArray(shadowFor(rule)?.candidates).length" class="shadow-list"><strong>{{ t('modelRules.shadow.candidates') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.candidates)" :key="candidate.target_id" class="shadow-candidate"><span class="shadow-candidate-name" :title="candidate.target_id">{{ shadowTargetLabel(rule, candidate.target_id, candidate.tier) }}</span><span>{{ shadowAvailabilityLabel(candidate) }}</span><em v-if="candidate.circuit_state">{{ shadowCircuitLabel(candidate.circuit_state) }}</em></span></div>
-                      <div v-if="shadowArray(shadowFor(rule)?.rejected).length" class="shadow-list"><strong>{{ t('modelRules.shadow.rejected') }}</strong><span v-for="candidate in shadowArray(shadowFor(rule)?.rejected)" :key="candidate.target_id" class="shadow-candidate"><span class="shadow-candidate-name" :title="candidate.target_id">{{ shadowTargetLabel(rule, candidate.target_id, candidate.tier) }}</span><span>{{ shadowReasonLabel(candidate.reason) }}</span><em v-if="candidate.circuit_state">{{ shadowCircuitLabel(candidate.circuit_state) }}</em></span></div>
-                      <div v-if="shadowArray(shadowFor(rule)?.assumptions).length" class="shadow-list"><strong>{{ t('modelRules.shadow.assumptions') }}</strong><span v-for="assumption in shadowArray(shadowFor(rule)?.assumptions)" :key="assumption">{{ shadowAssumptionLabel(assumption) }}</span></div>
-                    </template>
-                  </div>
-                </section>
               </div>
             </div>
 
@@ -1054,15 +904,6 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
           <label class="field-label">{{ t('modelRules.modal.name') }}</label>
           <input v-model="form.name" class="input" :placeholder="t('modelRules.modal.namePlaceholder')">
           <div class="text-muted" style="font-size: 11px; margin-top: 4px;">{{ t('modelRules.modal.nameHelp') }}</div>
-        </div>
-        <div class="field">
-          <label class="field-label">{{ t('modelRules.modal.strategy') }}</label>
-          <select v-model="form.strategy" class="input" :disabled="saving">
-            <option value="priority_first">{{ t('modelRules.modal.strategyPriority') }}</option>
-            <option value="score_within_tier">{{ t('modelRules.modal.strategyScore') }}</option>
-            <option value="cost_first">{{ t('modelRules.modal.strategyCost') }}</option>
-          </select>
-          <div class="text-muted" style="font-size: 11px; margin-top: 4px;">{{ t('modelRules.modal.strategyHelp') }}</div>
         </div>
         <div class="field">
           <label class="field-label">{{ t('modelRules.modal.timeout') }}</label>
@@ -1278,28 +1119,7 @@ html[data-theme="dark"] .rule-drag-handle:hover {
 .target-runtime-failures, .target-runtime-meta, .target-runtime-endpoint { color: var(--muted); }
 .target-runtime-endpoint { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diag-note { color: var(--warning); font-family: inherit; }
-.shadow-warning { color: var(--warning); font-weight: 600; }
-.shadow-comparison { margin-top: 12px; border-top: 1px dashed var(--rule-border); }
-.shadow-readonly { font-weight: 400; opacity: 0.8; }
-.shadow-changed { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
 .refresh-error-banner { padding: 9px 12px; border-radius: 6px; color: var(--negative); background: color-mix(in srgb, var(--negative) 10%, transparent); font-size: 12px; }
-.shadow-comparison-toggle { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--muted); padding: 9px 0 5px; font-size: 11px; text-align: left; cursor: pointer; }
-.shadow-comparison-toggle:hover { color: var(--fg); }
-.shadow-comparison-toggle .shadow-chevron { margin-left: auto; font-size: 16px; transition: transform 120ms ease; transform: rotate(90deg); }
-.shadow-comparison-open .shadow-chevron { transform: rotate(-90deg); }
-.shadow-comparison-body { display: flex; flex-direction: column; gap: 8px; padding: 5px 0 3px; color: var(--muted); font-size: 11px; }
-.shadow-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 10.5px; }
-.shadow-order { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
-.shadow-order > strong { flex: 0 0 82px; color: var(--fg); font-weight: 600; }
-.shadow-sequence { display: flex; flex: 1 1 280px; flex-wrap: wrap; gap: 4px; }
-.shadow-chip { display: inline-flex; max-width: 100%; padding: 3px 6px; border: 1px solid var(--border, rgba(0, 0, 0, 0.08)); border-radius: 5px; background: var(--bg, rgba(0, 0, 0, 0.02)); color: var(--fg); font-size: 10.5px; overflow-wrap: anywhere; }
-.shadow-chip-planned { border-color: color-mix(in srgb, var(--accent, #0071e3) 30%, var(--border, rgba(0, 0, 0, 0.08))); }
-.shadow-list { display: flex; flex-direction: column; gap: 3px; }
-.shadow-list strong { color: var(--fg); font-weight: 600; }
-.shadow-list > span { padding-left: 8px; overflow-wrap: anywhere; }
-.shadow-candidate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
-.shadow-candidate-name { color: var(--fg); }
-.shadow-list em { color: var(--warning); font-style: normal; }
 .target-provider {
   font-size: 13px;
   font-weight: 500;

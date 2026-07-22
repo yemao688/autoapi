@@ -115,6 +115,8 @@ export function ReplayLog(arg1:string):Promise<model.ReplayResult>;
 
 export function ResetSettings():Promise<model.Settings>;
 
+export function ResetTargetBreakers():Promise<void>;
+
 export function RestartProxy():Promise<void>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;

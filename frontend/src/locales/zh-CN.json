@@ -77,6 +77,7 @@
       "general": "常规",
       "appearance": "外观",
       "routing": "路由",
+      "advanced": "高级",
       "server": "API 服务",
       "data": "数据",
       "logging": "日志",
@@ -124,6 +125,24 @@
       "subtitle": "模型路由设置",
       "streamingSse": "流式响应 (SSE)",
       "streamingSseHelp": "逐 Token 推送给客户端"
+    },
+    "advanced": {
+      "title": "高级设置",
+      "subtitle": "运行时保护与路由安全控制",
+      "breakerThreshold": "目标熔断阈值",
+      "breakerThresholdHelp": "滚动窗口内达到此数量的符合条件失败后打开目标熔断器 · 1–50",
+      "breakerWindow": "目标熔断窗口",
+      "breakerWindowHelp": "判断目标是否应熔断时，失败记录保持有效的时间 · 30–3600 秒",
+      "seconds": "秒"
+    },
+    "breaker": {
+      "resetLabel": "重置目标熔断器",
+      "resetHelp": "仅清除内存中的模型目标失败计数，不影响请求日志或 Provider 熔断器。",
+      "reset": "重置计数",
+      "resetTitle": "重置目标熔断器？",
+      "resetMessage": "此操作仅清除内存中的模型目标失败计数，不会修改请求日志或 Provider 熔断器。",
+      "resetDone": "目标熔断计数已重置",
+      "resetFailed": "目标熔断器重置失败"
     },
     "server": {
       "title": "API 服务",
@@ -218,10 +237,15 @@
       "normal": "正常",
       "open": "熔断中",
       "notRequested": "未请求",
-      "failures": "滚动失败 {count}/5",
+      "failures": "滚动失败 {count}/{threshold}",
       "lastSuccess": "最近成功 {time}",
       "lastFailure": "最近失败 {time}",
-      "recovery": "预计恢复 {time}"
+      "recovery": "预计恢复 {time}",
+      "reset": "重置熔断器",
+      "resetTitle": "重置目标熔断器？",
+      "resetMessage": "此操作仅清除内存中的模型目标失败计数，不会修改请求日志或 Provider 熔断器。",
+      "resetDone": "目标熔断计数已重置",
+      "resetFailed": "目标熔断器重置失败"
     },
     "diagnostics": {
       "score": "评分",

@@ -15,17 +15,18 @@ import (
 func TestTargetBreakerRollingWindowAndFailureClasses(t *testing.T) {
 	b := &targetBreaker{}
 	now := time.Unix(1000, 0)
+	threshold, window := targetFailureThreshold, targetFailureWindow
 	for i := 0; i < targetFailureThreshold-1; i++ {
-		b.recordFailure(now.Add(time.Duration(i)*time.Second), "500")
+		b.recordFailure(now.Add(time.Duration(i)*time.Second), "500", window)
 	}
-	if !b.allow(now.Add(4 * time.Second)) {
+	if !b.allow(now.Add(4*time.Second), threshold, window) {
 		t.Fatal("breaker opened before threshold")
 	}
-	b.recordFailure(now.Add(4*time.Second), "429")
-	if b.allow(now.Add(5 * time.Second)) {
+	b.recordFailure(now.Add(4*time.Second), "429", window)
+	if b.allow(now.Add(5*time.Second), threshold, window) {
 		t.Fatal("breaker remained open below threshold")
 	}
-	if !b.allow(now.Add(targetFailureWindow + 5*time.Second)) {
+	if !b.allow(now.Add(window+5*time.Second), threshold, window) {
 		t.Fatal("aged failures did not recover")
 	}
 	if !targetFailure(io.ErrUnexpectedEOF, 0) || !targetFailure(nil, 401) || !targetFailure(nil, 403) || !targetFailure(nil, 429) || !targetFailure(nil, 503) {
@@ -40,9 +41,9 @@ func TestTargetBreakerStatusIncludesRouteMetadata(t *testing.T) {
 	b := &targetBreaker{}
 	now := time.Now()
 	for i := 0; i < targetFailureThreshold; i++ {
-		b.recordFailure(now, "503")
+		b.recordFailure(now, "503", targetFailureWindow)
 	}
-	s := b.status(model.RouteModeKey{TargetID: "target", InboundProtocol: "chat", UpstreamProtocol: "chat"}, "https://upstream.example/v1/chat/completions", 2, now)
+	s := b.status(model.RouteModeKey{TargetID: "target", InboundProtocol: "chat", UpstreamProtocol: "chat"}, "https://upstream.example/v1/chat/completions", 2, targetFailureThreshold, targetFailureWindow, now)
 	if s.State != "open" || s.Endpoint == "" || s.Order != 2 || s.RecoveryAtMs == 0 {
 		t.Fatalf("status=%+v", s)
 	}
@@ -56,7 +57,7 @@ func TestTargetBreakerSkippedChainAndCurrentConfigStatus(t *testing.T) {
 	c := candidate{provider: provider, targetID: "t", modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions", firstByteBudget: time.Second}
 	b := p.targetBreakerFor(c)
 	for i := 0; i < targetFailureThreshold; i++ {
-		b.recordFailure(time.Now(), "503")
+		b.recordFailure(time.Now(), "503", targetFailureWindow)
 	}
 	provider.BaseURL = "https://current.example/api"
 	store.rules[0].Targets[0].Tier = 7
@@ -83,7 +84,7 @@ func TestTargetBreakerDoesNotCountUnattemptedCandidateOnExhaustedBudget(t *testi
 	first := candidate{provider: providers["p0"], targetID: "t0", modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions", firstByteBudget: -time.Second}
 	second := candidate{provider: providers["p1"], targetID: "t1", modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions", firstByteBudget: -time.Second}
 	for i := 0; i < targetFailureThreshold; i++ {
-		p.targetBreakerFor(first).recordFailure(time.Now(), "503")
+		p.targetBreakerFor(first).recordFailure(time.Now(), "503", targetFailureWindow)
 	}
 	logEntry := &model.RequestLog{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
@@ -93,5 +94,30 @@ func TestTargetBreakerDoesNotCountUnattemptedCandidateOnExhaustedBudget(t *testi
 		if item.TargetID == "t1" && item.FailureCount != 0 {
 			t.Fatalf("unattempted candidate was penalized: %+v", item)
 		}
+	}
+}
+
+func TestTargetBreakerUsesConfiguredLimitsAndResetIsolated(t *testing.T) {
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", Enabled: true}}}
+	p := New(st, &mockService{}, 0, func() (*model.Settings, error) {
+		return &model.Settings{Advanced: model.AdvancedSettings{TargetBreakerThreshold: 2, TargetBreakerWindowSeconds: 30}}, nil
+	})
+	defer p.Shutdown()
+	c := candidate{provider: st.providers["p"], targetID: "t", modelName: "m", protocol: ProtocolOpenAIChat, upstreamPath: "/v1/chat/completions"}
+	b := p.targetBreakerFor(c)
+	_, window := p.targetBreakerConfig()
+	b.recordFailure(time.Now(), "503", window)
+	b.recordFailure(time.Now(), "503", window)
+	statuses := p.TargetBreakerStatuses()
+	if len(statuses) != 1 || statuses[0].State != "open" || statuses[0].Threshold != 2 || statuses[0].WindowSeconds != 30 {
+		t.Fatalf("configured status=%+v", statuses)
+	}
+	provider := p.breakerFor("p")
+	route := p.routeBreakerFor(routeModeKeyForCandidate(c))
+	provider.Record(false)
+	route.Record(false)
+	p.ResetTargetBreakers()
+	if len(p.TargetBreakerStatuses()) != 0 || provider.ConsecutiveFailures() != 1 || route.ConsecutiveFailures() != 1 {
+		t.Fatalf("reset leaked across breaker classes: target=%+v provider=%d route=%d", p.TargetBreakerStatuses(), provider.ConsecutiveFailures(), route.ConsecutiveFailures())
 	}
 }

@@ -77,6 +77,7 @@
       "general": "General",
       "appearance": "Appearance",
       "routing": "Routing",
+      "advanced": "Advanced",
       "server": "API Server",
       "data": "Data",
       "logging": "Logging",
@@ -124,6 +125,24 @@
       "subtitle": "Model routing settings",
       "streamingSse": "Streaming response (SSE)",
       "streamingSseHelp": "Push tokens to the client as they arrive"
+    },
+    "advanced": {
+      "title": "Advanced",
+      "subtitle": "Runtime protection and routing safeguards",
+      "breakerThreshold": "Target breaker threshold",
+      "breakerThresholdHelp": "Open a model-target breaker after this many qualifying failures in the rolling window · 1–50",
+      "breakerWindow": "Target breaker window",
+      "breakerWindowHelp": "How long failures remain active when deciding whether a target should open · 30–3600 seconds",
+      "seconds": "seconds"
+    },
+    "breaker": {
+      "resetLabel": "Reset target breakers",
+      "resetHelp": "Clears in-memory model-target failure counts only. Request logs and provider breakers are not affected.",
+      "reset": "Reset counts",
+      "resetTitle": "Reset target breakers?",
+      "resetMessage": "This clears in-memory model-target failure counts only. Request logs and provider breakers will not be changed.",
+      "resetDone": "Target breaker counts reset",
+      "resetFailed": "Could not reset target breakers"
     },
     "server": {
       "title": "API server",
@@ -218,10 +237,15 @@
       "normal": "Normal",
       "open": "Breaker open",
       "notRequested": "Not requested",
-      "failures": "Failures {count}/5",
+      "failures": "Failures {count}/{threshold}",
       "lastSuccess": "Last success {time}",
       "lastFailure": "Last failure {time}",
-      "recovery": "Recovery {time}"
+      "recovery": "Recovery {time}",
+      "reset": "Reset breakers",
+      "resetTitle": "Reset target breakers?",
+      "resetMessage": "This clears in-memory model-target failure counts only. Request logs and provider breakers will not be changed.",
+      "resetDone": "Target breaker counts reset",
+      "resetFailed": "Could not reset target breakers"
     },
     "diagnostics": {
       "score": "Score",

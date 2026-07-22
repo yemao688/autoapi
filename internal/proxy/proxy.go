@@ -157,7 +157,9 @@ type Proxy struct {
 
 	// featureEnforcement caches the advanced.feature_capability_enforcement
 	// setting so the request hot path never queries the DB per request.
-	featureEnforcement atomic.Value
+	featureEnforcement         atomic.Value
+	targetBreakerThreshold     atomic.Int32
+	targetBreakerWindowSeconds atomic.Int32
 
 	lifecycleMu    sync.Mutex
 	mu             sync.RWMutex
@@ -188,12 +190,6 @@ type Proxy struct {
 	routeBreakers    map[model.RouteModeKey]*CircuitBreaker
 	targetBreakersMu sync.RWMutex
 	targetBreakers   map[model.RouteModeKey]*targetBreaker
-
-	explorationMu      sync.Mutex
-	exploration        map[explorationKey]*explorationState
-	explorationClock   func() time.Time
-	explorationLastNow time.Time
-	planObserver       func(planDiagnostics)
 }
 
 var errRouteUnavailable = errors.New("all conversion route modes are unavailable")
@@ -227,15 +223,13 @@ func New(store storeProxy, service upstreamKeyProvider, defaultPort int, setting
 			New: func() interface{} { return make([]byte, 32*1024) },
 		}},
 		// Route httputil.ReverseProxy error logging through slog.
-		errorLog:         slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
-		transport:        transport,
-		breakers:         make(map[string]*CircuitBreaker),
-		routeBreakers:    make(map[model.RouteModeKey]*CircuitBreaker),
-		targetBreakers:   make(map[model.RouteModeKey]*targetBreaker),
-		exploration:      make(map[explorationKey]*explorationState),
-		explorationClock: time.Now,
-		writer:           newLogWriter(store),
-		listen:           net.Listen,
+		errorLog:       slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
+		transport:      transport,
+		breakers:       make(map[string]*CircuitBreaker),
+		routeBreakers:  make(map[model.RouteModeKey]*CircuitBreaker),
+		targetBreakers: make(map[model.RouteModeKey]*targetBreaker),
+		writer:         newLogWriter(store),
+		listen:         net.Listen,
 	}
 	if len(registries) > 0 && registries[0] != nil {
 		p.metricSink = registries[0]
@@ -385,7 +379,7 @@ func (p *Proxy) Restart() error {
 	p.mu.RLock()
 	if p.listener != nil && listenerMatchesSettings(p.listener, settings.Server) {
 		p.mu.RUnlock()
-		p.resetPlanningState()
+		p.resetRuntimeBreakers()
 		return nil
 	}
 	oldInstance := serverInstance{listener: p.listener, server: p.server}
@@ -396,7 +390,7 @@ func (p *Proxy) Restart() error {
 	if wasRunning && oldSettings.Port == settings.Server.Port {
 		err := p.restartSamePort(settings, oldInstance, oldSettings)
 		if err == nil {
-			p.resetPlanningState()
+			p.resetRuntimeBreakers()
 		}
 		return err
 	}
@@ -412,7 +406,7 @@ func (p *Proxy) Restart() error {
 	if err := shutdownServer(oldInstance); err != nil {
 		return err
 	}
-	p.resetPlanningState()
+	p.resetRuntimeBreakers()
 	return nil
 }
 
@@ -798,9 +792,7 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 		return nil, fmt.Errorf("%w: %s", errRouteUnavailable, req.Model)
 	}
 	candidates = filtered
-	// Price snapshots are needed by execution and request-log accounting for
-	// every strategy, including priority_first. Only planCandidates may skip
-	// scoring/reordering for the priority fast path.
+	// Price snapshots are used only for request-log accounting.
 	for i := range candidates {
 		if m, e := p.store.GetModel(candidates[i].provider.ID, candidates[i].modelName); e == nil && m != nil {
 			candidates[i].requestPrice = m.RequestPrice
@@ -814,15 +806,18 @@ func (p *Proxy) resolveCandidates(req *InboundRequest) ([]candidate, error) {
 
 func (p *Proxy) loadFeatureEnforcement() {
 	var mode string
+	var settings *model.Settings
 	if p.settingsProvider != nil {
-		settings, err := p.settingsProvider()
+		loaded, err := p.settingsProvider()
+		settings = loaded
 		if err != nil {
 			slog.Warn("proxy: failed to load feature capability enforcement", "error", err)
 		} else if settings != nil {
 			mode = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
 		}
 	} else if p.store != nil {
-		settings, err := p.store.GetSettings()
+		loaded, err := p.store.GetSettings()
+		settings = loaded
 		if err != nil {
 			slog.Warn("proxy: failed to load feature capability enforcement", "error", err)
 		} else if settings != nil {
@@ -833,6 +828,25 @@ func (p *Proxy) loadFeatureEnforcement() {
 		mode = model.FeatureCapabilityEnforcementObserve
 	}
 	p.featureEnforcement.Store(mode)
+	advanced := model.AdvancedSettings{}
+	if settings != nil {
+		advanced = settings.Advanced
+	}
+	model.NormalizeTargetBreakerSettings(&advanced)
+	p.targetBreakerThreshold.Store(int32(advanced.TargetBreakerThreshold))
+	p.targetBreakerWindowSeconds.Store(int32(advanced.TargetBreakerWindowSeconds))
+}
+
+func (p *Proxy) targetBreakerConfig() (int, time.Duration) {
+	threshold := int(p.targetBreakerThreshold.Load())
+	window := int(p.targetBreakerWindowSeconds.Load())
+	if threshold == 0 {
+		threshold = model.DefaultTargetBreakerThreshold
+	}
+	if window == 0 {
+		window = model.DefaultTargetBreakerWindowSeconds
+	}
+	return threshold, time.Duration(window) * time.Second
 }
 
 func (p *Proxy) featureEnforcementMode() string {
@@ -941,6 +955,7 @@ func (p *Proxy) TargetBreakerStatuses() []TargetBreakerStatus {
 	p.targetBreakersMu.RLock()
 	defer p.targetBreakersMu.RUnlock()
 	now := time.Now()
+	threshold, window := p.targetBreakerConfig()
 	targets := make(map[string]struct {
 		provider  *model.Provider
 		modelName string
@@ -969,7 +984,7 @@ func (p *Proxy) TargetBreakerStatuses() []TargetBreakerStatus {
 			endpoint = endpointForRoute(config.provider, config.modelName, key.UpstreamProtocol)
 			order = config.order
 		}
-		out = append(out, b.status(key, endpoint, order, now))
+		out = append(out, b.status(key, endpoint, order, threshold, window, now))
 	}
 	return out
 }
@@ -1060,6 +1075,11 @@ func (p *Proxy) resetRouteBreakers() {
 	p.routeBreakersMu.Unlock()
 }
 
+func (p *Proxy) resetRuntimeBreakers() {
+	p.resetRouteBreakers()
+	p.ResetTargetBreakers()
+}
+
 // forwardWithFailover tries each candidate in order. It buffers each upstream
 // response in memory and only copies a successful response to the real
 // ResponseWriter, guaranteeing the client never sees a failed provider's output.
@@ -1128,7 +1148,8 @@ outer:
 		}
 		lastCandidate = c
 		targetCB := p.targetBreakerFor(c)
-		if !targetCB.allow(time.Now()) {
+		threshold, window := p.targetBreakerConfig()
+		if !targetCB.allow(time.Now(), threshold, window) {
 			attemptOrder++
 			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: "target_breaker_open", Error: "model target failure breaker open"})
 			continue
@@ -1140,7 +1161,7 @@ outer:
 				return
 			}
 			targetSettled = true
-			targetCB.recordFailure(time.Now(), reason)
+			targetCB.recordFailure(time.Now(), reason, window)
 		}
 		recordTargetSuccess := func() {
 			if targetSettled {
@@ -1801,6 +1822,9 @@ outer:
 	if !lastFailureWasConversion && lastStatus >= 500 {
 		status = http.StatusServiceUnavailable
 	}
+	if lastStatus >= 400 && lastStatus < 500 {
+		status = lastStatus
+	}
 	p.writeError(w, status, "upstream_error", lastErr.Error())
 	slog.Error("proxy: all candidates exhausted",
 		"model", logEntry.Model,
@@ -1888,7 +1912,8 @@ outer:
 		}
 		lastCandidate = c
 		targetCB := p.targetBreakerFor(c)
-		if !targetCB.allow(time.Now()) {
+		threshold, window := p.targetBreakerConfig()
+		if !targetCB.allow(time.Now(), threshold, window) {
 			attemptOrder++
 			logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: "target_breaker_open", Error: "model target failure breaker open"})
 			continue
@@ -1900,7 +1925,7 @@ outer:
 				return
 			}
 			targetSettled = true
-			targetCB.recordFailure(time.Now(), reason)
+			targetCB.recordFailure(time.Now(), reason, window)
 		}
 		recordTargetSuccess := func() {
 			if targetSettled {
@@ -2255,7 +2280,10 @@ outer:
 			case model.AttemptOutcomeRetryable:
 				firstByteCumulativeMs += result.LatencyMs
 				if result.StatusCode >= 400 {
-					lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, result.StatusCode)
+					lastErr = errors.New(result.Error)
+					if result.Error == "" {
+						lastErr = fmt.Errorf("upstream %s returned status %d", c.provider.Name, result.StatusCode)
+					}
 					lastStatus = result.StatusCode
 				} else {
 					lastErr = fmt.Errorf("upstream %s: %s", c.provider.Name, result.Error)
@@ -2334,6 +2362,9 @@ outer:
 	if lastStatus >= 500 {
 		status = http.StatusServiceUnavailable
 	}
+	if lastStatus >= 400 && lastStatus < 500 {
+		status = lastStatus
+	}
 	p.writeError(w, status, "upstream_error", lastErr.Error())
 	slog.Error("proxy: stream all candidates exhausted",
 		"model", logEntry.Model,
@@ -2361,7 +2392,7 @@ outer:
 //     Committed = true. Caller computes top-level FirstTokenMs.
 //   - "client_abort": request context canceled (Do error or write error).
 //     Committed = true. No breaker penalty.
-//   - "non_retryable": upstream 4xx hard (e.g. 400/422) OR transport
+//   - "non_retryable": upstream 4xx hard (e.g. 422) OR transport
 //     error classified as non-retryable. Committed = true (error
 //     response already written to client).
 //   - "retryable": transport error or 5xx; the caller can retry the
@@ -2608,6 +2639,9 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 
 		cat := CategorizeError(nil, upstreamStatus)
 		errStr := fmt.Sprintf("upstream %s returned status %d", c.provider.Name, upstreamStatus)
+		if upstreamMessage := extractUpstreamError(upstreamBody); upstreamMessage != "" {
+			errStr += ": " + upstreamMessage
+		}
 		latencyMs := int(time.Since(attemptStart).Milliseconds())
 		attemptOrder++
 
@@ -3088,6 +3122,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			}, attemptOrder
 		} else if !usageAcc.Successful() {
 			chainEntry.Status = "truncated"
+			if !committed {
+				chainEntry.Status = string(model.AttemptOutcomeRetryable)
+				chainEntry.Error = "upstream stream ended before a valid protocol event"
+				logEntry.Chain = append(logEntry.Chain, chainEntry)
+				return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: upstreamStatus, Error: chainEntry.Error, Cause: io.ErrUnexpectedEOF, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: io.ErrUnexpectedEOF, Committed: false}, attemptOrder
+			}
 			if c.targetID != "" {
 				if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
 					slog.Error("proxy: increment target failure count (truncated stream)", "err", err)

@@ -54,6 +54,7 @@ func (s *Store) GetSettings() (*model.Settings, error) {
 	}
 	settings.Data.StoragePath = s.dsnPath
 	settings.Advanced.FeatureCapabilityEnforcement = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
+	model.NormalizeTargetBreakerSettings(&settings.Advanced)
 
 	return &settings, nil
 }
@@ -71,6 +72,8 @@ func (s *Store) ResetSettings() (*model.Settings, error) {
 // SaveSettings writes each non-zero section as a JSON blob in the settings
 // table, using UPSERT (INSERT OR REPLACE).
 func (s *Store) SaveSettings(settings model.Settings) error {
+	model.NormalizeTargetBreakerSettings(&settings.Advanced)
+	settings.Advanced.FeatureCapabilityEnforcement = model.NormalizeFeatureCapabilityEnforcement(settings.Advanced.FeatureCapabilityEnforcement)
 	sections := map[string]interface{}{
 		"general":    settings.General,
 		"appearance": settings.Appearance,
@@ -148,6 +151,8 @@ func (s *Store) defaultSettings() model.Settings {
 			Experimental:                 false,
 			HTTPProxy:                    "system",
 			FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementObserve,
+			TargetBreakerThreshold:       model.DefaultTargetBreakerThreshold,
+			TargetBreakerWindowSeconds:   model.DefaultTargetBreakerWindowSeconds,
 		},
 		Logging: model.LoggingSettings{
 			Enabled:    true,

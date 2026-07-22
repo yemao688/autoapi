@@ -579,6 +579,35 @@ type AdvancedSettings struct {
 	Experimental                 bool   `json:"experimental"`
 	HTTPProxy                    string `json:"http_proxy"`                     // "system" | "none" | url
 	FeatureCapabilityEnforcement string `json:"feature_capability_enforcement"` // "observe" | "enforce"
+	TargetBreakerThreshold       int    `json:"target_breaker_threshold"`
+	TargetBreakerWindowSeconds   int    `json:"target_breaker_window_seconds"`
+}
+
+const (
+	DefaultTargetBreakerThreshold     = 5
+	DefaultTargetBreakerWindowSeconds = 300
+)
+
+func NormalizeTargetBreakerThreshold(v int) int {
+	if v < 1 || v > 50 {
+		return DefaultTargetBreakerThreshold
+	}
+	return v
+}
+
+func NormalizeTargetBreakerWindowSeconds(v int) int {
+	if v < 30 || v > 3600 {
+		return DefaultTargetBreakerWindowSeconds
+	}
+	return v
+}
+
+func NormalizeTargetBreakerSettings(s *AdvancedSettings) {
+	if s == nil {
+		return
+	}
+	s.TargetBreakerThreshold = NormalizeTargetBreakerThreshold(s.TargetBreakerThreshold)
+	s.TargetBreakerWindowSeconds = NormalizeTargetBreakerWindowSeconds(s.TargetBreakerWindowSeconds)
 }
 
 // LoggingSettings configures the application diagnostic logger. The fields
