@@ -469,6 +469,10 @@ function apiKeyLabel(log: model.RequestLog): string {
                   <span class="log-detail-label">{{ t('usage.logTable.clientIp') }}</span>
                   <span class="log-detail-value text-mono">{{ log.client_ip || '—' }}</span>
                 </div>
+                <div class="log-detail-item">
+                  <span class="log-detail-label">{{ t('usage.logTable.reasoningEffort') }}</span>
+                  <span class="log-detail-value text-mono">{{ log.reasoning_effort || '—' }}</span>
+                </div>
               </div>
               <div v-if="normalizedChainArray(log).length > 0" class="log-detail-chain">
                 <div class="log-detail-chain-header">

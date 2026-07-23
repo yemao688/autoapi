@@ -102,6 +102,30 @@ func TestInspectResponsesFeatures(t *testing.T) {
 	}
 }
 
+func TestInspectReasoningEffort(t *testing.T) {
+	chat, err := inspectChatRequest([]byte(`{"model":"m","reasoning_effort":"high","messages":[]}`))
+	if err != nil || chat.ReasoningEffort != "high" {
+		t.Fatalf("chat reasoning effort: got %q, err=%v", chat.ReasoningEffort, err)
+	}
+	responses, err := inspectResponsesRequest([]byte(`{"model":"m","reasoning":{"effort":"low"},"input":"hi"}`))
+	if err != nil || responses.ReasoningEffort != "low" {
+		t.Fatalf("responses reasoning effort: got %q, err=%v", responses.ReasoningEffort, err)
+	}
+	for _, body := range []string{
+		`{"model":"m","reasoning_effort":123,"messages":[]}`,
+		`{"model":"m","reasoning":{"effort":123},"input":"hi"}`,
+	} {
+		if _, err := func() (interface{}, error) {
+			if strings.Contains(body, "reasoning_effort") {
+				return inspectChatRequest([]byte(body))
+			}
+			return inspectResponsesRequest([]byte(body))
+		}(); err == nil {
+			t.Fatalf("expected malformed reasoning effort to fail: %s", body)
+		}
+	}
+}
+
 func TestInspectResponsesToolSchema(t *testing.T) {
 	valid := `{"model":"m","input":"hi","tools":[{"type":"function","name":"n","parameters":{"type":"object"}}]}`
 	if _, err := inspectResponsesRequest([]byte(valid)); err != nil {

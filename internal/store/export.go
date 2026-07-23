@@ -132,7 +132,7 @@ func (s *Store) exportTokensCSV() ([]byte, string, error) {
 func (s *Store) exportLogsCSV() ([]byte, string, error) {
 	cutoff := time.Now().AddDate(0, 0, -30).UnixMilli()
 	rows, err := s.db.Query(`
-		SELECT timestamp_ms, status_code, provider_name, model,
+		SELECT timestamp_ms, status_code, provider_name, model, reasoning_effort,
 		       input_tokens, output_tokens, cost, latency_ms, route_label,
 		       COALESCE(error, '')
 		FROM request_logs
@@ -146,20 +146,20 @@ func (s *Store) exportLogsCSV() ([]byte, string, error) {
 
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
-	w.Write([]string{"timestamp", "status", "provider", "model",
+	w.Write([]string{"timestamp", "status", "provider", "model", "reasoning_effort",
 		"input_tokens", "output_tokens", "cost", "latency_ms", "route", "error"})
 
 	for rows.Next() {
 		var ts int64
 		var status int
-		var provider, modelName, route, errStr string
+		var provider, modelName, reasoningEffort, route, errStr string
 		var in, out, lat int
 		var cost float64
-		if err := rows.Scan(&ts, &status, &provider, &modelName, &in, &out, &cost, &lat, &route, &errStr); err != nil {
+		if err := rows.Scan(&ts, &status, &provider, &modelName, &reasoningEffort, &in, &out, &cost, &lat, &route, &errStr); err != nil {
 			return nil, "", fmt.Errorf("store: export logs csv: scan row: %w", err)
 		}
 		t := time.UnixMilli(ts).Format(time.RFC3339)
-		if err := w.Write([]string{t, fmt.Sprintf("%d", status), provider, modelName,
+		if err := w.Write([]string{t, fmt.Sprintf("%d", status), provider, modelName, reasoningEffort,
 			fmt.Sprintf("%d", in), fmt.Sprintf("%d", out), fmt.Sprintf("%.4f", cost), fmt.Sprintf("%d", lat), route, errStr}); err != nil {
 			return nil, "", fmt.Errorf("store: export logs csv: write row: %w", err)
 		}

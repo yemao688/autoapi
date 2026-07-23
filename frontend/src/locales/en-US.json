@@ -703,6 +703,7 @@
       "requestUri": "Request URI",
       "userAgent": "User Agent",
       "clientIp": "Client IP",
+      "reasoningEffort": "Reasoning effort",
       "token": "API token",
       "unknownToken": "Unknown/deleted token",
       "replay": "Replay score",

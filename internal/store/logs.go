@@ -98,7 +98,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 
 	dataQuery := fmt.Sprintf(`
 		SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
-		       input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
+		       reasoning_effort, input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 		       route_id, route_label,
 		       api_key_id, COALESCE(api_key_name, ''), COALESCE(error, ''),
 		       cache_creation, cache_hit,
@@ -123,6 +123,7 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 		if err := rows.Scan(
 			&l.ID, &l.Timestamp, &l.StatusCode,
 			&l.ProviderID, &l.ProviderName, &l.Model,
+			&l.ReasoningEffort,
 			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
 			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.APIKeyName, &l.Error,
 			&l.CacheCreation, &l.CacheHit,
@@ -150,11 +151,11 @@ func (s *Store) GetRequestLog(id string) (*model.RequestLog, error) {
 	var l model.RequestLog
 	var chainJS string
 	err := s.db.QueryRow(`SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
-		input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
+		reasoning_effort, input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 		route_id, route_label, api_key_id, COALESCE(api_key_name, ''), COALESCE(error, ''), cache_creation, cache_hit,
 		COALESCE(chain_json, ''), user_agent, client_ip, request_id, request_uri
 		FROM request_logs WHERE id = ?`, id).Scan(&l.ID, &l.Timestamp, &l.StatusCode, &l.ProviderID, &l.ProviderName, &l.Model,
-		&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
+		&l.ReasoningEffort, &l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
 		&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.APIKeyName, &l.Error, &l.CacheCreation, &l.CacheHit,
 		&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID, &l.RequestURI)
 	if err != nil {
@@ -178,19 +179,19 @@ func (s *Store) InsertRequestLog(l model.RequestLog) error {
 	return s.execTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
-			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
+			                          reasoning_effort, input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
 			                          api_key_id, api_key_name, error,
 			                          cache_creation, cache_hit,
 			                          chain_json, user_agent, client_ip, request_id, request_uri)
 			VALUES (?, ?, ?, ?, ?, ?,
-			        ?, ?, ?, ?, ?, ?,
+			        ?, ?, ?, ?, ?, ?, ?,
 			        ?, ?, ?,
 			        ?, ?,
 			        ?, ?,
 			        ?, ?, ?, ?, ?)`,
 			l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
-			l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
+			l.ReasoningEffort, l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 			l.RouteID, l.RouteLabel,
 			l.APIKeyID, l.APIKeyName, l.Error,
 			l.CacheCreation, l.CacheHit,
@@ -204,13 +205,13 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 	return s.execTx(func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO request_logs (id, timestamp_ms, status_code, provider_id, provider_name, model,
-			                          input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
+			                          reasoning_effort, input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
 			                          route_id, route_label,
 			                          api_key_id, api_key_name, error,
 			                          cache_creation, cache_hit,
 			                          chain_json, user_agent, client_ip, request_id, request_uri)
 			VALUES (?, ?, ?, ?, ?, ?,
-			        ?, ?, ?, ?, ?, ?,
+			        ?, ?, ?, ?, ?, ?, ?,
 			        ?, ?, ?,
 			        ?, ?,
 			        ?, ?,
@@ -226,7 +227,7 @@ func (s *Store) InsertRequestLogsBatch(logs []model.RequestLog) error {
 			chainJSON := chainJSONFor(l.Chain)
 			if _, err := stmt.Exec(
 				l.ID, l.Timestamp, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
-				l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
+				l.ReasoningEffort, l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 				l.RouteID, l.RouteLabel,
 				l.APIKeyID, l.APIKeyName, l.Error,
 				l.CacheCreation, l.CacheHit,
@@ -307,6 +308,7 @@ func (s *Store) UpdateRequestLog(l model.RequestLog) error {
 	return s.execTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
 			UPDATE request_logs SET
+				reasoning_effort = ?,
 				status_code = ?,
 				provider_id = ?,
 				provider_name = ?,
@@ -324,7 +326,7 @@ func (s *Store) UpdateRequestLog(l model.RequestLog) error {
 				cache_hit = ?,
 				chain_json = ?
 			WHERE id = ?`,
-			l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
+			l.ReasoningEffort, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
 			l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 			l.RouteID, l.RouteLabel,
 			l.Error,
@@ -341,6 +343,7 @@ func (s *Store) UpdateRequestLogsBatch(logs []model.RequestLog) error {
 	return s.execTx(func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			UPDATE request_logs SET
+				reasoning_effort = ?,
 				status_code = ?,
 				provider_id = ?,
 				provider_name = ?,
@@ -368,7 +371,7 @@ func (s *Store) UpdateRequestLogsBatch(logs []model.RequestLog) error {
 			}
 			chainJSON := chainJSONFor(l.Chain)
 			if _, err := stmt.Exec(
-				l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
+				l.ReasoningEffort, l.StatusCode, l.ProviderID, l.ProviderName, l.Model,
 				l.InputTokens, l.OutputTokens, l.Cost, l.LatencyMs, l.FirstTokenMs, boolInt(l.IsStream),
 				l.RouteID, l.RouteLabel,
 				l.Error,

@@ -53,6 +53,33 @@ func TestDashboard_ProviderCountIncludesAllProviders(t *testing.T) {
 	}
 }
 
+func TestRecentLogs_ReasoningEffort(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.InsertRequestLog(model.RequestLog{
+		ID:              "recent-reasoning",
+		Timestamp:       time.Now().UnixMilli(),
+		StatusCode:      200,
+		ProviderID:      "provider",
+		ProviderName:    "Provider",
+		Model:           "model",
+		ReasoningEffort: "high",
+	}); err != nil {
+		t.Fatalf("InsertRequestLog: %v", err)
+	}
+
+	logs, err := s.recentLogs(10)
+	if err != nil {
+		t.Fatalf("recentLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("recent logs = %d, want 1", len(logs))
+	}
+	if logs[0].ReasoningEffort != "high" {
+		t.Fatalf("ReasoningEffort = %q, want %q", logs[0].ReasoningEffort, "high")
+	}
+}
+
 func TestDashboard_ModelRuleSummaries(t *testing.T) {
 	s := newTestStore(t)
 

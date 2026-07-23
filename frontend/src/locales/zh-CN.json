@@ -703,6 +703,7 @@
       "requestUri": "请求路径",
       "userAgent": "User Agent",
       "clientIp": "客户端 IP",
+      "reasoningEffort": "推理强度",
       "token": "API 令牌",
       "unknownToken": "未知或已删除的令牌",
       "replay": "回放评分",

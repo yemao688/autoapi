@@ -116,6 +116,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = respReq.Model, respReq.Model, respReq.Stream
+	logEntry.ReasoningEffort = respReq.ReasoningEffort
 	inbound := &InboundRequest{Model: respReq.Model, Header: extractHeaders(r.Header), Task: "responses", TimeHour: time.Now().Hour(), Endpoint: "/v1/responses", Stream: respReq.Stream, Protocol: ProtocolOpenAIResponses, Requirements: reqs, AllowedRuleIDs: allowedRuleIDs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
@@ -416,6 +417,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	logEntry.Model = chatReq.Model
 	logEntry.RouteLabel = chatReq.Model
 	logEntry.IsStream = chatReq.Stream
+	logEntry.ReasoningEffort = chatReq.ReasoningEffort
 
 	inbound := &InboundRequest{
 		Model:           chatReq.Model,

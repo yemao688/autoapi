@@ -224,6 +224,7 @@ export namespace model {
 	    provider_id: string;
 	    provider_name: string;
 	    model: string;
+	    reasoning_effort: string;
 	    input_tokens: number;
 	    output_tokens: number;
 	    cache_creation: number;
@@ -256,6 +257,7 @@ export namespace model {
 	        this.provider_id = source["provider_id"];
 	        this.provider_name = source["provider_name"];
 	        this.model = source["model"];
+	        this.reasoning_effort = source["reasoning_effort"];
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
 	        this.cache_creation = source["cache_creation"];

@@ -584,10 +584,11 @@ func TestRequestLogChainRoundTrip(t *testing.T) {
 	}
 
 	in := model.RequestLog{
-		ID:         "log-chain",
-		Timestamp:  1700000000000,
-		StatusCode: 200,
-		ProviderID: "p-deepseek",
+		ID:              "log-chain",
+		Timestamp:       1700000000000,
+		StatusCode:      200,
+		ReasoningEffort: "high",
+		ProviderID:      "p-deepseek",
 		// The final provider/model/route fields should match the last chain
 		// entry. The proxy sets them from the successful candidate, so a
 		// test that stores them in line with the last chain entry models the
@@ -616,6 +617,9 @@ func TestRequestLogChainRoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 log, got total=%d len=%d", total, len(logs))
 	}
 	got := logs[0]
+	if got.ReasoningEffort != "high" {
+		t.Fatalf("ReasoningEffort: want %q, got %q", "high", got.ReasoningEffort)
+	}
 
 	if got.UserAgent != "curl/8.0" {
 		t.Fatalf("UserAgent: want %q, got %q", "curl/8.0", got.UserAgent)

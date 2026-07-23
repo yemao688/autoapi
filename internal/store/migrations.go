@@ -591,6 +591,11 @@ ALTER TABLE provider_capabilities_new RENAME TO provider_capabilities;`,
     PRIMARY KEY (api_key_id, model_rule_id)
 );`,
 	},
+	{
+		ID:              "036_request_logs_reasoning_effort",
+		SQL:             `ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';`,
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "request_logs", "reasoning_effort") },
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

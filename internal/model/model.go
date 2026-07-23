@@ -299,26 +299,27 @@ type ModelRuleTargetInput struct {
 
 // RequestLog is one proxied request through the gateway.
 type RequestLog struct {
-	ID            string  `json:"id"`
-	Timestamp     int64   `json:"timestamp"` // ms
-	StatusCode    int     `json:"status_code"`
-	ProviderID    string  `json:"provider_id"`
-	ProviderName  string  `json:"provider_name"`
-	Model         string  `json:"model"`
-	InputTokens   int     `json:"input_tokens"`
-	OutputTokens  int     `json:"output_tokens"`
-	CacheCreation int64   `json:"cache_creation"` // prompt-cache creation tokens; 0 until upstream support lands
-	CacheHit      int64   `json:"cache_hit"`      // prompt-cache hit tokens; 0 until upstream support lands
-	Cost          float64 `json:"cost"`           // estimated USD
-	CostAvailable bool    `json:"cost_available"` // true when every charged attempt has a price snapshot
-	LatencyMs     int     `json:"latency_ms"`
-	FirstTokenMs  int     `json:"first_token_ms"` // TTFT for streaming; 0 for non-streaming
-	IsStream      bool    `json:"is_stream"`      // true if the request was streaming
-	RouteID       string  `json:"route_id"`       // empty = default route
-	RouteLabel    string  `json:"route_label"`
-	APIKeyID      string  `json:"api_key_id"`
-	APIKeyName    string  `json:"api_key_name"`
-	Error         string  `json:"error,omitempty"`
+	ID              string  `json:"id"`
+	Timestamp       int64   `json:"timestamp"` // ms
+	StatusCode      int     `json:"status_code"`
+	ProviderID      string  `json:"provider_id"`
+	ProviderName    string  `json:"provider_name"`
+	Model           string  `json:"model"`
+	ReasoningEffort string  `json:"reasoning_effort"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	CacheCreation   int64   `json:"cache_creation"` // prompt-cache creation tokens; 0 until upstream support lands
+	CacheHit        int64   `json:"cache_hit"`      // prompt-cache hit tokens; 0 until upstream support lands
+	Cost            float64 `json:"cost"`           // estimated USD
+	CostAvailable   bool    `json:"cost_available"` // true when every charged attempt has a price snapshot
+	LatencyMs       int     `json:"latency_ms"`
+	FirstTokenMs    int     `json:"first_token_ms"` // TTFT for streaming; 0 for non-streaming
+	IsStream        bool    `json:"is_stream"`      // true if the request was streaming
+	RouteID         string  `json:"route_id"`       // empty = default route
+	RouteLabel      string  `json:"route_label"`
+	APIKeyID        string  `json:"api_key_id"`
+	APIKeyName      string  `json:"api_key_name"`
+	Error           string  `json:"error,omitempty"`
 
 	// Request context captured by the proxy for diagnostics and the
 	// expanded log row UI. UserAgent and ClientIP may be empty when the

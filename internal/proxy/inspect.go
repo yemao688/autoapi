@@ -10,19 +10,21 @@ import (
 // chatInspectResult carries the routing fields and requirements parsed from a
 // single chat completion body.
 type chatInspectResult struct {
-	Model        string
-	Task         string
-	Stream       bool
-	Messages     []json.RawMessage
-	Requirements model.RequestRequirements
+	Model           string
+	Task            string
+	Stream          bool
+	ReasoningEffort string
+	Messages        []json.RawMessage
+	Requirements    model.RequestRequirements
 }
 
 // responsesInspectResult carries the routing fields and requirements parsed
 // from a single Responses body.
 type responsesInspectResult struct {
-	Model        string
-	Stream       bool
-	Requirements model.RequestRequirements
+	Model           string
+	Stream          bool
+	ReasoningEffort string
+	Requirements    model.RequestRequirements
 }
 
 // messagesInspectResult carries the routing fields and requirements parsed
@@ -185,6 +187,7 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 		if s != "" {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
 		}
+		res.ReasoningEffort = s
 	}
 	if err := markChatNonConvertibleFields(fields, reqs); err != nil {
 		return chatInspectResult{}, err
@@ -589,7 +592,7 @@ var knownResponsesTopLevel = map[string]bool{
 	"model": true, "input": true, "instructions": true, "tools": true, "tool_choice": true,
 	"temperature": true, "top_p": true, "max_output_tokens": true, "stream": true,
 	"response_format": true, "text": true, "parallel_tool_calls": true, "truncation": true,
-	"user": true, "metadata": true, "reasoning_effort": true,
+	"user": true, "metadata": true, "reasoning": true, "reasoning_effort": true,
 }
 
 func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
@@ -668,6 +671,13 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 			return responsesInspectResult{}, &requestParseError{msg: "reasoning must be an object", cause: err}
 		}
 		reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+		if effort, ok := obj["effort"]; ok {
+			var s string
+			if err := json.Unmarshal(effort, &s); err != nil {
+				return responsesInspectResult{}, &requestParseError{msg: "reasoning.effort must be a string", cause: err}
+			}
+			res.ReasoningEffort = s
+		}
 	}
 	if raw, ok := fields["response_format"]; ok && raw != nil && string(raw) != "null" {
 		if err := validateResponsesResponseFormat(raw); err != nil {
@@ -698,6 +708,9 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 		}
 		if s != "" {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+		}
+		if res.ReasoningEffort == "" {
+			res.ReasoningEffort = s
 		}
 	}
 	if raw, ok := fields["input"]; ok {
