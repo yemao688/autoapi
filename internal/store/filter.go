@@ -28,6 +28,10 @@ func buildLogFilter(q model.LogQuery, includePending bool) (where string, args [
 		where += " AND timestamp_ms <= ?"
 		args = append(args, q.EndDate)
 	}
+	if q.APIKeyID != "" {
+		where += " AND api_key_id = ?"
+		args = append(args, q.APIKeyID)
+	}
 	if q.Provider != "" {
 		where += " AND provider_id = ?"
 		args = append(args, q.Provider)

@@ -30,6 +30,7 @@
     "noResult": "No result returned",
     "showDetails": "Show details",
     "hideDetails": "Hide details",
+    "retest": "Retest this row",
     "enable": "Include in monitoring",
     "disable": "Remove from monitoring",
     "status": {
@@ -52,6 +53,7 @@
       "firstToken": "First token",
       "totalTime": "Total time",
       "details": "Details",
+      "retest": "Retest",
       "enabled": "Check"
     }
   },
@@ -631,6 +633,7 @@
     "filters": {
       "presetAria": "Select time range",
       "providerAria": "Filter by upstream",
+      "apiKeyAria": "Filter by API token",
       "routeAria": "Filter by route",
       "modelAria": "Filter by model",
       "searchAria": "Search",
@@ -638,6 +641,8 @@
       "modelPlaceholder": "Model",
       "searchPlaceholder": "Search model / route / error",
       "providerOption": "Upstream · {name}",
+      "apiKeyOption": "API token · {name}",
+      "apiKeyAll": "All API tokens",
       "routeOption": "Route · {name}",
       "clear": "Clear filters"
     },

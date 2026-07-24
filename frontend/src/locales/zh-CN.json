@@ -30,6 +30,7 @@
     "noResult": "暂无返回结果",
     "showDetails": "显示详情",
     "hideDetails": "隐藏详情",
+    "retest": "重新测试此行",
     "enable": "加入监测",
     "disable": "移出监测",
     "status": {
@@ -52,6 +53,7 @@
       "firstToken": "首字时间",
       "totalTime": "总耗时",
       "details": "详情",
+      "retest": "重新测试",
       "enabled": "是否检测"
     }
   },
@@ -631,6 +633,7 @@
     "filters": {
       "presetAria": "选择时间范围",
       "providerAria": "按上游筛选",
+      "apiKeyAria": "按 API 令牌筛选",
       "routeAria": "按路由筛选",
       "modelAria": "按模型筛选",
       "searchAria": "搜索",
@@ -638,6 +641,8 @@
       "modelPlaceholder": "模型",
       "searchPlaceholder": "搜索 模型 / 路由 / 错误",
       "providerOption": "上游 · {name}",
+      "apiKeyOption": "API 令牌 · {name}",
+      "apiKeyAll": "全部 API 令牌",
       "routeOption": "路由 · {name}",
       "clear": "清除筛选"
     },

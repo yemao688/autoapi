@@ -52,6 +52,7 @@ func buildChartFilter(q model.UsageTrendsQuery) (where string, args []interface{
 	return buildLogFilter(model.LogQuery{
 		StartDate: q.StartDate,
 		EndDate:   q.EndDate,
+		APIKeyID:  q.APIKeyID,
 		Provider:  q.Provider,
 		RouteID:   q.RouteID,
 		Model:     q.Model,

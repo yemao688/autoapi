@@ -13,7 +13,9 @@ export type DateRangePreset = 'today' | 'day' | 'week' | 'month' | 'custom'
 
 interface Props {
   providerOptions: ProviderOption[]
+  apiKeyOptions: RouteOption[]
   provider: string
+  apiKey: string
   status: string
   route: string
   model: string
@@ -26,6 +28,7 @@ defineProps<Props>()
 
 const emit = defineEmits<{
   (e: 'update:provider', value: string): void
+  (e: 'update:apiKey', value: string): void
   (e: 'update:status', value: string): void
   (e: 'update:route', value: string): void
   (e: 'update:model', value: string): void
@@ -36,6 +39,10 @@ const emit = defineEmits<{
 
 function onProviderChange(e: Event) {
   emit('update:provider', (e.target as HTMLSelectElement).value)
+}
+
+function onApiKeyChange(e: Event) {
+  emit('update:apiKey', (e.target as HTMLSelectElement).value)
 }
 
 function onStatusChange(e: Event) {
@@ -88,6 +95,16 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
       <option v-for="opt in providerOptions" :key="opt.id" :value="opt.id">{{ t('usage.filters.providerOption', { name: opt.name }) }}</option>
     </select>
     <select
+      :value="apiKey"
+      class="select api-key-filter"
+      style="width: auto; max-width: 190px; padding: 5px 28px 5px 10px; font-size: 12.5px; flex: 0 1 190px;"
+      :aria-label="t('usage.filters.apiKeyAria')"
+      @change="onApiKeyChange"
+    >
+      <option value="">{{ t('usage.filters.apiKeyAll') }}</option>
+      <option v-for="opt in apiKeyOptions" :key="opt.id" :value="opt.id">{{ t('usage.filters.apiKeyOption', { name: opt.name }) }}</option>
+    </select>
+    <select
       :value="route"
       class="select"
       style="width: auto; padding: 5px 28px 5px 10px; font-size: 12.5px; flex: 0 0 auto;"
@@ -131,3 +148,11 @@ const presetOptions: { value: DateRangePreset; label: string }[] = [
     <button class="btn btn-ghost" style="font-size: 12.5px; padding: 5px 10px;" @click="emit('clear')">{{ t('usage.filters.clear') }}</button>
   </div>
 </template>
+
+<style scoped>
+.api-key-filter {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+</style>

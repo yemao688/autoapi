@@ -243,6 +243,38 @@ func TestQueryLogsByProvider(t *testing.T) {
 	}
 }
 
+func TestAPIKeyFilterAffectsLogsAndUsageStats(t *testing.T) {
+	s := newLogsTestStore(t)
+	seedLogs(t, s, []model.RequestLog{
+		{ID: "key-a-1", Timestamp: 1, StatusCode: 200, APIKeyID: "key-a", InputTokens: 10, OutputTokens: 5, Cost: 0.25},
+		{ID: "key-b-1", Timestamp: 2, StatusCode: 200, APIKeyID: "key-b", InputTokens: 20, OutputTokens: 10, Cost: 0.50},
+	})
+
+	logs, total, err := s.QueryLogs(model.LogQuery{APIKeyID: "key-a", Page: 1, PageSize: 50})
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	if total != 1 || !equalStringSlices(idsOf(logs), []string{"key-a-1"}) {
+		t.Fatalf("API key logs: want [key-a-1]/1, got %v/%d", idsOf(logs), total)
+	}
+
+	stats, err := s.UsageStats(model.LogQuery{APIKeyID: "key-a"})
+	if err != nil {
+		t.Fatalf("UsageStats: %v", err)
+	}
+	if stats.TokenStats[0].Value != "1" || stats.TokenStats[1].Value != "15" {
+		t.Fatalf("API key usage stats: want requests=1 tokens=15, got requests=%q tokens=%q", stats.TokenStats[0].Value, stats.TokenStats[1].Value)
+	}
+
+	allStats, err := s.UsageStats(model.LogQuery{})
+	if err != nil {
+		t.Fatalf("UsageStats without API key: %v", err)
+	}
+	if allStats.TokenStats[0].Value != "2" || allStats.TokenStats[1].Value != "45" {
+		t.Fatalf("empty API key usage stats: want requests=2 tokens=45, got requests=%q tokens=%q", allStats.TokenStats[0].Value, allStats.TokenStats[1].Value)
+	}
+}
+
 // ----- Route filter -----
 
 func TestQueryLogsByRoute(t *testing.T) {

@@ -514,6 +514,7 @@ export namespace model {
 	export class LogQuery {
 	    start_date: number;
 	    end_date: number;
+	    api_key_id: string;
 	    provider: string;
 	    route_id: string;
 	    model: string;
@@ -530,6 +531,7 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.start_date = source["start_date"];
 	        this.end_date = source["end_date"];
+	        this.api_key_id = source["api_key_id"];
 	        this.provider = source["provider"];
 	        this.route_id = source["route_id"];
 	        this.model = source["model"];
@@ -1590,6 +1592,7 @@ export namespace model {
 	export class UsageTrendsQuery {
 	    start_date: number;
 	    end_date: number;
+	    api_key_id: string;
 	    provider: string;
 	    route_id: string;
 	    model: string;
@@ -1603,6 +1606,7 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.start_date = source["start_date"];
 	        this.end_date = source["end_date"];
+	        this.api_key_id = source["api_key_id"];
 	        this.provider = source["provider"];
 	        this.route_id = source["route_id"];
 	        this.model = source["model"];

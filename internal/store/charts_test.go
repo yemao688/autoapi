@@ -103,8 +103,8 @@ func TestUsageTrends_Filters(t *testing.T) {
 	now := time.Now().Truncate(time.Hour).UnixMilli()
 
 	logs := []model.RequestLog{
-		{ID: "l1", Timestamp: now, StatusCode: 200, ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, RouteID: "r1", RouteLabel: "default"},
-		{ID: "l2", Timestamp: now, StatusCode: 200, ProviderID: "p2", ProviderName: "Anthropic", Model: "claude-3", InputTokens: 200, OutputTokens: 100, Cost: 0.01, LatencyMs: 800, RouteID: "r2", RouteLabel: "backup"},
+		{ID: "l1", Timestamp: now, StatusCode: 200, APIKeyID: "key-a", ProviderID: "p1", ProviderName: "OpenAI", Model: "gpt-4o", InputTokens: 100, OutputTokens: 50, Cost: 0.005, LatencyMs: 500, RouteID: "r1", RouteLabel: "default"},
+		{ID: "l2", Timestamp: now, StatusCode: 200, APIKeyID: "key-b", ProviderID: "p2", ProviderName: "Anthropic", Model: "claude-3", InputTokens: 200, OutputTokens: 100, Cost: 0.01, LatencyMs: 800, RouteID: "r2", RouteLabel: "backup"},
 	}
 	if err := st.InsertRequestLogsBatch(logs); err != nil {
 		t.Fatalf("seed logs failed: %v", err)
@@ -121,6 +121,7 @@ func TestUsageTrends_Filters(t *testing.T) {
 		{"provider", model.UsageTrendsQuery{StartDate: start, EndDate: end, Provider: "p1"}, 150},
 		{"route", model.UsageTrendsQuery{StartDate: start, EndDate: end, RouteID: "r2"}, 300},
 		{"model", model.UsageTrendsQuery{StartDate: start, EndDate: end, Model: "gpt-4o"}, 150},
+		{"api key", model.UsageTrendsQuery{StartDate: start, EndDate: end, APIKeyID: "key-a"}, 150},
 		{"search model", model.UsageTrendsQuery{StartDate: start, EndDate: end, Search: "claude"}, 300},
 		{"search route label", model.UsageTrendsQuery{StartDate: start, EndDate: end, Search: "backup"}, 300},
 	}

@@ -711,6 +711,7 @@ type ReorderModelRulesResult struct {
 type LogQuery struct {
 	StartDate int64  `json:"start_date"` // ms; 0 = no lower bound
 	EndDate   int64  `json:"end_date"`   // ms; 0 = no upper bound
+	APIKeyID  string `json:"api_key_id"` // exact match on API key ID; "" = all
 	Provider  string `json:"provider"`   // exact match on provider_id; "" = all
 	RouteID   string `json:"route_id"`   // exact match on route_id; "" = all
 	Model     string `json:"model"`      // exact match on model; "" = all
@@ -761,6 +762,7 @@ type UsageTrends struct {
 type UsageTrendsQuery struct {
 	StartDate int64  `json:"start_date"` // ms; 0 = no lower bound
 	EndDate   int64  `json:"end_date"`   // ms; 0 = no upper bound
+	APIKeyID  string `json:"api_key_id"` // exact match on API key ID; "" = all
 	Provider  string `json:"provider"`   // exact match on provider_id; "" = all
 	RouteID   string `json:"route_id"`   // exact match on route_id; "" = all
 	Model     string `json:"model"`      // exact match on model; "" = all

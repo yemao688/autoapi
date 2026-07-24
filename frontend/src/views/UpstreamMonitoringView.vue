@@ -29,6 +29,7 @@ const running = ref(false)
 const loadError = ref('')
 const runError = ref('')
 const expandedKey = ref('')
+const retestingKeys = ref<Set<string>>(new Set())
 const completedAtMs = ref(0)
 const completionMs = ref(0)
 const summary = ref({ total: 0, available: 0, empty: 0, errors: 0 })
@@ -41,6 +42,10 @@ function monitorKey(row: { provider_id: string; model_name: string; protocol: st
 const selectedCount = computed(() => selectedKeys.value.size)
 const abnormalCount = computed(() => summary.value.empty + summary.value.errors)
 const hasResults = computed(() => Object.keys(results.value).length > 0)
+const sortedTargets = computed(() => targets.value.reduce<model.UpstreamMonitorModel[][]>((groups, target) => {
+  groups[selectedKeys.value.has(monitorKey(target)) ? 0 : 1].push(target)
+  return groups
+}, [[], []]).flat())
 
 function statusFor(target: model.UpstreamMonitorModel): MonitorStatus | '' {
   return statuses.value[monitorKey(target)] || ''
@@ -63,8 +68,12 @@ function statusClass(status: MonitorStatus | ''): string {
   return ''
 }
 
-function formatMs(value: number | undefined): string {
-  return value && value > 0 ? `${value} ms` : '—'
+function formatLatency(value: number | undefined): string {
+  if (!value || !Number.isFinite(value) || value <= 0) return '—'
+  if (value < 1000) return `${Math.floor(value)} ms`
+  const seconds = value / 1000
+  const decimals = seconds < 10 ? 2 : seconds < 100 ? 1 : 0
+  return `${seconds.toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')} s`
 }
 
 function formatCompletedAt(value: number): string {
@@ -164,6 +173,12 @@ function toggleSelected(target: model.UpstreamMonitorModel) {
   persistState()
 }
 
+function setRowResult(target: model.UpstreamMonitorModel, result: model.UpstreamMonitorResult) {
+  const key = monitorKey(target)
+  results.value = { ...results.value, [key]: result }
+  statuses.value = { ...statuses.value, [key]: result.status as MonitorStatus }
+}
+
 function failureResult(target: model.UpstreamMonitorModel, error: unknown): model.UpstreamMonitorResult {
   const message = error instanceof Error ? error.message : String(error)
   return {
@@ -181,7 +196,7 @@ function failureResult(target: model.UpstreamMonitorModel, error: unknown): mode
 }
 
 async function runCheck() {
-  if (running.value || selectedKeys.value.size === 0) return
+  if (running.value || retestingKeys.value.size > 0 || selectedKeys.value.size === 0) return
   running.value = true
   runError.value = ''
   expandedKey.value = ''
@@ -208,12 +223,10 @@ async function runCheck() {
     }
     try {
       const result = await api.probeUpstreamMonitorModel(selection)
-      results.value = { ...results.value, [key]: result }
-      statuses.value = { ...statuses.value, [key]: result.status as MonitorStatus }
+      setRowResult(target, result)
     } catch (error) {
       const result = failureResult(target, error)
-      results.value = { ...results.value, [key]: result }
-      statuses.value = { ...statuses.value, [key]: 'error' }
+      setRowResult(target, result)
       runError.value = t('monitoring.runPartial')
     }
     persistState()
@@ -237,6 +250,34 @@ async function runCheck() {
   running.value = false
 }
 
+async function retest(target: model.UpstreamMonitorModel) {
+  const key = monitorKey(target)
+  if (running.value || retestingKeys.value.size > 0) return
+
+  retestingKeys.value = new Set(retestingKeys.value).add(key)
+  statuses.value = { ...statuses.value, [key]: 'checking' }
+  const nextResults = { ...results.value }
+  delete nextResults[key]
+  results.value = nextResults
+  persistState()
+
+  try {
+    const result = await api.probeUpstreamMonitorModel({
+      provider_id: target.provider_id,
+      model_name: target.model_name,
+      protocol: target.protocol,
+    })
+    setRowResult(target, result)
+  } catch (error) {
+    setRowResult(target, failureResult(target, error))
+  } finally {
+    const nextRetesting = new Set(retestingKeys.value)
+    nextRetesting.delete(key)
+    retestingKeys.value = nextRetesting
+    persistState()
+  }
+}
+
 function toggleDetails(target: model.UpstreamMonitorModel) {
   const key = monitorKey(target)
   expandedKey.value = expandedKey.value === key ? '' : key
@@ -258,8 +299,8 @@ onMounted(() => {
       <button
         class="btn btn-primary"
         type="button"
-        :disabled="running || selectedCount === 0 || loading"
-        :aria-busy="running"
+        :disabled="running || retestingKeys.size > 0 || selectedCount === 0 || loading"
+        :aria-busy="running || retestingKeys.size > 0"
         @click="runCheck"
       >
         <svg v-if="!running" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
@@ -282,7 +323,7 @@ onMounted(() => {
         </div>
         <div class="stat-card">
           <div class="stat-label">{{ t('monitoring.summary.duration') }}</div>
-          <div class="stat-value">{{ formatMs(completionMs) }}</div>
+          <div class="stat-value">{{ formatLatency(completionMs) }}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">{{ t('monitoring.summary.available') }}</div>
@@ -318,11 +359,12 @@ onMounted(() => {
                   <th class="num">{{ t('monitoring.columns.firstToken') }}</th>
                   <th class="num">{{ t('monitoring.columns.totalTime') }}</th>
                   <th class="right">{{ t('monitoring.columns.details') }}</th>
+                  <th class="right">{{ t('monitoring.columns.retest') }}</th>
                   <th class="right">{{ t('monitoring.columns.enabled') }}</th>
                 </tr>
               </thead>
               <tbody>
-                <template v-for="target in targets" :key="monitorKey(target)">
+                <template v-for="target in sortedTargets" :key="monitorKey(target)">
                   <tr :class="{ 'monitor-row-disabled': !selectedKeys.has(monitorKey(target)) }">
                     <td>
                       <div class="monitor-primary">{{ target.provider_name }}</div>
@@ -338,18 +380,33 @@ onMounted(() => {
                       </span>
                       <span v-else class="text-muted">—</span>
                     </td>
-                    <td class="num">{{ formatMs(resultFor(target)?.first_byte_latency_ms) }}</td>
-                    <td class="num">{{ formatMs(resultFor(target)?.total_latency_ms) }}</td>
+                    <td class="num">{{ formatLatency(resultFor(target)?.first_byte_latency_ms) }}</td>
+                    <td class="num">{{ formatLatency(resultFor(target)?.total_latency_ms) }}</td>
                     <td class="right">
                       <button
-                        class="btn btn-icon"
+                        class="btn btn-detail"
                         type="button"
                         :disabled="!resultFor(target)"
                         :aria-label="expandedKey === monitorKey(target) ? t('monitoring.hideDetails') : t('monitoring.showDetails')"
                         :title="expandedKey === monitorKey(target) ? t('monitoring.hideDetails') : t('monitoring.showDetails')"
                         @click="toggleDetails(target)"
                       >
+                        <span>{{ expandedKey === monitorKey(target) ? t('monitoring.hideDetails') : t('monitoring.showDetails') }}</span>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :class="{ 'is-expanded': expandedKey === monitorKey(target) }" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                      </button>
+                    </td>
+                    <td class="right">
+                      <button
+                        class="btn btn-icon monitor-retest"
+                        type="button"
+                        :disabled="running || retestingKeys.size > 0"
+                        :aria-busy="retestingKeys.has(monitorKey(target))"
+                        :aria-label="t('monitoring.retest')"
+                        :title="t('monitoring.retest')"
+                        @click="retest(target)"
+                      >
+                        <span v-if="retestingKeys.has(monitorKey(target))" class="monitor-spinner monitor-spinner-dark" aria-hidden="true"></span>
+                        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/></svg>
                       </button>
                     </td>
                     <td class="right">
@@ -360,7 +417,7 @@ onMounted(() => {
                     </td>
                   </tr>
                   <tr v-if="expandedKey === monitorKey(target)" class="monitor-detail-row">
-                    <td colspan="7">
+                    <td colspan="8">
                       <div class="monitor-detail">
                         <div class="row-between monitor-detail-heading">
                           <span class="field-label">{{ t('monitoring.returnedResult') }}</span>
@@ -421,14 +478,15 @@ onMounted(() => {
   border-radius: var(--radius-md);
   background: var(--surface);
 }
-.monitor-table { min-width: 920px; table-layout: fixed; }
-.monitor-table th:nth-child(1) { width: 17%; }
-.monitor-table th:nth-child(2) { width: 23%; }
+.monitor-table { min-width: 980px; table-layout: fixed; }
+.monitor-table th:nth-child(1) { width: 16%; }
+.monitor-table th:nth-child(2) { width: 22%; }
 .monitor-table th:nth-child(3) { width: 14%; }
 .monitor-table th:nth-child(4),
-.monitor-table th:nth-child(5) { width: 12%; }
-.monitor-table th:nth-child(6) { width: 10%; }
-.monitor-table th:nth-child(7) { width: 8%; }
+.monitor-table th:nth-child(5) { width: 11%; }
+.monitor-table th:nth-child(6) { width: 12%; }
+.monitor-table th:nth-child(7),
+.monitor-table th:nth-child(8) { width: 7%; }
 .monitor-primary { font-weight: 500; }
 .monitor-secondary { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .monitor-model { font-size: 12.5px; }
@@ -465,8 +523,10 @@ onMounted(() => {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-.monitor-table .btn-icon svg { transition: transform 0.15s ease; }
-.monitor-table .btn-icon svg.is-expanded { transform: rotate(180deg); }
+.monitor-table .btn-detail { gap: 5px; white-space: nowrap; }
+.monitor-table .btn-detail svg { width: 14px; height: 14px; transition: transform 0.15s ease; }
+.monitor-table .btn-detail svg.is-expanded { transform: rotate(180deg); }
+.monitor-table .monitor-retest svg { width: 15px; height: 15px; }
 .monitoring-table-hint {
   padding: 12px 14px;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
@@ -481,6 +541,7 @@ onMounted(() => {
   border-radius: 50%;
   animation: monitor-spin 0.7s linear infinite;
 }
+.monitor-spinner-dark { border-color: rgba(0, 0, 0, 0.16); border-top-color: currentColor; }
 .monitor-status-dot {
   width: 7px;
   height: 7px;
@@ -492,10 +553,11 @@ onMounted(() => {
 @keyframes monitor-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .monitor-spinner, .monitor-status-dot { animation: none; }
-  .monitor-table .btn-icon svg { transition: none; }
+  .monitor-table .btn-detail svg { transition: none; }
 }
 @media (max-width: 640px) {
   .monitoring-state.monitoring-error .btn { width: 100%; margin-left: 0; }
   .monitor-detail-error { max-width: 55%; }
+  .monitor-table .btn-detail span { display: none; }
 }
 </style>

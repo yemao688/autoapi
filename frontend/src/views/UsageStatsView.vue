@@ -118,6 +118,7 @@ function updateCountdownLabel() {
 }
 
 const selectedProviderId = ref("");
+const selectedApiKeyId = ref("");
 // Use stable internal keys for the v-model so changing the active locale does
 // not break the selected option (the dropdown text is translated, the value
 // stays the same).
@@ -162,6 +163,8 @@ const providerOptions = computed<ProviderOption[]>(() => {
     ...allProviders.value.map((p) => ({ name: p.name, id: p.id })),
   ];
 });
+
+const apiKeyOptions = ref<RouteOption[]>([]);
 
 const { data: modelRulesData, execute: fetchModelRules } = useApi(
   api.modelRules,
@@ -282,6 +285,7 @@ function buildLogQuery(): model.LogQuery {
     start_date,
     end_date,
     provider: selectedProviderId.value,
+    api_key_id: selectedApiKeyId.value,
     route_id: selectedRouteId.value,
     model: modelFilter.value.trim(),
     search: searchText.value.trim(),
@@ -309,6 +313,7 @@ async function loadCharts() {
       start_date: filter.start_date,
       end_date: filter.end_date,
       provider: filter.provider,
+      api_key_id: filter.api_key_id,
       route_id: filter.route_id,
       model: filter.model,
       search: filter.search,
@@ -369,6 +374,7 @@ async function refreshAll() {
             start_date: filter.start_date,
             end_date: filter.end_date,
             provider: filter.provider,
+            api_key_id: filter.api_key_id,
             route_id: filter.route_id,
             model: filter.model,
             search: filter.search,
@@ -542,6 +548,7 @@ async function applyFilters() {
 
 async function clearFilters() {
   selectedProviderId.value = "";
+  selectedApiKeyId.value = "";
   statusFilter.value = "all";
   selectedRouteId.value = "";
   modelFilter.value = "";
@@ -648,6 +655,9 @@ onMounted(() => {
   api.providers().then((list) => {
     allProviders.value = list || [];
   }).catch((e) => toast.push(e?.message || String(e), "error"));
+  api.apiKeys().then((list) => {
+    apiKeyOptions.value = (list || []).map((key) => ({ id: key.id, name: key.name || key.id }));
+  }).catch((e) => toast.push(e?.message || String(e), "error"));
 });
 
 onUnmounted(() => {
@@ -686,6 +696,7 @@ watch(isVisible, (visible) => {
 watch(
   [
     selectedProviderId,
+    selectedApiKeyId,
     selectedRouteId,
     statusFilter,
     dateRangePreset,
@@ -830,8 +841,10 @@ watch([modelFilter, searchText], () => {
 
   <LogFilters
     :providerOptions="providerOptions"
+    :apiKeyOptions="apiKeyOptions"
     :routeOptions="routeOptions"
     v-model:provider="selectedProviderId"
+    v-model:apiKey="selectedApiKeyId"
     v-model:status="statusFilter"
     v-model:route="selectedRouteId"
     v-model:model="modelFilter"
