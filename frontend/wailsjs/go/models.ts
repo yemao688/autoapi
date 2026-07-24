@@ -244,6 +244,10 @@ export namespace model {
 	    request_id: string;
 	    request_uri: string;
 	    chain: RequestLogChainEntry[];
+	    chain_count: number;
+	    final_chain_status: string;
+	    hit_provider_name: string;
+	    hit_model_name: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RequestLog(source);
@@ -277,6 +281,10 @@ export namespace model {
 	        this.request_id = source["request_id"];
 	        this.request_uri = source["request_uri"];
 	        this.chain = this.convertValues(source["chain"], RequestLogChainEntry);
+	        this.chain_count = source["chain_count"];
+	        this.final_chain_status = source["final_chain_status"];
+	        this.hit_provider_name = source["hit_provider_name"];
+	        this.hit_model_name = source["hit_model_name"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

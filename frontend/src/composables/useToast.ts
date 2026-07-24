@@ -10,6 +10,7 @@ export interface ToastItem {
 
 const toasts = ref<ToastItem[]>([])
 let nextId = 1
+const MAX_TOASTS = 10
 
 /**
  * Module-level singleton for app-wide transient toast notifications.
@@ -17,6 +18,9 @@ let nextId = 1
 export function useToast() {
   function push(message: string, type: ToastType = 'info', duration = 3000): number {
     const id = nextId++
+    if (toasts.value.length >= MAX_TOASTS) {
+      toasts.value.shift()
+    }
     toasts.value.push({ id, message, type })
     if (duration > 0) {
       setTimeout(() => remove(id), duration)

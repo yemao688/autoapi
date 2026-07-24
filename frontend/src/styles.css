@@ -445,8 +445,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.18); }
-  50% { box-shadow: 0 0 0 5px rgba(40, 167, 69, 0.05); }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(1.2); }
 }
 
 /* ============== MAIN ============== */
@@ -467,9 +467,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  /* Solid background instead of backdrop-filter: blur(20px) forced an
+     independent composited layer and a full readback+blur of everything
+     behind the bar on every frame — with polling charts underneath that
+     was the main driver of unbounded WebContent memory growth. */
+  background: rgba(255, 255, 255, 0.94);
   flex-shrink: 0;
   z-index: 1;
 }
@@ -511,6 +513,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .main-content-inner {
   max-width: 1180px;
   margin: 0 auto;
+  position: relative;
 }
 
 /* ============== BUTTONS ============== */
@@ -650,9 +653,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   gap: 28px;
   padding: 0 28px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  background: rgba(255, 255, 255, 0.94); /* see .main-header note */
   flex-shrink: 0;
   z-index: 1;
 }
@@ -743,7 +744,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 @media (prefers-reduced-motion: reduce) {
   .view-pane.is-entering { animation: none; }
-  .statusbar .status-dot { animation: none !important; box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.18); }
+  .statusbar .status-dot::after { animation: none !important; opacity: 1; transform: scale(1); }
   .btn { transition: none; }
   .tab::after { transition: none; }
   .nav-item { transition: none; }
@@ -1495,12 +1496,12 @@ html[data-theme="dark"] .main {
 }
 
 html[data-theme="dark"] .main-header {
-  background: rgba(44, 44, 46, 0.78);
+  background: rgba(44, 44, 46, 0.94);
   border-bottom-color: rgba(255, 255, 255, 0.06);
 }
 
 html[data-theme="dark"] .tabs-strip {
-  background: rgba(44, 44, 46, 0.78);
+  background: rgba(44, 44, 46, 0.94);
   border-bottom-color: rgba(255, 255, 255, 0.06);
 }
 
@@ -1874,10 +1875,18 @@ html[data-theme="dark"] .model-table tbody td {
 }
 
 .statusbar .status-dot {
+  position: relative;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--positive);
+}
+
+.statusbar .status-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
   box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.18);
   animation: pulse 2.4s ease-in-out infinite;
 }

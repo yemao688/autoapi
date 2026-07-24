@@ -102,6 +102,10 @@ export function GetProxyStatus() {
   return window['go']['api']['App']['GetProxyStatus']();
 }
 
+export function GetRequestLog(arg1) {
+  return window['go']['api']['App']['GetRequestLog'](arg1);
+}
+
 export function GetRuntimePaths() {
   return window['go']['api']['App']['GetRuntimePaths']();
 }
@@ -200,6 +204,10 @@ export function PurgeLogs(arg1) {
 
 export function QueryLogs(arg1) {
   return window['go']['api']['App']['QueryLogs'](arg1);
+}
+
+export function QueryLogsLite(arg1) {
+  return window['go']['api']['App']['QueryLogsLite'](arg1);
 }
 
 export function Quit() {

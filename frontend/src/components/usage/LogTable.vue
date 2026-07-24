@@ -5,8 +5,10 @@ import type { model } from '../../../wailsjs/go/models'
 import { api } from '@/api/bridge'
 
 import { useProviderStyle } from '@/composables/useProviderStyle'
+import { useToast } from '@/composables/useToast'
 
 const { t, locale } = useI18n()
+const toast = useToast()
 
 interface Props {
   logs: model.RequestLog[]
@@ -26,6 +28,8 @@ const expandedRows = ref<Set<string>>(new Set())
 const replayResults = ref<Map<string, model.ReplayResult>>(new Map())
 const replayErrors = ref<Set<string>>(new Set())
 const replayLoadingId = ref<string | null>(null)
+const chainCache = ref<Map<string, model.RequestLogChainEntry[]>>(new Map())
+const chainLoading = ref<Set<string>>(new Set())
 
 function replayFor(log: model.RequestLog): model.ReplayResult | undefined {
   return replayResults.value.get(log.id)
@@ -138,22 +142,43 @@ function isExpanded(log: model.RequestLog): boolean {
   return expandedRows.value.has(log.id)
 }
 
+function chainFor(log: model.RequestLog): model.RequestLogChainEntry[] {
+  return chainCache.value.get(log.id) || []
+}
+
+function isChainLoading(log: model.RequestLog): boolean {
+  return chainLoading.value.has(log.id)
+}
+
+async function loadChain(log: model.RequestLog) {
+  if (chainCache.value.has(log.id) || chainLoading.value.has(log.id)) return
+
+  const loading = new Set(chainLoading.value)
+  loading.add(log.id)
+  chainLoading.value = loading
+  try {
+    const fullLog = await api.getRequestLog(log.id)
+    const next = new Map(chainCache.value)
+    next.set(log.id, Array.isArray(fullLog.chain) ? fullLog.chain : [])
+    chainCache.value = next
+  } catch (e: any) {
+    toast.push(e?.message || String(e), 'error')
+  } finally {
+    const next = new Set(chainLoading.value)
+    next.delete(log.id)
+    chainLoading.value = next
+  }
+}
+
 function toggleRow(log: model.RequestLog) {
   const next = new Set(expandedRows.value)
   if (next.has(log.id)) {
     next.delete(log.id)
   } else {
     next.add(log.id)
+    void loadChain(log)
   }
   expandedRows.value = next
-}
-
-// hasChain reports whether the row's chain has more than one entry —
-// single-attempt requests (the common case) get a "1 attempt" label
-// only, so the retry indicator and "Tried N targets" summary are
-// reserved for rows that actually show failover.
-function chainLength(log: model.RequestLog): number {
-  return normalizedChainArray(log).length
 }
 
 // chainStatusLabel maps a ChainEntry.status string to the i18n key
@@ -216,7 +241,7 @@ const columns = 8
 // happened, which is the only case the user benefits from a "retried"
 // hint on the main row.
 function showRetryIndicator(log: model.RequestLog): boolean {
-  return chainLength(log) > 1
+  return log.chain_count > 1
 }
 
 function formatTime(ts: number): string {
@@ -278,8 +303,8 @@ function normalizeChainEntry(entry: model.RequestLogChainEntry): NormalizedChain
   return { ...entry, status, error: downstreamError || error }
 }
 
-function normalizedChainArray(log: model.RequestLog): NormalizedChainEntry[] {
-  return Array.isArray(log.chain) ? log.chain.map(normalizeChainEntry) : []
+function normalizedChainArray(chain: model.RequestLogChainEntry[]): NormalizedChainEntry[] {
+  return chain.map(normalizeChainEntry)
 }
 
 function replayAttemptEntry(attempt: model.ReplayAttemptScore): NormalizedChainEntry {
@@ -293,9 +318,7 @@ type OutcomePresentation = 'success' | 'truncated' | 'downstream_error' | 'clien
 
 function topLevel2xxOutcome(log: model.RequestLog): OutcomePresentation | null {
   if (log.status_code < 200 || log.status_code >= 300) return null
-  const chain = normalizedChainArray(log)
-  if (chain.length === 0) return null
-  const final = chain[chain.length - 1].status
+  const final = log.final_chain_status
   if (final === 'success') return 'success'
   if (final === 'truncated') return 'truncated'
   if (final === 'downstream_error') return 'downstream_error'
@@ -307,16 +330,8 @@ function topLevel2xxOutcome(log: model.RequestLog): OutcomePresentation | null {
 // provider/model that actually served the request. Returns null when
 // no attempt succeeded (e.g. all retries exhausted).
 function hitModel(log: model.RequestLog): { provider: string; model: string } | null {
-  const chain = normalizedChainArray(log)
-  for (let i = chain.length - 1; i >= 0; i--) {
-    if (chain[i].status === 'success') {
-      return {
-        provider: chain[i].provider_name || '',
-        model: chain[i].model_name || '',
-      }
-    }
-  }
-  return null
+  if (!log.hit_provider_name && !log.hit_model_name) return null
+  return { provider: log.hit_provider_name || '', model: log.hit_model_name || '' }
 }
 
 function apiKeyLabel(log: model.RequestLog): string {
@@ -382,7 +397,7 @@ function apiKeyLabel(log: model.RequestLog): string {
             <span
               v-if="showRetryIndicator(log)"
               class="retry-indicator"
-              :title="t('usage.logTable.triedTargets', { n: chainLength(log) })"
+              :title="t('usage.logTable.triedTargets', { n: log.chain_count })"
               aria-hidden="true"
             >↻</span>
           </td>
@@ -474,15 +489,16 @@ function apiKeyLabel(log: model.RequestLog): string {
                   <span class="log-detail-value text-mono">{{ log.reasoning_effort || '—' }}</span>
                 </div>
               </div>
-              <div v-if="normalizedChainArray(log).length > 0" class="log-detail-chain">
+              <div v-if="isChainLoading(log)" class="text-muted">{{ t('usage.loading') }}</div>
+              <div v-else-if="normalizedChainArray(chainFor(log)).length > 0" class="log-detail-chain">
                 <div class="log-detail-chain-header">
                   <span class="log-detail-label">{{ t('usage.logTable.chain') }}</span>
-                  <span v-if="normalizedChainArray(log).length > 1" class="text-muted log-detail-tried">
-                    {{ t('usage.logTable.triedTargets', { n: normalizedChainArray(log).length }) }}
+                  <span v-if="normalizedChainArray(chainFor(log)).length > 1" class="text-muted log-detail-tried">
+                    {{ t('usage.logTable.triedTargets', { n: normalizedChainArray(chainFor(log)).length }) }}
                   </span>
                 </div>
                 <ol class="log-detail-chain-list">
-                  <li v-for="entry in normalizedChainArray(log)" :key="entry.attempt_order" class="log-detail-chain-item">
+                  <li v-for="entry in normalizedChainArray(chainFor(log))" :key="entry.attempt_order" class="log-detail-chain-item">
                     <span class="log-detail-attempt">{{ t('usage.logTable.attempt', { n: entry.attempt_order }) }}</span>
                     <span class="log-detail-chain-provider">{{ entry.provider_name || '—' }}</span>
                     <span class="log-detail-chain-model text-mono">{{ entry.model_name || '—' }}</span>

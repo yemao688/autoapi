@@ -55,6 +55,8 @@ export function GetProviderKey(arg1:string):Promise<string>;
 
 export function GetProxyStatus():Promise<api.ProxyStatus>;
 
+export function GetRequestLog(arg1:string):Promise<model.RequestLog>;
+
 export function GetRuntimePaths():Promise<api.RuntimePaths>;
 
 export function GetSettings():Promise<model.Settings>;
@@ -104,6 +106,8 @@ export function ProbeUpstreamMonitorModels(arg1:Array<model.UpstreamMonitorSelec
 export function PurgeLogs(arg1:number):Promise<number>;
 
 export function QueryLogs(arg1:model.LogQuery):Promise<model.LogQueryResult>;
+
+export function QueryLogsLite(arg1:model.LogQuery):Promise<model.LogQueryResult>;
 
 export function Quit():Promise<void>;
 

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { model } from '../../../wailsjs/go/models'
 import LogTable from './LogTable.vue'
@@ -15,10 +14,9 @@ interface Props {
   logPage: number
   logPageSize: number
   chartData: model.UsageTrends
-  isVisible: boolean
-  activePane: 'logs' | 'tokens'
+  active?: boolean
 }
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { active: true })
 
 const emit = defineEmits<{
   (e: 'first'): void
@@ -29,9 +27,6 @@ const emit = defineEmits<{
   (e: 'clearFilters'): void
 }>()
 
-// Mount the chart only when the app is visible and this pane is active.
-// Unmounting releases the Chart.js canvas/context via vue-chartjs' destroy.
-const shouldMountChart = computed(() => props.isVisible && props.activePane === 'logs')
 </script>
 
 <template>
@@ -55,7 +50,7 @@ const shouldMountChart = computed(() => props.isVisible && props.activePane === 
           <div class="text-muted" style="font-size: 12px; margin-top: 4px;">{{ t('usage.chart.subtitle') }}</div>
         </div>
       </div>
-      <UsageTrendChart v-if="shouldMountChart" :data="chartData" />
+      <UsageTrendChart v-if="active" :data="chartData" />
     </section>
 
     <section class="card" style="padding: 0; overflow: hidden;">

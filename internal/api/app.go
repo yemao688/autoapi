@@ -122,6 +122,7 @@ type StoreService interface {
 
 	// Logs & stats
 	QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error)
+	QueryLogsLite(q model.LogQuery) ([]model.RequestLog, int64, error)
 	GetRequestLog(id string) (*model.RequestLog, error)
 	Dashboard() (*model.DashboardData, error)
 	UsageStats(q model.LogQuery) (*model.UsageStats, error)
@@ -1110,6 +1111,24 @@ func (a *App) QueryLogs(q model.LogQuery) (*model.LogQueryResult, error) {
 		return nil, err
 	}
 	return &model.LogQueryResult{Logs: logs, Total: total}, nil
+}
+
+func (a *App) QueryLogsLite(q model.LogQuery) (*model.LogQueryResult, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	logs, total, err := a.deps.Store.QueryLogsLite(q)
+	if err != nil {
+		return nil, err
+	}
+	return &model.LogQueryResult{Logs: logs, Total: total}, nil
+}
+
+func (a *App) GetRequestLog(id string) (*model.RequestLog, error) {
+	if a.deps.Store == nil {
+		return nil, errNotImpl
+	}
+	return a.deps.Store.GetRequestLog(id)
 }
 
 // ReplayLog reconstructs a historical request using detached runtime metrics.

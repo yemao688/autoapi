@@ -127,6 +127,88 @@ func TestQueryLogsEmpty(t *testing.T) {
 	}
 }
 
+func TestQueryLogsLiteSummaryAndPagination(t *testing.T) {
+	s := newLogsTestStore(t)
+	seedLogs(t, s, []model.RequestLog{
+		{ID: "lite-no-chain", Timestamp: 1, StatusCode: 200},
+		{
+			ID: "lite-single-success", Timestamp: 2, StatusCode: 200,
+			Chain: []model.RequestLogChainEntry{{
+				AttemptOrder: 1, Status: "success", ProviderName: "OpenAI", ModelName: "gpt-4o",
+				UpstreamStarted: true, RequestCost: 0.25, RequestCostAvailable: true,
+			}},
+		},
+		{
+			ID: "lite-failover-success", Timestamp: 3, StatusCode: 200,
+			Chain: []model.RequestLogChainEntry{
+				{AttemptOrder: 1, Status: "retryable", ProviderName: "First", ModelName: "first-model", UpstreamStarted: true, RequestCost: 0.10, RequestCostAvailable: false},
+				{AttemptOrder: 2, Status: "success", ProviderName: "Second", ModelName: "second-model", UpstreamStarted: true, RequestCost: 0.20, RequestCostAvailable: true},
+			},
+		},
+		{
+			ID: "lite-all-failed", Timestamp: 4, StatusCode: 500,
+			Chain: []model.RequestLogChainEntry{
+				{AttemptOrder: 1, Status: "retryable", ProviderName: "First", ModelName: "first-model", UpstreamStarted: true, RequestCost: 0.10, RequestCostAvailable: true},
+				{AttemptOrder: 2, Status: "non_retryable", ProviderName: "Second", ModelName: "second-model", UpstreamStarted: true, RequestCost: 0.20, RequestCostAvailable: true},
+			},
+		},
+	})
+
+	q := model.LogQuery{Page: 1, PageSize: 50}
+	full, fullTotal, err := s.QueryLogs(q)
+	if err != nil {
+		t.Fatalf("QueryLogs: %v", err)
+	}
+	lite, liteTotal, err := s.QueryLogsLite(q)
+	if err != nil {
+		t.Fatalf("QueryLogsLite: %v", err)
+	}
+	if liteTotal != fullTotal || !equalStringSlices(idsOf(lite), idsOf(full)) {
+		t.Fatalf("lite results differ from QueryLogs: lite=%v/%d full=%v/%d", idsOf(lite), liteTotal, idsOf(full), fullTotal)
+	}
+
+	byID := make(map[string]model.RequestLog, len(lite))
+	for _, log := range lite {
+		if log.Chain != nil {
+			t.Errorf("%s returned Chain = %#v, want nil", log.ID, log.Chain)
+		}
+		byID[log.ID] = log
+	}
+	cases := []struct {
+		id, final, provider, model string
+		count                      int
+		costAvailable              bool
+	}{
+		{"lite-no-chain", "", "", "", 0, false},
+		{"lite-single-success", "success", "OpenAI", "gpt-4o", 1, true},
+		{"lite-failover-success", "success", "Second", "second-model", 2, false},
+		{"lite-all-failed", "non_retryable", "", "", 2, true},
+	}
+	for _, tc := range cases {
+		got, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("missing %s", tc.id)
+			continue
+		}
+		if got.ChainCount != tc.count || got.FinalChainStatus != tc.final || got.HitProviderName != tc.provider || got.HitModelName != tc.model || got.CostAvailable != tc.costAvailable {
+			t.Errorf("%s summary = %+v, want count=%d final=%q provider=%q model=%q costAvailable=%t", tc.id, got, tc.count, tc.final, tc.provider, tc.model, tc.costAvailable)
+		}
+	}
+
+	pageQuery := model.LogQuery{Page: 2, PageSize: 2}
+	fullPage, fullPageTotal, err := s.QueryLogs(pageQuery)
+	if err != nil {
+		t.Fatalf("QueryLogs page: %v", err)
+	}
+	litePage, litePageTotal, err := s.QueryLogsLite(pageQuery)
+	if err != nil {
+		t.Fatalf("QueryLogsLite page: %v", err)
+	}
+	if litePageTotal != fullPageTotal || !equalStringSlices(idsOf(litePage), idsOf(fullPage)) {
+		t.Fatalf("lite page differs from QueryLogs: lite=%v/%d full=%v/%d", idsOf(litePage), litePageTotal, idsOf(fullPage), fullPageTotal)
+	}
+}
+
 // ----- Provider filter (ORDER BY timestamp_ms DESC: log-5, log-4, log-3, log-2, log-1) -----
 
 func TestQueryLogsByProvider(t *testing.T) {

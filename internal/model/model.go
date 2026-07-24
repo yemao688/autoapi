@@ -346,6 +346,13 @@ type RequestLog struct {
 	// JSON in SQLite (see migration 012_request_log_details) and
 	// marshalled by the store on insert / scan.
 	Chain []RequestLogChainEntry `json:"chain"`
+
+	// Chain summary fields are populated by lightweight log queries so list
+	// views can render attempt outcomes without receiving every chain entry.
+	ChainCount       int    `json:"chain_count"`
+	FinalChainStatus string `json:"final_chain_status"`
+	HitProviderName  string `json:"hit_provider_name"`
+	HitModelName     string `json:"hit_model_name"`
 }
 
 // RequestLogChainEntry is one attempt recorded in a RequestLog.Chain slice.

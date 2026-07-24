@@ -54,6 +54,10 @@ let eventsOff: (() => void) | null = null;
 // to be throttled/suspended.
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let lastRefreshStartedAt = 0;
+let pendingRefresh = false;
+const REALTIME_MIN_REFRESH_MS = 2000;
 
 // Generation token for polling. stopPolling increments this; any in-flight
 // poll tick whose captured token no longer matches is abandoned instead of
@@ -290,7 +294,7 @@ function buildLogQuery(): model.LogQuery {
 async function queryLogs() {
   const filter = buildLogQuery();
   try {
-    const result = await api.queryLogs(filter);
+    const result = await api.queryLogsLite(filter);
     logs.value = result?.logs || [];
     logTotal.value = result?.total || 0;
   } catch (e: any) {
@@ -332,11 +336,13 @@ async function refreshAll() {
     return;
   }
   isRefreshing.value = true;
+  lastRefreshStartedAt = Date.now();
   if (refreshTimeout) clearTimeout(refreshTimeout);
   refreshTimeout = setTimeout(() => {
     if (isRefreshing.value) {
       console.error("[sync] refreshAll timed out after 15s, resetting guard");
       isRefreshing.value = false;
+      pendingRefresh = false;
     }
   }, 15000);
   try {
@@ -350,7 +356,7 @@ async function refreshAll() {
       ),
       (async () => {
         try {
-          const result = await api.queryLogs(filter);
+          const result = await api.queryLogsLite(filter);
           logs.value = result?.logs || [];
           logTotal.value = result?.total || 0;
         } catch (e: any) {
@@ -385,7 +391,21 @@ async function refreshAll() {
       refreshTimeout = null;
     }
     isRefreshing.value = false;
+    if (pendingRefresh && liveSync.value === "realtime" && isVisible.value) {
+      pendingRefresh = false;
+      scheduleRealtimeRefresh();
+    }
   }
+}
+
+function scheduleRealtimeRefresh() {
+  if (realtimeRefreshTimer) return;
+  const remaining = Math.max(0, REALTIME_MIN_REFRESH_MS - (Date.now() - lastRefreshStartedAt));
+  realtimeRefreshTimer = setTimeout(() => {
+    realtimeRefreshTimer = null;
+    if (liveSync.value !== "realtime" || !isVisible.value) return;
+    void refreshAll();
+  }, remaining);
 }
 
 function stopPolling() {
@@ -405,6 +425,11 @@ function stopRealtime() {
     eventsOff();
     eventsOff = null;
   }
+  if (realtimeRefreshTimer) {
+    clearTimeout(realtimeRefreshTimer);
+    realtimeRefreshTimer = null;
+  }
+  pendingRefresh = false;
   sseState.value = "connected";
 }
 
@@ -456,6 +481,17 @@ function startRealtime() {
       if (liveSync.value !== "realtime" || !isVisible.value) {
         return;
       }
+      if (
+        isRefreshing.value ||
+        Date.now() - lastRefreshStartedAt < REALTIME_MIN_REFRESH_MS
+      ) {
+        pendingRefresh = true;
+        if (!isRefreshing.value) {
+          pendingRefresh = false;
+          scheduleRealtimeRefresh();
+        }
+        return;
+      }
       void refreshAll();
     } catch (e: any) {
       console.warn("[sync] log:new handler error", e);
@@ -494,14 +530,9 @@ function applyMode(mode: SyncMode) {
 }
 
 function switchPane(paneId: "logs" | "tokens") {
-  // Tab switches only refresh the data the new pane needs. The separate
-  // sync-mode dropdown controls auto-refresh independently.
+  // Initial and scheduled refreshAll calls load both datasets; avoid a
+  // tab-triggered refresh to prevent redundant DOM/layer churn.
   activePane.value = paneId;
-  if (paneId === "logs") {
-    void queryLogs();
-  } else if (paneId === "tokens") {
-    void loadCharts();
-  }
 }
 
 async function applyFilters() {
@@ -844,26 +875,26 @@ watch([modelFilter, searchText], () => {
     <div class="main-content-inner stack-loose">
       <!-- ================== TOKENS VIEW ================== -->
       <TokensPane
-        v-show="activePane === 'tokens'"
+        v-if="activePane === 'tokens'"
+        :aria-hidden="activePane !== 'tokens'"
+        :active="activePane === 'tokens'"
         :tokenStats="tokenStats"
         :modelRanking="modelRanking"
         :modelRankingFull="modelRankingFull"
         :providerShares="providerShares"
-        :is-visible="isVisible"
-        :active-pane="activePane"
       />
 
       <!-- ================== LOGS VIEW ================== -->
       <LogsPane
-        v-show="activePane === 'logs'"
+        v-if="activePane === 'logs'"
+        :aria-hidden="activePane !== 'logs'"
+        :active="activePane === 'logs'"
         :logs="logs"
         :logStats="logStats"
         :logTotal="logTotal"
         :logPage="logPage"
         :logPageSize="logPageSize"
         :chartData="chartData"
-        :is-visible="isVisible"
-        :active-pane="activePane"
         @first="goFirstPage"
         @prev="goPrevPage"
         @goto="(p: number) => goToPage(p)"
@@ -876,6 +907,10 @@ watch([modelFilter, searchText], () => {
 </template>
 
 <style scoped>
+.view-pane {
+  position: relative;
+}
+
 .loading-overlay {
   position: absolute;
   inset: 0;
@@ -925,7 +960,16 @@ watch([modelFilter, searchText], () => {
 }
 
 .sse-status.connected .sse-dot {
+  position: relative;
   background: var(--positive);
+}
+
+.sse-status.connected .sse-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.18);
   animation: pulse 2s ease-in-out infinite;
 }
 

@@ -60,3 +60,10 @@ export function useAppVisibility() {
 
   return { isVisible: readonly(isVisible) }
 }
+
+export function disposeAppVisibility() {
+  eventGen++
+  eventsOff?.()
+  eventsOff = null
+  initialized = false
+}

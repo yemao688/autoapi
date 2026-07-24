@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Line } from 'vue-chartjs'
-import type { Chart, ChartData, ChartOptions } from 'chart.js'
 import type { model } from '../../../wailsjs/go/models'
 import { chartColors, formatCost, formatTokens } from '@/composables/useChartFormat'
 
@@ -14,214 +12,130 @@ interface Props {
 }
 const props = withDefaults(defineProps<Props>(), { loading: false })
 
-// Build five series. Cost is plotted on a secondary Y axis (right), the
-// other four (input / output / cacheCreation / cacheHit) share the primary
-// left axis. Order in the dataset array matches the legend stack order.
-const chartData = computed<ChartData<'line'>>(() => {
-  const buckets = props.data?.buckets || []
-  const labels = buckets.map((b) => b.bucket)
-  return {
-    labels,
-    datasets: [
-      {
-        label: t('usage.chart.series.input'),
-        data: buckets.map((b) => b.input),
-        borderColor: chartColors.input,
-        backgroundColor: makeBackgroundColor(chartColors.input),
-        fill: true,
-        tension: 0.32,
-        yAxisID: 'yTokens',
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        borderWidth: 2,
-      },
-      {
-        label: t('usage.chart.series.output'),
-        data: buckets.map((b) => b.output),
-        borderColor: chartColors.output,
-        backgroundColor: makeBackgroundColor(chartColors.output),
-        fill: true,
-        tension: 0.32,
-        yAxisID: 'yTokens',
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        borderWidth: 2,
-      },
-      {
-        label: t('usage.chart.series.cacheCreation'),
-        data: buckets.map((b) => b.cache_creation),
-        borderColor: chartColors.cacheCreation,
-        backgroundColor: makeBackgroundColor(chartColors.cacheCreation),
-        fill: true,
-        tension: 0.32,
-        yAxisID: 'yTokens',
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        borderWidth: 2,
-      },
-      {
-        label: t('usage.chart.series.cacheHit'),
-        data: buckets.map((b) => b.cache_hit),
-        borderColor: chartColors.cacheHit,
-        backgroundColor: makeBackgroundColor(chartColors.cacheHit),
-        fill: true,
-        tension: 0.32,
-        yAxisID: 'yTokens',
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        borderWidth: 2,
-      },
-      {
-        label: t('usage.chart.series.cost'),
-        data: buckets.map((b) => b.cost),
-        borderColor: chartColors.cost,
-        backgroundColor: chartColors.cost,
-        fill: false,
-        tension: 0.32,
-        yAxisID: 'yCost',
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        borderWidth: 2,
-        borderDash: [4, 3],
-      },
-    ],
-  }
+const width = 720
+const height = 320
+const plot = { left: 54, right: 58, top: 22, bottom: 52 }
+const plotWidth = width - plot.left - plot.right
+const plotHeight = height - plot.top - plot.bottom
+
+interface Series {
+  key: string
+  label: string
+  color: string
+  values: number[]
+  fill: boolean
+  dashed?: boolean
+}
+
+const buckets = computed(() => props.data?.buckets || [])
+const hasData = computed(() => buckets.value.length > 0)
+
+const series = computed<Series[]>(() => [
+  { key: 'input', label: t('usage.chart.series.input'), color: chartColors.input, values: buckets.value.map((b) => b.input || 0), fill: true },
+  { key: 'output', label: t('usage.chart.series.output'), color: chartColors.output, values: buckets.value.map((b) => b.output || 0), fill: true },
+  { key: 'cacheCreation', label: t('usage.chart.series.cacheCreation'), color: chartColors.cacheCreation, values: buckets.value.map((b) => b.cache_creation || 0), fill: true },
+  { key: 'cacheHit', label: t('usage.chart.series.cacheHit'), color: chartColors.cacheHit, values: buckets.value.map((b) => b.cache_hit || 0), fill: true },
+  { key: 'cost', label: t('usage.chart.series.cost'), color: chartColors.cost, values: buckets.value.map((b) => b.cost || 0), fill: false, dashed: true },
+])
+
+const tokenMax = computed(() => niceMax(Math.max(...series.value.slice(0, 4).flatMap((s) => s.values), 0)))
+const costMax = computed(() => niceMax(Math.max(...(series.value[4]?.values || [0]), 0)))
+const tokenTicks = computed(() => makeTicks(tokenMax.value))
+const costTicks = computed(() => makeTicks(costMax.value))
+const labelIndexes = computed(() => {
+  const count = buckets.value.length
+  if (count <= 8) return buckets.value.map((_, index) => index)
+  return Array.from({ length: 8 }, (_, index) => Math.round(index * (count - 1) / 7))
 })
 
-const chartOptions = computed<ChartOptions<'line'>>(() => ({
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: { mode: 'index', intersect: false },
-  plugins: {
-    legend: { position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, font: { size: 11 } } },
-    tooltip: {
-      callbacks: {
-        label: (ctx) => {
-          const v = ctx.parsed.y ?? 0
-          if (ctx.dataset.yAxisID === 'yCost') return `${ctx.dataset.label}: ${formatCost(v)}`
-          return `${ctx.dataset.label}: ${formatTokens(v)}`
-        },
-      },
-    },
-  },
-  scales: {
-    x: {
-      grid: { display: false },
-      ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
-    },
-    yTokens: {
-      type: 'linear',
-      position: 'left',
-      beginAtZero: true,
-      title: { display: true, text: t('usage.chart.axis.tokens'), font: { size: 10 } },
-      grid: { color: 'rgba(0,0,0,0.05)' },
-      ticks: { font: { size: 10 }, callback: (v) => formatTokens(Number(v)) },
-    },
-    yCost: {
-      type: 'linear',
-      position: 'right',
-      beginAtZero: true,
-      title: { display: true, text: t('usage.chart.axis.cost'), font: { size: 10 } },
-      grid: { display: false },
-      ticks: { font: { size: 10 }, callback: (v) => formatCost(Number(v)) },
-    },
-  },
-}))
-
-// Per-color gradient cache. The outer key is the hex so each color has its
-// own bucket; the inner WeakMap keys the gradient by the Chart instance plus
-// the chartArea top/bottom so a resize rebuilds once, but a plain re-render
-// reuses the existing gradient instead of allocating a new canvas.
-interface CachedGradient {
-  top: number
-  bottom: number
-  gradient: CanvasGradient
-}
-const gradientCache = new Map<string, WeakMap<Chart, CachedGradient>>()
-
-// Scriptable backgroundColor that paints a vertical gradient using the chart's
-// own 2D context and current `chartArea` (so the fade ends at the bottom of
-// the plot area, not an arbitrary 220 px). Falls back to the flat hex if the
-// chart isn't mounted yet or the gradient cannot be created.
-function makeBackgroundColor(hex: string): (ctx: { chart: Chart }) => CanvasGradient | string {
-  return (ctx) => {
-    const chart = ctx.chart
-    if (!chart) return hex
-    const area = chart.chartArea
-    if (!area) return hex
-    const ctx2d = chart.ctx
-    if (!ctx2d) return hex
-
-    let bucket = gradientCache.get(hex)
-    const cached = bucket?.get(chart)
-    if (cached && cached.top === area.top && cached.bottom === area.bottom) {
-      return cached.gradient
-    }
-
-    const height = area.bottom - area.top
-    if (height <= 0) return hex
-    let gradient: CanvasGradient
-    try {
-      gradient = ctx2d.createLinearGradient(0, area.top, 0, area.bottom)
-      gradient.addColorStop(0, hexAlpha(hex, 0.32))
-      gradient.addColorStop(1, hexAlpha(hex, 0))
-    } catch {
-      return hex
-    }
-
-    if (!bucket) {
-      bucket = new WeakMap()
-      gradientCache.set(hex, bucket)
-    }
-    bucket.set(chart, { top: area.top, bottom: area.bottom, gradient })
-    return gradient
-  }
+function niceMax(value: number): number {
+  if (value <= 0) return 1
+  const magnitude = 10 ** Math.floor(Math.log10(value))
+  const normalized = value / magnitude
+  const step = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10
+  return step * magnitude
 }
 
-function hexAlpha(hex: string, alpha: number): string {
-  // Accept #RGB or #RRGGBB; default to grey on parse failure.
-  let r = 0, g = 0, b = 0
-  if (hex.length === 4) {
-    r = parseInt(hex[1] + hex[1], 16)
-    g = parseInt(hex[2] + hex[2], 16)
-    b = parseInt(hex[3] + hex[3], 16)
-  } else if (hex.length === 7) {
-    r = parseInt(hex.slice(1, 3), 16)
-    g = parseInt(hex.slice(3, 5), 16)
-    b = parseInt(hex.slice(5, 7), 16)
-  } else {
-    return hex
-  }
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+function makeTicks(max: number): number[] {
+  return Array.from({ length: 5 }, (_, index) => max * (4 - index) / 4)
+}
+
+function xFor(index: number): number {
+  return plot.left + (buckets.value.length <= 1 ? plotWidth / 2 : index * plotWidth / (buckets.value.length - 1))
+}
+
+function yFor(value: number, max: number): number {
+  return plot.top + plotHeight - Math.max(0, value) / max * plotHeight
+}
+
+function linePath(values: number[], max: number): string {
+  if (values.length === 0) return ''
+  return values.map((value, index) => `${index === 0 ? 'M' : 'L'} ${xFor(index).toFixed(2)} ${yFor(value, max).toFixed(2)}`).join(' ')
+}
+
+function areaPath(values: number[]): string {
+  if (values.length === 0) return ''
+  const line = linePath(values, tokenMax.value)
+  return `${line} L ${xFor(values.length - 1).toFixed(2)} ${(plot.top + plotHeight).toFixed(2)} L ${xFor(0).toFixed(2)} ${(plot.top + plotHeight).toFixed(2)} Z`
+}
+
+function tickLabel(value: number, isCost = false): string {
+  return isCost ? formatCost(value) : formatTokens(value)
 }
 </script>
 
 <template>
   <div class="trend-chart" :aria-busy="loading">
-    <Line
-      v-if="(data?.buckets?.length ?? 0) > 0"
-      :data="chartData"
-      :options="chartOptions"
-    />
-    <div v-else class="trend-chart__empty">
+    <svg
+      v-if="hasData"
+      class="trend-chart__svg"
+      viewBox="0 0 720 320"
+      role="img"
+      :aria-label="t('usage.chart.axis.tokens') + ' ' + t('usage.chart.title')"
+    >
+      <title>{{ t('usage.chart.title') }}</title>
+      <desc>{{ t('usage.chart.subtitle') }}</desc>
+      <g class="trend-chart__grid">
+        <line v-for="(tick, index) in tokenTicks" :key="`grid-${index}`" :x1="plot.left" :x2="width - plot.right" :y1="yFor(tick, tokenMax)" :y2="yFor(tick, tokenMax)" />
+      </g>
+      <g class="trend-chart__axis trend-chart__axis--left">
+        <text v-for="(tick, index) in tokenTicks" :key="`token-${index}`" :x="plot.left - 9" :y="yFor(tick, tokenMax) + 3" text-anchor="end">{{ tickLabel(tick) }}</text>
+        <text class="trend-chart__axis-title" :transform="`translate(13 ${plot.top + plotHeight / 2}) rotate(-90)`" text-anchor="middle">{{ t('usage.chart.axis.tokens') }}</text>
+      </g>
+      <g class="trend-chart__axis trend-chart__axis--right">
+        <text v-for="(tick, index) in costTicks" :key="`cost-${index}`" :x="width - plot.right + 9" :y="yFor(tick, costMax) + 3">{{ tickLabel(tick, true) }}</text>
+        <text class="trend-chart__axis-title" :transform="`translate(${width - 9} ${plot.top + plotHeight / 2}) rotate(90)`" text-anchor="middle">{{ t('usage.chart.axis.cost') }}</text>
+      </g>
+      <g class="trend-chart__series">
+        <template v-for="item in series" :key="item.key">
+          <path v-if="item.fill" class="trend-chart__area" :d="areaPath(item.values)" :fill="item.color" />
+          <path class="trend-chart__line" :d="linePath(item.values, item.key === 'cost' ? costMax : tokenMax)" :stroke="item.color" :stroke-dasharray="item.dashed ? '5 4' : undefined" />
+        </template>
+      </g>
+      <g class="trend-chart__x-labels">
+        <text v-for="index in labelIndexes" :key="`label-${index}`" :x="xFor(index)" :y="height - 27" text-anchor="middle">{{ buckets[index]?.bucket }}</text>
+      </g>
+      <g class="trend-chart__legend" :transform="`translate(${plot.left} ${height - 8})`">
+        <g v-for="(item, index) in series" :key="`legend-${item.key}`" :transform="`translate(${index * 130} 0)`">
+          <rect width="9" height="9" rx="2" :fill="item.color" />
+          <text x="14" y="8">{{ item.label }}</text>
+        </g>
+      </g>
+    </svg>
+    <div v-else class="trend-chart__empty" role="status">
       <span>{{ t('usage.chart.empty') }}</span>
     </div>
   </div>
 </template>
 
 <style scoped>
-.trend-chart {
-  position: relative;
-  width: 100%;
-  height: 320px;
-}
-.trend-chart__empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted, #6e6e73);
-  font-size: 13px;
-}
+.trend-chart { position: relative; width: 100%; height: 320px; }
+.trend-chart__svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.trend-chart__grid line { stroke: color-mix(in srgb, var(--text, #1d1d1f) 7%, transparent); stroke-width: 1; }
+.trend-chart__axis text, .trend-chart__x-labels text { fill: var(--muted, #6e6e73); font-size: 10px; font-family: inherit; }
+.trend-chart__axis-title { font-size: 9px !important; }
+.trend-chart__line { fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.trend-chart__area { opacity: .11; }
+.trend-chart__legend text { fill: var(--muted, #6e6e73); font-size: 10px; font-family: inherit; }
+.trend-chart__empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted, #6e6e73); font-size: 13px; }
 </style>

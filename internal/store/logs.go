@@ -145,6 +145,93 @@ func (s *Store) QueryLogs(q model.LogQuery) ([]model.RequestLog, int64, error) {
 	return logs, total, nil
 }
 
+// QueryLogsLite returns the same rows and total as QueryLogs, but omits full
+// chain histories after deriving the list-view fields from them.
+func (s *Store) QueryLogsLite(q model.LogQuery) ([]model.RequestLog, int64, error) {
+	where, args := buildLogFilter(q, true)
+
+	var total int64
+	countQuery := "SELECT COUNT(*) FROM request_logs " + where
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("store: query logs lite count: %w", err)
+	}
+
+	page := q.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := q.PageSize
+	if pageSize < 1 || pageSize > 1000 {
+		pageSize = 50
+	}
+	offset := (page - 1) * pageSize
+
+	dataQuery := fmt.Sprintf(`
+		SELECT id, timestamp_ms, status_code, provider_id, provider_name, model,
+		       reasoning_effort, input_tokens, output_tokens, cost, latency_ms, first_token_ms, is_stream,
+		       route_id, route_label,
+		       api_key_id, COALESCE(api_key_name, ''), COALESCE(error, ''),
+		       cache_creation, cache_hit,
+		       COALESCE(chain_json, ''), user_agent, client_ip, request_id, request_uri
+		FROM request_logs %s
+		ORDER BY timestamp_ms DESC
+		LIMIT ? OFFSET ?`, where)
+
+	dataArgs := append(args, pageSize, offset)
+	rows, err := s.db.Query(dataQuery, dataArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("store: query logs lite data: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []model.RequestLog
+	for rows.Next() {
+		var (
+			l       model.RequestLog
+			chainJS string
+		)
+		if err := rows.Scan(
+			&l.ID, &l.Timestamp, &l.StatusCode,
+			&l.ProviderID, &l.ProviderName, &l.Model,
+			&l.ReasoningEffort,
+			&l.InputTokens, &l.OutputTokens, &l.Cost, &l.LatencyMs, &l.FirstTokenMs, &l.IsStream,
+			&l.RouteID, &l.RouteLabel, &l.APIKeyID, &l.APIKeyName, &l.Error,
+			&l.CacheCreation, &l.CacheHit,
+			&chainJS, &l.UserAgent, &l.ClientIP, &l.RequestID, &l.RequestURI,
+		); err != nil {
+			return nil, 0, fmt.Errorf("store: scan lite log: %w", err)
+		}
+		l.Chain = chainFromJSON(chainJS)
+		applyChainCostAvailability(&l)
+		applyChainSummary(&l)
+		l.Chain = nil
+		logs = append(logs, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if logs == nil {
+		logs = []model.RequestLog{}
+	}
+
+	return logs, total, nil
+}
+
+func applyChainSummary(l *model.RequestLog) {
+	l.ChainCount = len(l.Chain)
+	if l.ChainCount == 0 {
+		return
+	}
+	l.FinalChainStatus = l.Chain[l.ChainCount-1].Status
+	for i := l.ChainCount - 1; i >= 0; i-- {
+		if l.Chain[i].Status == "success" {
+			l.HitProviderName = l.Chain[i].ProviderName
+			l.HitModelName = l.Chain[i].ModelName
+			return
+		}
+	}
+}
+
 // GetRequestLog fetches exactly one log by its persisted ID. Unlike QueryLogs,
 // this path is deliberately not paginated or text-filtered for replay.
 func (s *Store) GetRequestLog(id string) (*model.RequestLog, error) {

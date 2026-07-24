@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { model } from '../../../wailsjs/go/models'
 import { useCompactNumber } from '@/composables/useCompactNumber'
@@ -13,10 +12,9 @@ interface Props {
   modelRanking: model.ModelRanking[]
   modelRankingFull: model.ModelRanking[]
   providerShares: model.ProviderShare[]
-  isVisible: boolean
-  activePane: 'logs' | 'tokens'
+  active?: boolean
 }
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { active: true })
 
 const providerColors: Record<string, string> = {
   openai: '#10a37f',
@@ -39,9 +37,6 @@ function formatStatValue(stat: { label: string; value: string }): string {
   return stat.value
 }
 
-// Mount the chart only when the app is visible and this pane is active.
-// Unmounting releases the Chart.js canvas/context via vue-chartjs' destroy.
-const shouldMountChart = computed(() => props.isVisible && props.activePane === 'tokens')
 </script>
 
 <template>
@@ -62,7 +57,7 @@ const shouldMountChart = computed(() => props.isVisible && props.activePane === 
       <div class="card-title token-card-title">
         <span>{{ t('usage.modelRanking.chartTitle') }}</span>
       </div>
-      <ModelDonutChart v-if="shouldMountChart" :data="modelRankingFull" />
+      <ModelDonutChart v-if="active" :data="modelRankingFull" />
     </section>
 
     <section class="col-2 token-lists">

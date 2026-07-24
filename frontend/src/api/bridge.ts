@@ -225,6 +225,14 @@ export const api = {
     ensureWails()
     return wails.QueryLogs(query) as Promise<model.LogQueryResult>
   },
+  queryLogsLite: (query: model.LogQuery): Promise<model.LogQueryResult> => {
+    ensureWails()
+    return wails.QueryLogsLite(query) as Promise<model.LogQueryResult>
+  },
+  getRequestLog: (id: string): Promise<model.RequestLog> => {
+    ensureWails()
+    return wails.GetRequestLog(id) as Promise<model.RequestLog>
+  },
   usageTrends: (query: model.UsageTrendsQuery): Promise<model.UsageTrends> => {
     ensureWails()
     return wails.GetUsageTrends(query) as Promise<model.UsageTrends>

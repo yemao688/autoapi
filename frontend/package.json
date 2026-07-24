@@ -9,9 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "chart.js": "^4.4.7",
     "vue": "^3.5.39",
-    "vue-chartjs": "^5.3.2",
     "vue-draggable-plus": "^0.6.1",
     "vue-i18n": "^9.14.4"
   },

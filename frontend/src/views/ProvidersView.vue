@@ -25,6 +25,8 @@ const {
 } = useApi(() => api.providers())
 
 const modelsMap = ref<Record<string, model.Model[]>>({})
+const visibleModelProviders = ref<Set<string>>(new Set())
+const loadingModelProviders = ref<Set<string>>(new Set())
 
 const search = ref('')
 const sortBy = ref<'usage' | 'name' | 'last_tested'>('usage')
@@ -150,24 +152,37 @@ async function toggleProviderEnabled(provider: model.Provider) {
   }
 }
 
-async function loadModels() {
-  const list = providers.value || []
-  const entries: Record<string, model.Model[]> = {}
-  await Promise.all(
-    list.map(async (p) => {
-      try {
-        entries[p.id] = await api.listModels(p.id)
-      } catch {
-        entries[p.id] = []
-      }
-    })
-  )
-  modelsMap.value = entries
-}
-
 async function refresh() {
   await loadProviders()
-  await loadModels()
+  modelsMap.value = {}
+  visibleModelProviders.value = new Set()
+}
+
+async function toggleProviderModels(providerId: string) {
+  if (loadingModelProviders.value.has(providerId)) return
+
+  if (visibleModelProviders.value.has(providerId)) {
+    const next = new Set(visibleModelProviders.value)
+    next.delete(providerId)
+    visibleModelProviders.value = next
+    return
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(modelsMap.value, providerId)) {
+    loadingModelProviders.value = new Set(loadingModelProviders.value).add(providerId)
+    try {
+      modelsMap.value = { ...modelsMap.value, [providerId]: await api.listModels(providerId) }
+    } catch {
+      toast.push(t('providers.modelNamesLoadFailed'), 'error')
+      return
+    } finally {
+      const next = new Set(loadingModelProviders.value)
+      next.delete(providerId)
+      loadingModelProviders.value = next
+    }
+  }
+
+  visibleModelProviders.value = new Set(visibleModelProviders.value).add(providerId)
 }
 
 async function refreshModels() {
@@ -680,10 +695,8 @@ async function saveProvider() {
       modalMode.value = 'edit'
       originalKey.value = form.value.upstream_key
       keyDirty.value = false
-      // Sequential refresh: load providers first so the model map has
-      // the new provider, then load models for the new provider.
+      // Refresh the provider list without fetching every provider's models.
       await loadProviders()
-      await loadModels()
       // Load this provider's models for the modal section. Use a fresh
       // generation token so the result lands cleanly.
       const gen = modalGeneration.value
@@ -826,11 +839,23 @@ onMounted(() => {
               </span>
             </div>
             <div class="row-between" style="margin-bottom: 14px;"><span class="text-muted" style="font-size: 12px;">{{ t('providers.lastTested') }}</span><span class="text-mono" style="font-size: 12px;">{{ provider.last_tested_at ? new Date(provider.last_tested_at).toLocaleString() : '—' }}</span></div>
-            <div class="row" style="flex-wrap: wrap; gap: 4px; margin-bottom: 14px;">
-              <template v-if="modelsMap[provider.id]?.length">
-                <span v-for="m in modelsMap[provider.id]" :key="m.id" class="badge mono">{{ m.name }}</span>
-              </template>
-              <span v-else class="badge mono" style="color: var(--muted);">{{ t('providers.modelCount', { count: provider.models_count }) }}</span>
+            <div class="row-between" style="align-items: flex-start; gap: 8px; margin-bottom: 14px;">
+              <div class="row" style="flex-wrap: wrap; gap: 4px; min-width: 0;">
+                <template v-if="visibleModelProviders.has(provider.id) && modelsMap[provider.id]?.length">
+                  <span v-for="m in modelsMap[provider.id]" :key="m.id" class="badge mono">{{ m.name }}</span>
+                </template>
+                <span v-else class="badge mono" style="color: var(--muted);">{{ t('providers.modelCount', { count: provider.models_count }) }}</span>
+              </div>
+              <button
+                class="btn btn-secondary"
+                style="padding: 3px 8px; font-size: 11px; flex: 0 0 auto;"
+                :disabled="loadingModelProviders.has(provider.id)"
+                :aria-expanded="visibleModelProviders.has(provider.id)"
+                @click="toggleProviderModels(provider.id)"
+              >
+                {{ loadingModelProviders.has(provider.id) ? t('providers.loadingModels') : (visibleModelProviders.has(provider.id) ? t('providers.hideModels') : t('providers.showModels')) }}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;" :style="{ transform: visibleModelProviders.has(provider.id) ? 'rotate(180deg)' : 'none' }"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
             </div>
             <div class="row" style="justify-content: flex-end; gap: 4px;">
               <button
