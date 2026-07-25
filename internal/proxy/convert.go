@@ -11,6 +11,8 @@ import (
 type messagesRequestBody struct {
 	Model       string          `json:"model"`
 	MaxTokens   int             `json:"max_tokens"`
+	Metadata    json.RawMessage `json:"metadata"`
+	StopSeqs    json.RawMessage `json:"stop_sequences"`
 	System      json.RawMessage `json:"system"`
 	Messages    json.RawMessage `json:"messages"`
 	Tools       json.RawMessage `json:"tools"`
@@ -23,6 +25,7 @@ type responsesRequestBody struct {
 	Model           string          `json:"model"`
 	Instructions    string          `json:"instructions,omitempty"`
 	Input           json.RawMessage `json:"input"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
 	Tools           json.RawMessage `json:"tools,omitempty"`
 	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
 	Temperature     *float64        `json:"temperature,omitempty"`
@@ -70,6 +73,13 @@ func messagesToResponsesRequest(body []byte, upstreamModel string) ([]byte, erro
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, err
 	}
+	metadata, err := normalizeJSONObjectField(req.Metadata, "metadata")
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectUnsupportedStopSequences(req.StopSeqs); err != nil {
+		return nil, err
+	}
 	instructions, err := messagesSystemToInstructions(req.System)
 	if err != nil {
 		return nil, err
@@ -82,11 +92,10 @@ func messagesToResponsesRequest(body []byte, upstreamModel string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	out := responsesRequestBody{Model: upstreamModel, Instructions: instructions, Input: input, Tools: tools, Temperature: req.Temperature, TopP: req.TopP, Stream: req.Stream}
+	out := responsesRequestBody{Model: upstreamModel, Instructions: instructions, Input: input, Metadata: metadata, Tools: tools, Temperature: req.Temperature, TopP: req.TopP, Stream: req.Stream}
 	if req.MaxTokens > 0 {
 		out.MaxOutputTokens = &req.MaxTokens
 	}
-	logDroppedFields(body, "metadata", "stop_sequences")
 	return json.Marshal(out)
 }
 
@@ -191,9 +200,12 @@ func messagesSystemToInstructions(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s, nil
 	}
-	var blocks []json.RawMessage
-	if err := json.Unmarshal(raw, &blocks); err == nil {
-		return "", errors.New("messages system content blocks are not supported for Responses conversion")
+	text, ok, err := flattenTypedTextBlocks(raw)
+	if err != nil {
+		return "", fmt.Errorf("messages system: %w", err)
+	}
+	if ok {
+		return text, nil
 	}
 	return "", errors.New("messages system must be a string for Responses conversion")
 }
@@ -326,20 +338,116 @@ func responsesContentToMessagesBlocks(raw json.RawMessage) ([]contentBlock, erro
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return []contentBlock{{Type: "text", Text: s}}, nil
 	}
-	var blocks []responseContentBlock
+	var blocks []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return nil, err
 	}
 	out := make([]contentBlock, 0, len(blocks))
 	for _, b := range blocks {
-		switch b.Type {
+		var typ string
+		if err := json.Unmarshal(b["type"], &typ); err != nil || typ == "" {
+			return nil, errors.New("Responses content block type is required")
+		}
+		switch typ {
 		case "input_text", "output_text", "text":
-			out = append(out, contentBlock{Type: "text", Text: b.Text})
+			text, err := requiredStringField(b, "text", "Responses text content")
+			if err != nil {
+				return nil, err
+			}
+			if err := rejectNonEmptyBlockMetadata(b, "annotations", "logprobs", "refusal"); err != nil {
+				return nil, err
+			}
+			out = append(out, contentBlock{Type: "text", Text: text})
+		case "refusal":
+			if err := rejectNonEmptyBlockMetadata(b, "refusal"); err != nil {
+				return nil, err
+			}
 		default:
-			return nil, fmt.Errorf("unsupported Responses content block type: %s", b.Type)
+			return nil, fmt.Errorf("unsupported Responses content block type: %s", typ)
 		}
 	}
 	return out, nil
+}
+
+func normalizeJSONObjectField(raw json.RawMessage, field string) (json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return nil, fmt.Errorf("%s must be an object", field)
+	}
+	return raw, nil
+}
+
+func rejectUnsupportedStopSequences(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var seqs []string
+	if err := json.Unmarshal(raw, &seqs); err != nil {
+		return fmt.Errorf("stop_sequences must be an array of strings")
+	}
+	for _, seq := range seqs {
+		if seq != "" {
+			return errors.New("messages stop_sequences are not safely representable for Responses conversion")
+		}
+	}
+	return nil
+}
+
+func flattenTypedTextBlocks(raw json.RawMessage) (string, bool, error) {
+	var blocks []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", false, nil
+	}
+	text, err := joinTypedTextBlocks(blocks)
+	if err != nil {
+		return "", true, err
+	}
+	return text, true, nil
+}
+
+func joinTypedTextBlocks(blocks []map[string]json.RawMessage) (string, error) {
+	if len(blocks) == 0 {
+		return "", nil
+	}
+	var out string
+	for _, block := range blocks {
+		var typ string
+		if err := json.Unmarshal(block["type"], &typ); err != nil || typ == "" {
+			return "", errors.New("text content block type is required")
+		}
+		if typ != "text" && typ != "input_text" && typ != "output_text" {
+			return "", fmt.Errorf("unsupported text content block type: %s", typ)
+		}
+		text, err := requiredStringField(block, "text", "text content")
+		if err != nil {
+			return "", err
+		}
+		if err := rejectNonEmptyBlockMetadata(block, "annotations", "logprobs", "refusal"); err != nil {
+			return "", err
+		}
+		out += text
+	}
+	return out, nil
+}
+
+func requiredStringField(obj map[string]json.RawMessage, key, context string) (string, error) {
+	var value string
+	if err := json.Unmarshal(obj[key], &value); err != nil {
+		return "", fmt.Errorf("%s %s must be a string", context, key)
+	}
+	return value, nil
+}
+
+func rejectNonEmptyBlockMetadata(obj map[string]json.RawMessage, fields ...string) error {
+	for _, field := range fields {
+		if nonEmptyJSON(obj[field]) {
+			return fmt.Errorf("unsupported Responses content metadata %q", field)
+		}
+	}
+	return nil
 }
 
 func anthropicToolsToResponses(raw json.RawMessage) ([]byte, error) {

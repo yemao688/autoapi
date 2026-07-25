@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -12,6 +11,22 @@ func chatToResponsesRequest(body []byte, upstreamModel string) ([]byte, error) {
 		return nil, err
 	}
 	out := map[string]any{"model": upstreamModel}
+	for _, field := range []string{"metadata"} {
+		if raw, ok := req[field]; ok {
+			value, err := normalizeJSONObjectField(raw, field)
+			if err != nil {
+				return nil, err
+			}
+			if len(value) > 0 {
+				out[field] = value
+			}
+		}
+	}
+	for _, field := range []string{"user", "tool_choice", "parallel_tool_calls"} {
+		if raw, ok := req[field]; ok && string(raw) != "null" {
+			out[field] = json.RawMessage(raw)
+		}
+	}
 	copyNumber := func(from, to string) error {
 		if raw, ok := req[from]; ok {
 			if string(raw) == "null" {
@@ -68,11 +83,30 @@ func chatToResponsesRequest(body []byte, upstreamModel string) ([]byte, error) {
 }
 
 func responsesToChatRequest(body []byte, upstreamModel string) ([]byte, error) {
+	if err := rejectStatefulResponsesFields(body); err != nil {
+		return nil, err
+	}
 	var req map[string]json.RawMessage
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, err
 	}
 	out := map[string]any{"model": upstreamModel}
+	for _, field := range []string{"metadata"} {
+		if raw, ok := req[field]; ok {
+			value, err := normalizeJSONObjectField(raw, field)
+			if err != nil {
+				return nil, err
+			}
+			if len(value) > 0 {
+				out[field] = value
+			}
+		}
+	}
+	for _, field := range []string{"user", "tool_choice", "parallel_tool_calls"} {
+		if raw, ok := req[field]; ok && string(raw) != "null" {
+			out[field] = json.RawMessage(raw)
+		}
+	}
 	for _, field := range []string{"temperature", "top_p"} {
 		if raw, ok := req[field]; ok && string(raw) != "null" {
 			var value float64
@@ -262,9 +296,9 @@ func chatMessagesToResponses(raw json.RawMessage) ([]map[string]any, error) {
 			if !ok {
 				return nil, fmt.Errorf("tool result content is required")
 			}
-			var output string
-			if err := json.Unmarshal(content, &output); err != nil {
-				return nil, fmt.Errorf("tool result content must be a string")
+			output, err := chatTextContent(content)
+			if err != nil {
+				return nil, fmt.Errorf("tool result content: %w", err)
 			}
 			results[callID] = true
 			out = append(out, map[string]any{"type": "function_call_output", "call_id": callID, "output": output})
@@ -284,19 +318,11 @@ func chatTextContent(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return "", fmt.Errorf("only text Chat content is supported")
 	}
-	var out bytes.Buffer
-	for _, block := range blocks {
-		var typ string
-		if err := json.Unmarshal(block["type"], &typ); err != nil || (typ != "text" && typ != "input_text" && typ != "output_text") {
-			return "", fmt.Errorf("only text Chat content is supported")
-		}
-		var value string
-		if err := json.Unmarshal(block["text"], &value); err != nil {
-			return "", fmt.Errorf("text content must be a string")
-		}
-		out.WriteString(value)
+	text, err := joinTypedTextBlocks(blocks)
+	if err != nil {
+		return "", fmt.Errorf("only text Chat content is supported: %w", err)
 	}
-	return out.String(), nil
+	return text, nil
 }
 
 func chatFunctionCall(call map[string]json.RawMessage) (string, string, json.RawMessage, error) {
@@ -439,19 +465,11 @@ func responsesTextContent(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return "", fmt.Errorf("only text Responses content is supported")
 	}
-	var out bytes.Buffer
-	for _, block := range blocks {
-		var typ string
-		if json.Unmarshal(block["type"], &typ) != nil || (typ != "input_text" && typ != "output_text") {
-			return "", fmt.Errorf("only text Responses content is supported")
-		}
-		var value string
-		if json.Unmarshal(block["text"], &value) != nil {
-			return "", fmt.Errorf("Responses text content must be a string")
-		}
-		out.WriteString(value)
+	text, err := joinTypedTextBlocks(blocks)
+	if err != nil {
+		return "", fmt.Errorf("only text Responses content is supported: %w", err)
 	}
-	return out.String(), nil
+	return text, nil
 }
 
 func validateJSONObject(raw []byte) error {
@@ -519,7 +537,7 @@ func chatToResponsesResponse(body []byte, clientModel string) ([]byte, error) {
 		return nil, err
 	}
 	for _, forbidden := range []string{"refusal", "annotations"} {
-		if _, ok := messageFields[forbidden]; ok {
+		if nonEmptyJSON(messageFields[forbidden]) {
 			return nil, fmt.Errorf("unsupported Chat response field %q", forbidden)
 		}
 	}
@@ -529,9 +547,9 @@ func chatToResponsesResponse(body []byte, clientModel string) ([]byte, error) {
 		return nil, fmt.Errorf("Chat null content requires tool_calls")
 	}
 	if len(choice.Message.Content) > 0 && string(choice.Message.Content) != "null" {
-		var content string
-		if err := json.Unmarshal(choice.Message.Content, &content); err != nil {
-			return nil, fmt.Errorf("Chat response content must be a string or null")
+		content, err := chatTextContent(choice.Message.Content)
+		if err != nil {
+			return nil, fmt.Errorf("Chat response content: %w", err)
 		}
 		if content != "" {
 			output = append(output, map[string]any{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": content}}})
@@ -631,7 +649,7 @@ func responsesToChatResponse(body []byte, clientModel string) ([]byte, error) {
 				if nonEmptyJSON(block.Annotations) || nonEmptyJSON(block.Refusal) || nonEmptyJSON(block.Logprobs) {
 					return nil, fmt.Errorf("unsupported Responses output metadata")
 				}
-				if block.Type != "output_text" {
+				if block.Type != "output_text" && block.Type != "text" && block.Type != "input_text" {
 					return nil, fmt.Errorf("unsupported Responses output content type %q", block.Type)
 				}
 				text += block.Text
@@ -816,8 +834,13 @@ func validateChatResponseWire(raw []byte) error {
 		if json.Unmarshal(choice["message"], &message) != nil {
 			return fmt.Errorf("Chat message must be an object")
 		}
-		if err := rejectWireKeys(message, "role", "content", "tool_calls"); err != nil {
+		if err := rejectWireKeys(message, "role", "content", "tool_calls", "refusal", "annotations"); err != nil {
 			return err
+		}
+		for _, key := range []string{"refusal", "annotations"} {
+			if nonEmptyJSON(message[key]) {
+				return fmt.Errorf("unsupported Chat response field %q", key)
+			}
 		}
 		if calls, ok := message["tool_calls"]; ok {
 			var list []json.RawMessage

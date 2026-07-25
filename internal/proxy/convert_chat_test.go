@@ -210,7 +210,6 @@ func TestResponsesToChatResponseFailClosed(t *testing.T) {
 
 func TestChatResponseFailClosed(t *testing.T) {
 	for name, body := range map[string]string{
-		"array content":  `{"id":"r","choices":[{"index":0,"message":{"role":"assistant","content":[{"type":"text","text":"x"}]},"finish_reason":"stop"}]}`,
 		"refusal":        `{"id":"r","choices":[{"index":0,"message":{"role":"assistant","content":null,"refusal":"no"},"finish_reason":"stop"}]}`,
 		"wrong index":    `{"id":"r","choices":[{"index":1,"message":{"role":"assistant","content":"x"},"finish_reason":"stop"}]}`,
 		"missing finish": `{"id":"r","choices":[{"index":0,"message":{"role":"assistant","content":"x"}}]}`,
@@ -220,6 +219,16 @@ func TestChatResponseFailClosed(t *testing.T) {
 				t.Fatal("expected fail-closed response error")
 			}
 		})
+	}
+}
+
+func TestChatResponseAcceptsArrayTextContent(t *testing.T) {
+	out, err := chatToResponsesResponse([]byte(`{"id":"r","choices":[{"index":0,"message":{"role":"assistant","content":[{"type":"text","text":"x"},{"type":"text","text":"y"}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`), "m")
+	if err != nil {
+		t.Fatalf("chatToResponsesResponse: %v", err)
+	}
+	if !strings.Contains(string(out), `"text":"xy"`) {
+		t.Fatalf("output=%s", out)
 	}
 }
 

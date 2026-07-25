@@ -166,10 +166,10 @@ func TestProtocolConversionRejections(t *testing.T) {
 			_, err := messagesToResponsesRequest([]byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{}}]}]}`), "u")
 			return err
 		}, "image"},
-		{"system array", func() error {
-			_, err := messagesToResponsesRequest([]byte(`{"model":"m","system":[{"type":"text","text":"x"}],"messages":[]}`), "u")
+		{"stop_sequences", func() error {
+			_, err := messagesToResponsesRequest([]byte(`{"model":"m","stop_sequences":["x"],"messages":[]}`), "u")
 			return err
-		}, "system"},
+		}, "stop_sequences"},
 		{"previous_response_id", func() error {
 			_, err := responsesToMessagesRequest([]byte(`{"model":"m","previous_response_id":"r","input":[]}`), "u")
 			return err
