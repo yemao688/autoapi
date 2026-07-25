@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import ModelTestToastItem from '@/components/ModelTestToastItem.vue'
 
-const { toasts, remove } = useToast()
+const { toasts, remove, pauseAutoClose, resumeAutoClose } = useToast()
 const { t } = useI18n()
 
 const standardToasts = computed(() => toasts.value.filter((toast) => toast.kind !== 'model-test'))
@@ -20,6 +20,14 @@ function iconFor(type: string) {
 function toastClass(type: string) {
   return `toast toast-${type}`
 }
+
+function onToastMouseEnter(id: number) {
+  pauseAutoClose(id)
+}
+
+function onToastMouseLeave(id: number) {
+  resumeAutoClose(id)
+}
 </script>
 
 <template>
@@ -30,6 +38,8 @@ function toastClass(type: string) {
         :key="toast.id"
         :class="toastClass(toast.type)"
         role="status"
+        @mouseenter="onToastMouseEnter(toast.id)"
+        @mouseleave="onToastMouseLeave(toast.id)"
       >
         <span class="toast-icon">{{ iconFor(toast.type) }}</span>
         <span class="toast-message">{{ toast.message }}</span>
@@ -43,8 +53,10 @@ function toastClass(type: string) {
       <div
         v-for="toast in modelTestToasts"
         :key="toast.id"
-        :class="toastClass(toast.type)"
+        :class="`${toastClass(toast.type)} toast-model-test`"
         role="status"
+        @mouseenter="onToastMouseEnter(toast.id)"
+        @mouseleave="onToastMouseLeave(toast.id)"
       >
         <ModelTestToastItem :toast="toast" />
         <button class="toast-close" :aria-label="t('common.close')" @click="remove(toast.id)">×</button>
@@ -87,6 +99,11 @@ function toastClass(type: string) {
   font-size: 13px;
   font-weight: 500;
   animation: toast-in 0.22s ease;
+}
+
+.toast-model-test {
+  align-items: flex-start;
+  max-width: min(420px, calc(100vw - 32px));
 }
 
 .toast-icon {

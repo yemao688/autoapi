@@ -11,6 +11,14 @@ const { t } = useI18n()
 
 const modelTest = computed(() => props.toast.modelTest!)
 
+function formatElapsedSeconds(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 s'
+  if (value < 60) return `${Math.round(value)} s`
+  const minutes = Math.floor(value / 60)
+  const seconds = Math.round(value % 60)
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+}
+
 const icon = computed(() => {
   if (modelTest.value.status === 'success') return '✓'
   if (modelTest.value.status === 'error') return '✕'
@@ -31,10 +39,11 @@ const stateClass = computed(() => `model-test-toast model-test-${modelTest.value
       </div>
       <div class="model-test-detail">
         <template v-if="modelTest.status === 'running'">
-          {{ t('testModel.runningSeconds', { seconds: modelTest.elapsedSeconds }) }}
+          {{ t('testModel.runningSeconds', { elapsed: formatElapsedSeconds(modelTest.elapsedSeconds) }) }}
         </template>
         <template v-else>
-          {{ modelTest.detail }}
+          <div v-if="modelTest.summary" class="model-test-summary">{{ modelTest.summary }}</div>
+          <div class="model-test-body">{{ modelTest.detail }}</div>
         </template>
       </div>
     </div>
@@ -76,6 +85,22 @@ const stateClass = computed(() => `model-test-toast model-test-${modelTest.value
   line-height: 1.45;
   color: var(--muted);
   word-break: break-word;
+}
+
+.model-test-summary {
+  color: var(--muted);
+}
+
+.model-test-body {
+  margin-top: 5px;
+  max-height: 168px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding-right: 4px;
 }
 
 .model-test-icon,

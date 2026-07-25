@@ -770,7 +770,7 @@ func genericText(v interface{}) string {
 				}
 			}
 			for k, z := range q {
-				if k != "text" && k != "output_text" && k != "delta" {
+				if k != "text" && k != "output_text" {
 					walk(z)
 				}
 			}

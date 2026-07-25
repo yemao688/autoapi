@@ -56,6 +56,26 @@ func TestParseResponsesStreamDelta(t *testing.T) {
 	}
 }
 
+func TestParseMessagesStreamDelta(t *testing.T) {
+	s := &Service{}
+	stream := strings.NewReader(
+		"event: message_start\n" +
+			"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+			"event: content_block_start\n" +
+			"data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+			"event: content_block_delta\n" +
+			"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n" +
+			"event: content_block_delta\n" +
+			"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" world\"}}\n\n" +
+			"event: message_stop\n" +
+			"data: {\"type\":\"message_stop\"}\n\n",
+	)
+	result := s.parseGenericStream(stream, time.Now())
+	if !result.OK || result.Response != "hello world" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 type delayedChunks struct {
 	chunks [][]byte
 	delay  time.Duration
@@ -141,6 +161,46 @@ func TestMessagesModelTestRequestShapeAndHeaders(t *testing.T) {
 	rateResult, err := svc.TestModelChat(p.ID, "rate-limited", "messages", false, "")
 	if err != nil || rateResult.OK || rateResult.HTTPStatus != http.StatusTooManyRequests {
 		t.Fatalf("rate result=%+v err=%v", rateResult, err)
+	}
+}
+
+func TestMessagesModelTestStreamParsesAnthropicDeltaText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"event: message_start\n" +
+				"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+				"event: content_block_start\n" +
+				"data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+				"event: content_block_delta\n" +
+				"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n" +
+				"event: message_stop\n" +
+				"data: {\"type\":\"message_stop\"}\n\n",
+		))
+	}))
+	defer srv.Close()
+
+	st, err := store.New(t.Context(), store.StoreDeps{DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	svc := New(st, nil, t.TempDir())
+	p, err := st.CreateProvider(model.ProviderInput{Name: "Anthropic", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, nonce, err := svc.Encrypt([]byte("secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateProviderKeyCiphertext(p.ID, ct, nonce, "****"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.TestModelChat(p.ID, "claude", "messages", true, "")
+	if err != nil || !result.OK || result.Response != "hello" || result.HTTPStatus != http.StatusOK {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

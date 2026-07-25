@@ -8,6 +8,7 @@ export interface ModelTestToastPayload {
   title: string
   status: ModelTestStatus
   elapsedSeconds: number
+  summary?: string
   detail: string
   onRunningClose?: () => void
 }
@@ -24,6 +25,7 @@ const toasts = ref<ToastItem[]>([])
 let nextId = 1
 const MAX_TOASTS = 10
 const removeTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const removeDeadlines = new Map<number, { remainingMs: number; dueAt: number }>()
 const modelTestIntervals = new Map<number, ReturnType<typeof setInterval>>()
 
 function clearRemoveTimer(id: number) {
@@ -46,8 +48,39 @@ function clearModelTestInterval(id: number) {
 export function useToast() {
   function scheduleRemove(id: number, duration: number) {
     clearRemoveTimer(id)
+    removeDeadlines.delete(id)
     if (duration <= 0) return
+    removeDeadlines.set(id, {
+      remainingMs: duration,
+      dueAt: Date.now() + duration,
+    })
     removeTimers.set(id, setTimeout(() => remove(id), duration))
+  }
+
+  function pauseAutoClose(id: number) {
+    const deadline = removeDeadlines.get(id)
+    if (!deadline) return
+    const remainingMs = Math.max(deadline.dueAt - Date.now(), 0)
+    clearRemoveTimer(id)
+    removeDeadlines.set(id, {
+      remainingMs,
+      dueAt: Date.now() + remainingMs,
+    })
+  }
+
+  function resumeAutoClose(id: number) {
+    const deadline = removeDeadlines.get(id)
+    if (!deadline || removeTimers.has(id)) return
+    if (deadline.remainingMs <= 0) {
+      removeDeadlines.delete(id)
+      remove(id)
+      return
+    }
+    removeDeadlines.set(id, {
+      remainingMs: deadline.remainingMs,
+      dueAt: Date.now() + deadline.remainingMs,
+    })
+    removeTimers.set(id, setTimeout(() => remove(id), deadline.remainingMs))
   }
 
   function push(message: string, type: ToastType = 'info', duration = 3000): number {
@@ -64,12 +97,14 @@ export function useToast() {
   function startModelTest(options: {
     key: string
     title: string
+    summary?: string
     detail: string
     onRunningClose?: () => void
   }): number {
     const existing = toasts.value.find((toast) => toast.kind === 'model-test' && toast.modelTest?.key === options.key)
     const id = existing?.id ?? nextId++
     clearRemoveTimer(id)
+    removeDeadlines.delete(id)
     clearModelTestInterval(id)
 
     const item: ToastItem = {
@@ -82,6 +117,7 @@ export function useToast() {
         title: options.title,
         status: 'running',
         elapsedSeconds: 0,
+        summary: options.summary,
         detail: options.detail,
         onRunningClose: options.onRunningClose,
       },
@@ -112,6 +148,7 @@ export function useToast() {
 
   function finishModelTest(id: number, options: {
     status: Exclude<ModelTestStatus, 'running'>
+    summary?: string
     detail: string
     type?: ToastType
     duration?: number
@@ -123,6 +160,7 @@ export function useToast() {
     toast.modelTest = {
       ...toast.modelTest,
       status: options.status,
+      summary: options.summary,
       detail: options.detail,
       onRunningClose: undefined,
     }
@@ -153,6 +191,8 @@ export function useToast() {
     push,
     startModelTest,
     finishModelTest,
+    pauseAutoClose,
+    resumeAutoClose,
     remove,
     clear,
   }
