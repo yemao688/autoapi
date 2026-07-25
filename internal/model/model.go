@@ -669,9 +669,9 @@ type ProviderInput struct {
 	BaseURL          string `json:"base_url"`
 	UpstreamKey      string `json:"upstream_key"` // cleartext provider key; encrypted by App layer before storage
 	IsCustom         bool   `json:"is_custom"`
-	ResponsesEnabled bool   `json:"responses_enabled"`
-	MessagesEnabled  bool   `json:"messages_enabled"`
-	GeminiEnabled    bool   `json:"gemini_enabled"`
+	ResponsesEnabled bool   `json:"responses_enabled"` // legacy compatibility field; provider save ignores it
+	MessagesEnabled  bool   `json:"messages_enabled"`  // legacy compatibility field; provider save ignores it
+	GeminiEnabled    bool   `json:"gemini_enabled"`    // legacy compatibility field; provider save ignores it
 }
 
 type ModelRuleInput struct {

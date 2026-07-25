@@ -106,14 +106,8 @@ func TestProviderCRUD(t *testing.T) {
 	if p.Status != model.ProviderStatusUnknown {
 		t.Fatalf("expected status 'unknown', got %q", p.Status)
 	}
-	if !p.ResponsesEnabled {
-		t.Fatal("expected Responses capability enabled after create")
-	}
-	if !p.MessagesEnabled {
-		t.Fatal("expected Messages capability enabled after create")
-	}
-	if !p.GeminiEnabled {
-		t.Fatal("expected Gemini capability enabled after create")
+	if p.ResponsesEnabled || p.MessagesEnabled || p.GeminiEnabled {
+		t.Fatal("expected legacy provider protocol flags ignored on create")
 	}
 	// The store no longer stores the upstream key; key columns should be empty.
 	if len(p.KeyCiphertext) != 0 || p.KeyMasked != "" {
@@ -133,14 +127,8 @@ func TestProviderCRUD(t *testing.T) {
 	if got.ID != p.ID || got.Name != p.Name || got.BaseURL != p.BaseURL {
 		t.Fatalf("GetProvider mismatch: got %+v, want %+v", got, p)
 	}
-	if !got.ResponsesEnabled {
-		t.Fatal("expected Responses capability persisted by Get")
-	}
-	if !got.MessagesEnabled {
-		t.Fatal("expected Messages capability persisted by Get")
-	}
-	if !got.GeminiEnabled {
-		t.Fatal("expected Gemini capability persisted by Get")
+	if got.ResponsesEnabled || got.MessagesEnabled || got.GeminiEnabled {
+		t.Fatal("expected ignored provider protocol flags to remain disabled")
 	}
 	if string(got.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected ciphertext set by helper, got %q", got.KeyCiphertext)
@@ -164,14 +152,8 @@ func TestProviderCRUD(t *testing.T) {
 	if updated.Name != "Updated Provider" {
 		t.Fatalf("expected 'Updated Provider', got %q", updated.Name)
 	}
-	if updated.ResponsesEnabled {
-		t.Fatal("expected Responses capability persisted by Update")
-	}
-	if updated.MessagesEnabled {
-		t.Fatal("expected Messages capability persisted by Update")
-	}
-	if updated.GeminiEnabled {
-		t.Fatal("expected Gemini capability persisted by Update")
+	if updated.ResponsesEnabled || updated.MessagesEnabled || updated.GeminiEnabled {
+		t.Fatal("expected update to ignore legacy provider protocol flags")
 	}
 	if string(updated.KeyCiphertext) != "dummy-ciphertext" {
 		t.Fatalf("expected key columns preserved, got %q", updated.KeyCiphertext)

@@ -8,6 +8,15 @@ export type ExportFormat = Parameters<typeof wails.ExportData>[0]
 // 'background'; the frontend exposes it as a typed union for clarity.
 export type AppVisibilityState = 'foreground' | 'background'
 
+function normalizeProviderInput(input: model.ProviderInput): model.ProviderInput {
+  return {
+    ...input,
+    responses_enabled: false,
+    messages_enabled: false,
+    gemini_enabled: false,
+  }
+}
+
 function ensureWails(): void {
   if (typeof window === 'undefined' || !(window as any).go) {
     throw new Error(
@@ -57,11 +66,11 @@ export const api = {
   },
   createProvider: (input: model.ProviderInput): Promise<model.Provider> => {
     ensureWails()
-    return wails.CreateProvider(input) as Promise<model.Provider>
+    return wails.CreateProvider(normalizeProviderInput(input)) as Promise<model.Provider>
   },
   updateProvider: (id: string, input: model.ProviderInput): Promise<model.Provider> => {
     ensureWails()
-    return wails.UpdateProvider(id, input) as Promise<model.Provider>
+    return wails.UpdateProvider(id, normalizeProviderInput(input)) as Promise<model.Provider>
   },
   deleteProvider: (id: string): Promise<void> => {
     ensureWails()

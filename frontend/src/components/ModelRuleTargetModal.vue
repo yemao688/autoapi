@@ -4,11 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { model } from '../../wailsjs/go/models'
 import { api } from '@/api/bridge'
 import { useToast } from '@/composables/useToast'
+import { useModelTestToast, type ModelApiType } from '@/composables/useModelTestToast'
 import AutoComplete from '@/components/AutoComplete.vue'
-import TestModelChatModal from '@/components/TestModelChatModal.vue'
 
 const { t } = useI18n()
 const toast = useToast()
+const { runModelTest } = useModelTestToast()
 
 function getTargetTimeout(target: model.ModelRuleTarget): number {
   return target.first_token_timeout_seconds ?? 0
@@ -41,7 +42,13 @@ const form = ref<model.ModelRuleTarget>(new model.ModelRuleTarget({
 const availableModels = ref<string[]>([])
 const loadingModels = ref(false)
 const testing = ref(false)
-const chatModal = ref({ open: false })
+
+const capabilityProtocolPriority: ModelApiType[] = [
+  'openai_responses',
+  'anthropic_messages',
+  'gemini',
+  'openai_chat',
+]
 
 // Track the provider ID we're loading models for, to guard against stale responses
 let loadingForProvider = ''
@@ -164,16 +171,26 @@ function save() {
   emit('save', toSave)
 }
 
+function resolveModelApiType(capabilities: model.ModelCapability[]): ModelApiType {
+  for (const protocol of capabilityProtocolPriority) {
+    const match = capabilities.find((capability) => capability.feature === 'native' && capability.protocol === protocol && capability.enabled)
+    if (match) return protocol
+  }
+  return 'openai_chat'
+}
+
 async function testModel() {
   if (!form.value.provider_id || !trimmedModelName.value) return
   testing.value = true
   try {
-    const result = await api.testModelLatency(form.value.provider_id, trimmedModelName.value)
-    if (result.ok) {
-      toast.push(t('modelRules.targets.testSuccess', { ms: result.latency_ms }), 'success')
-    } else {
-      toast.push(result.error || t('modelRules.targets.testFailed'), 'error')
-    }
+    const capabilities = await api.listModelCapabilities(form.value.provider_id, trimmedModelName.value)
+    const apiType = resolveModelApiType(capabilities)
+    await runModelTest({
+      providerId: form.value.provider_id,
+      modelName: trimmedModelName.value,
+      apiType,
+      t,
+    })
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
   } finally {
@@ -226,26 +243,11 @@ async function testModel() {
             :title="!isValid ? t('modelRules.targets.validation') : ''"
             @click="testModel"
           >
-            {{ testing ? t('modelRules.targets.testing') : t('modelRules.targets.test') }}
-          </button>
-          <button
-            class="btn btn-secondary"
-            :disabled="saving || testing || !isValid"
-            @click="chatModal.open = true"
-          >
-            {{ t('testModel.title') }}
+            {{ testing ? t('modelRules.targets.testing') : t('testModel.title') }}
           </button>
           <button class="btn btn-primary" :disabled="saving || !isValid" @click="save">{{ saving ? t('modelRules.targets.saving') : t('modelRules.targets.save') }}</button>
         </div>
       </div>
     </div>
   </Teleport>
-
-  <TestModelChatModal
-    :open="chatModal.open"
-    :provider-id="form.provider_id"
-    :provider-name="providers.find(p => p.id === form.provider_id)?.name || ''"
-    :model-name="trimmedModelName"
-    @close="chatModal.open = false"
-  />
 </template>

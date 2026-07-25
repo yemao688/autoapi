@@ -126,9 +126,9 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 		BaseURL:          in.BaseURL,
 		Status:           model.ProviderStatusUnknown,
 		IsCustom:         in.IsCustom,
-		ResponsesEnabled: in.ResponsesEnabled,
-		MessagesEnabled:  in.MessagesEnabled,
-		GeminiEnabled:    in.GeminiEnabled,
+		ResponsesEnabled: false,
+		MessagesEnabled:  false,
+		GeminiEnabled:    false,
 		Enabled:          true,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -167,9 +167,9 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 
 	if err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
-			UPDATE providers SET name=?, base_url=?, is_custom=?, responses_enabled=?, messages_enabled=?, gemini_enabled=?, updated_at=?
+			UPDATE providers SET name=?, base_url=?, is_custom=?, updated_at=?
 			WHERE id=?`,
-			in.Name, in.BaseURL, boolInt(in.IsCustom), boolInt(in.ResponsesEnabled), boolInt(in.MessagesEnabled), boolInt(in.GeminiEnabled), now, id)
+			in.Name, in.BaseURL, boolInt(in.IsCustom), now, id)
 		if err != nil {
 			return err
 		}
@@ -177,27 +177,12 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 		if n == 0 {
 			return fmt.Errorf("store: update provider %q: %w", id, ErrNotFound)
 		}
-		return syncProviderCapabilities(tx, id, in.ResponsesEnabled, in.MessagesEnabled, in.GeminiEnabled, now)
+		return nil
 	}); err != nil {
 		return nil, err
 	}
 	slog.Info("store: provider updated", "id", id, "name", in.Name)
 	return s.GetProvider(id)
-}
-
-func syncProviderCapabilities(tx *sql.Tx, providerID string, responses, messages, gemini bool, now int64) error {
-	values := []struct {
-		protocol string
-		enabled  bool
-	}{
-		{"openai_responses", responses}, {"anthropic_messages", messages}, {"gemini", gemini},
-	}
-	for _, v := range values {
-		if _, err := tx.Exec(`INSERT INTO provider_capabilities (provider_id, protocol, feature, enabled, source, updated_at) VALUES (?, ?, 'native', ?, 'manual', ?) ON CONFLICT(provider_id, protocol, feature) DO UPDATE SET enabled=excluded.enabled, source='manual', updated_at=excluded.updated_at`, providerID, v.protocol, boolInt(v.enabled), now); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // DeleteProvider removes a provider by ID (models cascade).

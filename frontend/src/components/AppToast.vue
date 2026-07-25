@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
+import ModelTestToastItem from '@/components/ModelTestToastItem.vue'
 
 const { toasts, remove } = useToast()
 const { t } = useI18n()
+
+const standardToasts = computed(() => toasts.value.filter((toast) => toast.kind !== 'model-test'))
+const modelTestToasts = computed(() => toasts.value.filter((toast) => toast.kind === 'model-test'))
 
 function iconFor(type: string) {
   if (type === 'success') return '✓'
@@ -18,10 +23,10 @@ function toastClass(type: string) {
 </script>
 
 <template>
-  <div class="toast-container" aria-live="polite" aria-atomic="true">
+  <div class="toast-container toast-container-top" aria-live="polite" aria-atomic="true">
     <TransitionGroup name="toast">
       <div
-        v-for="toast in toasts"
+        v-for="toast in standardToasts"
         :key="toast.id"
         :class="toastClass(toast.type)"
         role="status"
@@ -32,12 +37,25 @@ function toastClass(type: string) {
       </div>
     </TransitionGroup>
   </div>
+
+  <div class="toast-container toast-container-bottom" aria-live="polite" aria-atomic="true">
+    <TransitionGroup name="toast">
+      <div
+        v-for="toast in modelTestToasts"
+        :key="toast.id"
+        :class="toastClass(toast.type)"
+        role="status"
+      >
+        <ModelTestToastItem :toast="toast" />
+        <button class="toast-close" :aria-label="t('common.close')" @click="remove(toast.id)">×</button>
+      </div>
+    </TransitionGroup>
+  </div>
 </template>
 
 <style scoped>
 .toast-container {
   position: fixed;
-  top: 16px;
   right: 16px;
   z-index: 10000;
   display: flex;
@@ -45,6 +63,14 @@ function toastClass(type: string) {
   gap: 10px;
   max-width: 360px;
   pointer-events: none;
+}
+
+.toast-container-top {
+  top: 16px;
+}
+
+.toast-container-bottom {
+  bottom: 16px;
 }
 
 .toast {

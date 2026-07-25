@@ -10,7 +10,7 @@ import (
 
 func TestProviderCapabilitiesCRUDAndSupportsProtocol(t *testing.T) {
 	s := newTestStore(t)
-	p, err := s.CreateProvider(model.ProviderInput{Name: "Anthropic", BaseURL: "https://api.anthropic.com", MessagesEnabled: true})
+	p, err := s.CreateProvider(model.ProviderInput{Name: "Anthropic", BaseURL: "https://api.anthropic.com"})
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
 	}
@@ -19,8 +19,8 @@ func TestProviderCapabilitiesCRUDAndSupportsProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProviderSupportsProtocol empty: %v", err)
 	}
-	if !supported {
-		t.Fatal("legacy provider bool should be the effective fallback")
+	if supported {
+		t.Fatal("new provider save should not enable legacy provider protocol flags")
 	}
 
 	if err := s.SetProviderCapability(p.ID, "anthropic_messages", "native", true); err != nil {
@@ -49,7 +49,7 @@ func TestProviderCapabilitiesCRUDAndSupportsProtocol(t *testing.T) {
 
 func TestSetProviderCapabilityPromotesLegacyProjection(t *testing.T) {
 	s := newTestStore(t)
-	p, err := s.CreateProvider(model.ProviderInput{Name: "Responses", BaseURL: "https://example.com", ResponsesEnabled: true})
+	p, err := s.CreateProvider(model.ProviderInput{Name: "Responses", BaseURL: "https://example.com"})
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestSetProviderCapabilityPromotesLegacyProjection(t *testing.T) {
 	}
 }
 
-func TestUpdateProviderOverridesManualCapability(t *testing.T) {
+func TestUpdateProviderIgnoresLegacyProtocolInput(t *testing.T) {
 	s := newTestStore(t)
 	p, err := s.CreateProvider(model.ProviderInput{Name: "Manual", BaseURL: "https://example.com"})
 	if err != nil {
@@ -89,19 +89,26 @@ func TestUpdateProviderOverridesManualCapability(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT enabled, source FROM provider_capabilities WHERE provider_id=? AND protocol=?`, p.ID, "gemini").Scan(&enabled, &source); err != nil {
 		t.Fatalf("read capability: %v", err)
 	}
-	if enabled || source != "manual" {
-		t.Fatalf("capability = enabled:%v source:%q, want false/manual", enabled, source)
+	if !enabled || source != "manual" {
+		t.Fatalf("capability = enabled:%v source:%q, want true/manual", enabled, source)
+	}
+	var legacy bool
+	if err := s.db.QueryRow(`SELECT gemini_enabled FROM providers WHERE id=?`, p.ID).Scan(&legacy); err != nil {
+		t.Fatalf("read provider legacy bool: %v", err)
+	}
+	if !legacy {
+		t.Fatal("provider update should preserve existing legacy protocol columns instead of applying input")
 	}
 }
 
 func TestProviderCapabilityFallbackUsesLegacyBoolWithoutRow(t *testing.T) {
 	s := newTestStore(t)
-	p, err := s.CreateProvider(model.ProviderInput{Name: "Legacy", BaseURL: "https://example.com", MessagesEnabled: true})
+	p, err := s.CreateProvider(model.ProviderInput{Name: "Legacy", BaseURL: "https://example.com"})
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM provider_capabilities WHERE provider_id=?`, p.ID); err != nil {
-		t.Fatalf("delete capability rows: %v", err)
+	if _, err := s.db.Exec(`UPDATE providers SET messages_enabled = 1 WHERE id=?`, p.ID); err != nil {
+		t.Fatalf("seed legacy capability: %v", err)
 	}
 	got, err := s.GetProvider(p.ID)
 	if err != nil {
@@ -109,6 +116,13 @@ func TestProviderCapabilityFallbackUsesLegacyBoolWithoutRow(t *testing.T) {
 	}
 	if !got.MessagesEnabled {
 		t.Fatal("legacy bool fallback was not preserved")
+	}
+	supported, err := s.ProviderSupportsProtocol(p.ID, "anthropic_messages")
+	if err != nil {
+		t.Fatalf("ProviderSupportsProtocol legacy fallback: %v", err)
+	}
+	if !supported {
+		t.Fatal("legacy provider bool should still be honored when no capability row exists")
 	}
 }
 

@@ -6,15 +6,16 @@ import { useApi } from '../composables/useApi'
 import { useProviderStyle } from '../composables/useProviderStyle'
 import { useFormatters } from '../composables/useFormatters'
 import { useToast } from '../composables/useToast'
+import { useModelTestToast, type ModelApiType } from '../composables/useModelTestToast'
 import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
-import TestModelChatModal from '@/components/TestModelChatModal.vue'
 import type { model } from '../../wailsjs/go/models'
 
 const { t } = useI18n()
 const { color: providerColor, initial: providerLetter } = useProviderStyle()
 const { tokens: fmtTokens, latency: fmtLatency } = useFormatters()
 const toast = useToast()
+const { runModelTest } = useModelTestToast()
 const confirm = useConfirm()
 
 const {
@@ -40,12 +41,6 @@ const testingIds = ref<Set<string>>(new Set())
 
 const models = ref<model.Model[]>([])
 const testingModelIds = ref<Set<string>>(new Set())
-const chatTestModal = ref({
-  open: false,
-  providerId: '',
-  providerName: '',
-  modelName: '',
-})
 const fetchingModels = ref(false)
 
 // Monotonic generation token to guard against stale async responses after
@@ -78,18 +73,21 @@ const modelEditPrice = ref('0.1')
 const modelEditSaving = ref(false)
 const modelCapabilitiesLoading = ref(false)
 const modelCapabilitiesError = ref('')
-const modelCapabilityStates = ref<Record<string, 'inherit' | 'native' | 'unsupported'>>({})
-const modelCapabilityBaseline = ref<Record<string, 'inherit' | 'native' | 'unsupported'>>({})
+const modelApiType = ref<ModelApiType>('openai_chat')
 
-const nativeProtocols = [
-  { key: 'openai_chat', labelKey: 'providers.modal.openaiChatApi' },
-  { key: 'openai_responses', labelKey: 'providers.modal.responsesApi' },
-  { key: 'anthropic_messages', labelKey: 'providers.modal.messagesApi' },
-  { key: 'gemini', labelKey: 'providers.modal.geminiApi' },
-] as const
+const modelApiTypeOptions: Array<{ value: ModelApiType; labelKey: string }> = [
+  { value: 'openai_chat', labelKey: 'providers.modal.apiTypeOpenAICompatible' },
+  { value: 'openai_responses', labelKey: 'providers.modal.apiTypeOpenAIResponses' },
+  { value: 'anthropic_messages', labelKey: 'providers.modal.apiTypeAnthropicMessages' },
+  { value: 'gemini', labelKey: 'providers.modal.apiTypeGemini' },
+]
 
-type NativeProtocol = typeof nativeProtocols[number]['key']
-type ModelCapabilityState = 'inherit' | 'native' | 'unsupported'
+const capabilityProtocolPriority: ModelApiType[] = [
+  'openai_responses',
+  'anthropic_messages',
+  'gemini',
+  'openai_chat',
+]
 
 const form = ref<model.ProviderInput>({
   name: '',
@@ -235,12 +233,6 @@ async function testAll() {
   await refresh()
 }
 
-function formatContext(n: number): string {
-  if (!n) return '—'
-  if (n >= 1000) return `${Math.round(n / 1000)}K`
-  return String(n)
-}
-
 async function copyToClipboard(text: string): Promise<boolean> {
   if (!text) return false
   try {
@@ -377,9 +369,7 @@ function startEditModel(m: model.Model) {
   editingModel.value = m
   modelEditName.value = m.name
   modelEditPrice.value = Number.isFinite(m.request_price) ? String(m.request_price) : '0.1'
-  const defaults = modelCapabilityDefaults()
-  modelCapabilityStates.value = { ...defaults }
-  modelCapabilityBaseline.value = { ...defaults }
+  modelApiType.value = 'openai_chat'
   modelCapabilitiesError.value = ''
   modelEditOpen.value = true
   void loadModelCapabilities(m.name)
@@ -392,30 +382,24 @@ function closeModelEdit() {
   modelEditPrice.value = '0.1'
   modelCapabilitiesLoading.value = false
   modelCapabilitiesError.value = ''
-  modelCapabilityStates.value = {}
-  modelCapabilityBaseline.value = {}
+  modelApiType.value = 'openai_chat'
 }
 
-function modelCapabilityDefaults(): Record<NativeProtocol, ModelCapabilityState> {
-  return {
-    openai_chat: 'inherit',
-    openai_responses: 'inherit',
-    anthropic_messages: 'inherit',
-    gemini: 'inherit',
+function resolveModelApiType(capabilities: model.ModelCapability[]): ModelApiType {
+  for (const protocol of capabilityProtocolPriority) {
+    const match = capabilities.find((capability) => capability.feature === 'native' && capability.protocol === protocol && capability.enabled)
+    if (match) return protocol
   }
+  return 'openai_chat'
 }
 
-function inheritedCapabilityEnabled(protocol: NativeProtocol): boolean {
-  if (protocol === 'openai_chat') return true
-  if (protocol === 'openai_responses') return form.value.responses_enabled
-  if (protocol === 'anthropic_messages') return form.value.messages_enabled
-  return form.value.gemini_enabled
-}
-
-function inheritedCapabilityLabel(protocol: NativeProtocol): string {
-  return inheritedCapabilityEnabled(protocol)
-    ? t('providers.modal.inheritEnabled')
-    : t('providers.modal.inheritDisabled')
+async function resolveModelApiTypeForTest(modelName: string): Promise<ModelApiType> {
+  if (!editingId.value) return 'openai_chat'
+  if (editingModel.value?.name === modelName && modelEditOpen.value) {
+    return modelApiType.value
+  }
+  const capabilities = await api.listModelCapabilities(editingId.value, modelName)
+  return resolveModelApiType(capabilities)
 }
 
 async function loadModelCapabilities(modelName: string) {
@@ -427,13 +411,8 @@ async function loadModelCapabilities(modelName: string) {
   try {
     const capabilities = await api.listModelCapabilities(providerId, modelName)
     if (!modelEditOpen.value || editingId.value !== providerId || editingModel.value?.id !== modelId) return
-    const states = modelCapabilityDefaults()
-    for (const capability of capabilities) {
-      if (capability.feature !== 'native' || !(capability.protocol in states)) continue
-      states[capability.protocol as NativeProtocol] = capability.enabled ? 'native' : 'unsupported'
-    }
-    modelCapabilityStates.value = { ...states }
-    modelCapabilityBaseline.value = { ...states }
+    const selected = resolveModelApiType(capabilities)
+    modelApiType.value = selected
   } catch (e: any) {
     if (!modelEditOpen.value || editingId.value !== providerId || editingModel.value?.id !== modelId) return
     modelCapabilitiesError.value = t('providers.modal.capabilitiesLoadFailed', { error: e?.message || String(e) })
@@ -473,17 +452,9 @@ async function saveModelEdit() {
     editingModel.value.name = newName
     const row = models.value.find((m) => m.id === editingModel.value?.id)
     if (row) row.name = newName
-    for (const protocol of nativeProtocols) {
-      const next = modelCapabilityStates.value[protocol.key]
-      const previous = modelCapabilityBaseline.value[protocol.key]
-      if (!next || next === previous) continue
+    for (const protocol of modelApiTypeOptions) {
       capabilitySaveStarted = true
-      if (next === 'inherit') {
-        await api.deleteModelCapability(editingId.value, newName, protocol.key, 'native')
-      } else {
-        await api.setModelCapability(editingId.value, newName, protocol.key, 'native', next === 'native')
-      }
-      modelCapabilityBaseline.value = { ...modelCapabilityBaseline.value, [protocol.key]: next }
+      await api.setModelCapability(editingId.value, newName, protocol.value, 'native', protocol.value === modelApiType.value)
     }
     toast.push(t('providers.modal.modelUpdated', { name: newName }), 'success')
     closeModelEdit()
@@ -554,30 +525,21 @@ async function toggleModelActive(m: model.Model) {
   }
 }
 
-async function testModelLatency(m: model.Model) {
+async function runModelToastTest(m: model.Model) {
   if (!editingId.value) return
   testingModelIds.value.add(m.id)
   try {
-    const result = await api.testModelLatency(editingId.value, m.name)
-    if (result.ok) {
-      m.latency_ms = result.latency_ms
-      toast.push(t('providers.testResult.latency', { name: m.name, ms: result.latency_ms }), 'success')
-    } else {
-      toast.push(result.error || t('providers.testResult.failedUnknown'), 'error')
-    }
+    const apiType = await resolveModelApiTypeForTest(m.name)
+    await runModelTest({
+      providerId: editingId.value,
+      modelName: m.name,
+      apiType,
+      t,
+    })
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
   } finally {
     testingModelIds.value.delete(m.id)
-  }
-}
-
-function openChatTest(model: model.Model) {
-  chatTestModal.value = {
-    open: true,
-    providerId: editingId.value,
-    providerName: form.value.name,
-    modelName: model.name,
   }
 }
 
@@ -954,50 +916,6 @@ onMounted(() => {
           >
           <div class="field-help">{{ t('providers.modal.upstreamKeyHelp') }}</div>
         </div>
-        <div v-if="modalMode === 'add'" class="field">
-          <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">{{ t('providers.modal.customProvider') }}</label>
-            <label class="toggle">
-              <input v-model="form.is_custom" type="checkbox">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <div class="field">
-          <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">{{ t('providers.modal.responsesApi') }}</label>
-            <label class="toggle">
-              <input v-model="form.responses_enabled" type="checkbox">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="field-help">{{ t('providers.modal.responsesApiHelp') }}</div>
-        </div>
-
-
-        <div class="field">
-          <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">{{ t('providers.modal.messagesApi') }}</label>
-            <label class="toggle">
-              <input v-model="form.messages_enabled" type="checkbox">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="field-help">{{ t('providers.modal.messagesApiHelp') }}</div>
-        </div>
-
-        <div class="field">
-          <div class="row-between" style="margin-bottom: 0;">
-            <label class="field-label">{{ t('providers.modal.geminiApi') }}</label>
-            <label class="toggle">
-              <input v-model="form.gemini_enabled" type="checkbox">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="field-help">{{ t('providers.modal.geminiApiHelp') }}</div>
-        </div>
-
         <div v-if="modalMode === 'edit'" class="field">
           <div class="row-between" style="margin-bottom: 8px;">
             <label class="field-label">{{ t('providers.modal.availableModels') }}</label>
@@ -1065,9 +983,7 @@ onMounted(() => {
               <thead>
                 <tr>
                   <th>{{ t('providers.modal.model') }}</th>
-                  <th class="right">{{ t('providers.modal.context') }}</th>
                   <th class="right">{{ t('providers.modal.price') }}</th>
-                  <th class="right">{{ t('providers.modal.latency') }}</th>
                   <th class="right">{{ t('providers.modal.enabled') }}</th>
                   <th></th>
                   <th></th>
@@ -1079,12 +995,7 @@ onMounted(() => {
                     <div class="model-name">{{ m.name }}</div>
                     <div class="model-owner">{{ currentProviderName }}</div>
                   </td>
-                  <td class="num">{{ formatContext(m.context_window) }}</td>
                   <td class="num">${{ (Number.isFinite(m.request_price) ? m.request_price : 0.1).toFixed(4) }} / {{ t('providers.modal.call') }}</td>
-                  <td class="num">
-                    <span v-if="m.latency_ms">{{ m.latency_ms }} ms</span>
-                    <span v-else class="text-muted">—</span>
-                  </td>
                   <td class="right">
                     <label class="toggle">
                       <input type="checkbox" :checked="m.active" @change="toggleModelActive(m)">
@@ -1093,10 +1004,7 @@ onMounted(() => {
                   </td>
                   <td class="right">
                     <div class="row" style="gap: 4px; justify-content: flex-end;">
-                      <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" :title="t('providers.modal.testLatency')" :aria-label="t('providers.modal.testLatency')" @click="testModelLatency(m)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                      </button>
-                      <button class="btn btn-icon" :title="t('testModel.title')" :aria-label="t('testModel.title')" @click="openChatTest(m)">
+                      <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" :title="t('testModel.title')" :aria-label="t('testModel.title')" @click="runModelToastTest(m)">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                       </button>
                     </div>
@@ -1156,26 +1064,20 @@ onMounted(() => {
         </div>
         <div class="field model-capabilities-field">
           <div class="row-between" style="margin-bottom: 6px;">
-            <label class="field-label" style="margin: 0;">{{ t('providers.modal.nativeApis') }}</label>
+            <label class="field-label" style="margin: 0;">{{ t('providers.modal.apiType') }}</label>
             <span v-if="modelCapabilitiesLoading" class="text-muted" style="font-size: 12px;">{{ t('providers.modal.loadingCapabilities') }}</span>
           </div>
-          <div class="field-help" :id="`model-native-apis-help-${editingModel?.id || 'model'}`">{{ t('providers.modal.nativeApisHelp') }}</div>
+          <div class="field-help" :id="`model-native-apis-help-${editingModel?.id || 'model'}`">{{ t('providers.modal.apiTypeHelp') }}</div>
           <div class="model-capabilities" :aria-busy="modelCapabilitiesLoading">
-            <div v-for="protocol in nativeProtocols" :key="protocol.key" class="model-capability-row">
-              <div class="model-capability-label">
-                <span>{{ t(protocol.labelKey) }}</span>
-                <span class="model-capability-inherited">{{ inheritedCapabilityLabel(protocol.key) }}</span>
-              </div>
+            <div class="model-capability-row model-capability-row-single">
               <select
-                v-model="modelCapabilityStates[protocol.key]"
+                v-model="modelApiType"
                 class="select model-capability-select"
-                :aria-label="t('providers.modal.nativeApiFor', { protocol: t(protocol.labelKey) })"
+                :aria-label="t('providers.modal.apiType')"
                 :aria-describedby="`model-native-apis-help-${editingModel?.id || 'model'}`"
                 :disabled="modelEditSaving || modelCapabilitiesLoading"
               >
-                <option value="inherit">{{ t('providers.modal.inherit') }}</option>
-                <option value="native">{{ t('providers.modal.native') }}</option>
-                <option value="unsupported">{{ t('providers.modal.unsupported') }}</option>
+                <option v-for="option in modelApiTypeOptions" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
               </select>
             </div>
           </div>
@@ -1241,13 +1143,6 @@ onMounted(() => {
     </div>
   </Teleport>
 
-  <TestModelChatModal
-    :open="chatTestModal.open"
-    :provider-id="chatTestModal.providerId"
-    :provider-name="chatTestModal.providerName"
-    :model-name="chatTestModal.modelName"
-    @close="chatTestModal.open = false"
-  />
 </template>
 
 <style scoped>
@@ -1272,25 +1167,14 @@ onMounted(() => {
   min-height: 42px;
   padding: 6px 10px;
 }
+.model-capability-row-single {
+  justify-content: flex-start;
+}
 .model-capability-row + .model-capability-row {
   border-top: 1px solid var(--border);
 }
-.model-capability-label {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
-}
-.model-capability-inherited {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 400;
-  white-space: nowrap;
-}
 .model-capability-select {
-  flex: 0 0 156px;
+  flex: 0 0 100%;
   min-width: 0;
   padding-top: 5px;
   padding-bottom: 5px;
@@ -1301,9 +1185,6 @@ onMounted(() => {
     align-items: stretch;
     flex-direction: column;
     gap: 5px;
-  }
-  .model-capability-label {
-    justify-content: space-between;
   }
   .model-capability-select {
     flex-basis: auto;
