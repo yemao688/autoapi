@@ -113,7 +113,10 @@ const filteredProviders = computed(() => {
   } else if (sortBy.value === 'last_tested') {
     sorted.sort((a, b) => b.last_tested_at - a.last_tested_at)
   }
-  return sorted
+  return [
+    ...sorted.filter((provider) => provider.enabled),
+    ...sorted.filter((provider) => !provider.enabled),
+  ]
 })
 
 const totalModelCount = computed(() =>

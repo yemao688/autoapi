@@ -64,6 +64,16 @@ const breakerStatuses = ref<proxy.TargetBreakerStatus[]>([])
 // same arrays and rule objects survive refreshes.
 const ruleList = ref<model.ModelRule[]>([])
 
+const displayedRuleList = computed({
+  get: () => [
+    ...ruleList.value.filter((rule) => rule.enabled),
+    ...ruleList.value.filter((rule) => !rule.enabled),
+  ],
+  set: (reorderedRules: model.ModelRule[]) => {
+    ruleList.value.splice(0, ruleList.value.length, ...reorderedRules)
+  },
+})
+
 watch(
   rules,
   (val) => {
@@ -718,7 +728,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
         <div v-if="rulesError" class="refresh-error-banner" role="status">{{ t('modelRules.loadFailed', { error: rulesError }) }}</div>
         <!-- Rule list with simple drag reorder -->
         <VueDraggable
-          v-model="ruleList"
+          v-model="displayedRuleList"
           :animation="150"
           :disabled="rulesOrderSaving"
           handle=".rule-drag-handle"
@@ -727,7 +737,7 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
           @end="onRulesReorder"
         >
           <article
-            v-for="rule in ruleList"
+            v-for="rule in displayedRuleList"
             :key="rule.id"
             class="card rule-card"
             :class="{ 'rule-disabled': !rule.enabled }"
