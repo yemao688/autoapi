@@ -127,6 +127,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 			errType = "no_matching_rule"
 		case errors.Is(err, errUnsupportedFeature):
 			errType = "unsupported_feature"
+			p.appendUnsupportedFeaturePreflightChain(logEntry, inbound, err)
 			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
 			logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
 			return
@@ -189,6 +190,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 			errType = "no_matching_rule"
 		case errors.Is(err, errUnsupportedFeature):
 			errType = "unsupported_feature"
+			p.appendUnsupportedFeaturePreflightChain(logEntry, inbound, err)
 			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
 			logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
 			return
@@ -269,6 +271,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 			errType = "no_matching_rule"
 		case errors.Is(err, errUnsupportedFeature):
 			errType = "unsupported_feature"
+			p.appendUnsupportedFeaturePreflightChain(logEntry, inbound, err)
 			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
 			logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
 			return
@@ -345,6 +348,38 @@ func enrichLogFromRequest(r *http.Request, logEntry *model.RequestLog) {
 	logEntry.UserAgent = r.UserAgent()
 	logEntry.ClientIP = clientIPFromAddr(r.RemoteAddr)
 	logEntry.RequestURI = r.URL.Path
+}
+
+func (p *Proxy) appendUnsupportedFeaturePreflightChain(logEntry *model.RequestLog, req *InboundRequest, err error) {
+	rule, ok := findModelRule(req, p.loadModelRules())
+	if !ok || rule == nil {
+		return
+	}
+	logEntry.RouteID = rule.ID
+	logEntry.RouteLabel = rule.Name
+	attemptOrder := len(logEntry.Chain)
+	for _, target := range rule.Targets {
+		if !target.Enabled {
+			continue
+		}
+		attemptOrder++
+		providerName := ""
+		provider, getErr := p.store.GetProvider(target.ProviderID)
+		if getErr == nil && provider != nil {
+			providerName = provider.Name
+		}
+		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+			AttemptOrder: attemptOrder,
+			ProviderID:   target.ProviderID,
+			ProviderName: providerName,
+			ModelName:    modelNameForTarget(target.ModelName, req.Model),
+			TargetID:     target.ID,
+			Endpoint:     req.Endpoint,
+			Status:       string(model.AttemptOutcomePreflightError),
+			StatusCode:   0,
+			Error:        err.Error(),
+		})
+	}
 }
 
 type chatRequest struct {
@@ -452,6 +487,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			errType = "no_matching_rule"
 		case errors.Is(err, errUnsupportedFeature):
 			errType = "unsupported_feature"
+			p.appendUnsupportedFeaturePreflightChain(logEntry, inbound, err)
 			p.writeError(w, http.StatusUnprocessableEntity, errType, err.Error())
 			logEntry.StatusCode = http.StatusUnprocessableEntity
 			logEntry.Error = err.Error()

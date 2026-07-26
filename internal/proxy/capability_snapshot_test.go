@@ -541,6 +541,17 @@ func TestSelectConversionCandidatesChatToMessagesExplicitToolsFalseStillRejects(
 	}
 }
 
+func TestSelectConversionCandidatesResponsesStreamToolChoiceAutoCanUseMessagesEdge(t *testing.T) {
+	rule := []model.ModelRule{{Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "claude-opus-5", Enabled: true}}}}
+	p := &model.Provider{ID: "p", Enabled: true}
+	snapshot := newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "claude-opus-5", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}})
+	req := &InboundRequest{Model: "claude-opus-5", Protocol: ProtocolOpenAIResponses, Stream: true, Enforcement: model.FeatureCapabilityEnforcementEnforce, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools, model.FeatureStreaming}}}
+	candidates, err := selectCandidates(req, rule, nil, func(string) (*model.Provider, error) { return p, nil }, snapshot)
+	if err != nil || len(candidates) != 1 || candidates[0].convertTo != ProtocolAnthropicMessages {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+}
+
 func TestSelectConversionCandidatesMessagesStreamToolsCanUseChatEdge(t *testing.T) {
 	rule := []model.ModelRule{{Name: "gpt-4.1", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}}
 	p := &model.Provider{ID: "p", Enabled: true}
@@ -639,5 +650,20 @@ func TestResolveCandidatesModelCapabilityBulkErrorsAndRefs(t *testing.T) {
 	}
 	if len(st.bulkModelRefs) != 1 || st.bulkModelRefs[0].ModelName != "m" {
 		t.Fatalf("model refs: %+v", st.bulkModelRefs)
+	}
+}
+
+func TestResolveCandidatesResponsesToMessagesWithModelNativeOnly(t *testing.T) {
+	st := &mockStore{
+		settings:          &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers:         map[string]*model.Provider{"p": {ID: "p", Enabled: true}},
+		rules:             []model.ModelRule{{ID: "r1", Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", ModelName: "claude-upstream", Enabled: true}}}},
+		modelCapabilities: []model.ModelCapability{{ProviderID: "p", ModelName: "claude-upstream", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	candidates, err := p.resolveCandidates(&InboundRequest{Model: "claude-opus-5", Protocol: ProtocolOpenAIResponses, Stream: true, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools, model.FeatureStreaming}}})
+	if err != nil || len(candidates) != 1 || candidates[0].convertTo != ProtocolAnthropicMessages {
+		t.Fatalf("candidates=%+v err=%v refs=%+v", candidates, err, st.bulkModelRefs)
 	}
 }

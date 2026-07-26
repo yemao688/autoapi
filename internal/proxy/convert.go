@@ -27,6 +27,7 @@ type responsesRequestBody struct {
 	Input           json.RawMessage `json:"input"`
 	Metadata        json.RawMessage `json:"metadata,omitempty"`
 	Tools           json.RawMessage `json:"tools,omitempty"`
+	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
 	Temperature     *float64        `json:"temperature,omitempty"`
 	TopP            *float64        `json:"top_p,omitempty"`
@@ -115,9 +116,20 @@ func responsesToMessagesRequest(body []byte, upstreamModel string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	metadata, err := normalizeJSONObjectField(req.Metadata, "metadata")
+	if err != nil {
+		return nil, err
+	}
+	toolChoice, err := responsesToolChoiceToAnthropic(req.ToolChoice)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]any{"model": upstreamModel, "messages": json.RawMessage(messages), "stream": req.Stream}
 	if req.Instructions != "" {
 		out["system"] = req.Instructions
+	}
+	if len(metadata) > 0 {
+		out["metadata"] = metadata
 	}
 	if req.MaxOutputTokens != nil {
 		out["max_tokens"] = *req.MaxOutputTokens
@@ -131,7 +143,24 @@ func responsesToMessagesRequest(body []byte, upstreamModel string) ([]byte, erro
 	if len(tools) > 0 {
 		out["tools"] = json.RawMessage(tools)
 	}
+	if len(toolChoice) > 0 {
+		out["tool_choice"] = json.RawMessage(toolChoice)
+	}
 	return json.Marshal(out)
+}
+
+func responsesToolChoiceToAnthropic(raw json.RawMessage) ([]byte, error) {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` {
+		return nil, nil
+	}
+	convertible, err := responsesToolChoiceConvertible(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !convertible {
+		return nil, errors.New("Responses tool_choice is not supported for Messages conversion unless it is auto")
+	}
+	return []byte(`{"type":"auto"}`), nil
 }
 
 func responsesToMessagesResponse(body []byte, clientModel string) ([]byte, error) {

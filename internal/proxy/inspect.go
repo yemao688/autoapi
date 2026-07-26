@@ -649,8 +649,14 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 		}
 	}
 	if raw, ok := fields["tool_choice"]; ok && raw != nil && string(raw) != "null" && string(raw) != `""` {
-		reqs.NativeOnly = true
-		reqs.UnknownSemantic = true
+		convertible, err := responsesToolChoiceConvertible(raw)
+		if err != nil {
+			return responsesInspectResult{}, err
+		}
+		if !convertible {
+			reqs.NativeOnly = true
+			reqs.UnknownSemantic = true
+		}
 	}
 	if raw, ok := fields["parallel_tool_calls"]; ok && raw != nil && string(raw) != "null" && string(raw) != `false` {
 		reqs.NativeOnly = true
@@ -661,8 +667,9 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 		reqs.UnknownSemantic = true
 	}
 	if raw, ok := fields["metadata"]; ok && meaningfulJSON(raw) {
-		reqs.NativeOnly = true
-		reqs.UnknownSemantic = true
+		if _, err := normalizeJSONObjectField(raw, "metadata"); err != nil {
+			return responsesInspectResult{}, &requestParseError{msg: err.Error(), cause: err}
+		}
 	}
 	// Responses reasoning object (distinct from reasoning_effort string).
 	if raw, ok := fields["reasoning"]; ok && raw != nil && string(raw) != "null" {
@@ -733,6 +740,27 @@ func inspectResponsesRequest(body []byte) (responsesInspectResult, error) {
 
 	res.Requirements = *reqs
 	return res, nil
+}
+
+func responsesToolChoiceConvertible(raw json.RawMessage) (bool, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s == "auto", nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return false, &requestParseError{msg: "tool_choice must be a string or object", cause: err}
+	}
+	if err := rejectUnknownKeys(obj, "type"); err != nil {
+		return false, &requestParseError{msg: err.Error(), cause: err}
+	}
+	if len(obj["type"]) == 0 {
+		return false, &requestParseError{msg: "tool_choice.type is required"}
+	}
+	if err := json.Unmarshal(obj["type"], &s); err != nil {
+		return false, &requestParseError{msg: "tool_choice.type must be a string", cause: err}
+	}
+	return s == "auto", nil
 }
 
 func parseResponsesTools(raw json.RawMessage) error {

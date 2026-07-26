@@ -6812,6 +6812,133 @@ func TestChatToMessagesModelNativeSelectionAllowsToolsInEnforce(t *testing.T) {
 	}
 }
 
+func TestResponsesToMessagesModelNativeSelectionAllowsToolsInEnforce(t *testing.T) {
+	var upstreamHits int
+	var upstreamBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path=%s want /v1/messages", r.URL.Path)
+		}
+		upstreamBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n"+
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n"+
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n"+
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n"+
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"+
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", ModelName: "claude-upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+		modelCapabilities: []model.ModelCapability{
+			{ProviderID: "p", ModelName: "claude-upstream", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"},
+		},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	body := []byte(`{"model":"claude-opus-5","stream":true,"tool_choice":"auto","metadata":{"client":"sdk"},"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":"hi"}`)
+	respReq, reqs, err := parseAndInspectResponses(body)
+	if err != nil {
+		t.Fatalf("inspect err=%v", err)
+	}
+	preflightCandidates, err := p.resolveCandidates(&InboundRequest{Model: respReq.Model, Task: "responses", Endpoint: "/v1/responses", Stream: respReq.Stream, Protocol: ProtocolOpenAIResponses, Requirements: reqs})
+	if err != nil || len(preflightCandidates) != 1 || preflightCandidates[0].convertTo != ProtocolAnthropicMessages {
+		t.Fatalf("preflight candidates=%+v err=%v reqs=%+v refs=%+v", preflightCandidates, err, *reqs, store.bulkModelRefs)
+	}
+
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamHits != 1 {
+		t.Fatalf("expected one upstream hit, got %d", upstreamHits)
+	}
+	if !strings.Contains(rec.Body.String(), "event: response.created") {
+		t.Fatalf("expected responses stream, got %s", rec.Body.String())
+	}
+	if !strings.Contains(string(upstreamBody), `"tool_choice":{"type":"auto"}`) || !strings.Contains(string(upstreamBody), `"metadata":{"client":"sdk"}`) {
+		t.Fatalf("expected converted tool_choice/metadata in upstream body, got %s", upstreamBody)
+	}
+}
+
+func TestResponsesToMessagesParallelToolCallsStillRejected(t *testing.T) {
+	store := &mockStore{
+		settings:          &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers:         map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: "http://localhost", Enabled: true}},
+		rules:             []model.ModelRule{{ID: "r1", Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", ModelName: "claude-upstream", Enabled: true}}}},
+		apiKeys:           []model.ApiKey{{ID: "key1", Enabled: true}},
+		modelCapabilities: []model.ModelCapability{{ProviderID: "p", ModelName: "claude-upstream", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"claude-opus-5","stream":true,"parallel_tool_calls":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "unsupported_feature", "tools streaming")
+}
+
+func TestResponsesToMessagesExplicitToolsFalseStillRejectsAndLogsChain(t *testing.T) {
+	var upstreamHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", ModelName: "claude-upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+		modelCapabilities: []model.ModelCapability{
+			{ProviderID: "p", ModelName: "claude-upstream", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"},
+			{ProviderID: "p", ModelName: "claude-upstream", Protocol: string(ProtocolAnthropicMessages), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
+		},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"claude-opus-5","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelopeContains(t, rec.Body.Bytes(), "unsupported_feature", "tools streaming")
+	if upstreamHits != 0 {
+		t.Fatalf("expected no upstream hits, got %d", upstreamHits)
+	}
+	log := waitForLog(t, store)
+	if len(log.Chain) != 1 {
+		t.Fatalf("expected one preflight chain entry, got %+v", log.Chain)
+	}
+	if log.Chain[0].Status != string(model.AttemptOutcomePreflightError) || log.Chain[0].UpstreamStarted {
+		t.Fatalf("unexpected chain entry: %+v", log.Chain[0])
+	}
+	if log.Chain[0].TargetID != "t0" || log.Chain[0].ProviderID != "p" || log.Chain[0].ModelName != "claude-upstream" {
+		t.Fatalf("unexpected chain identity: %+v", log.Chain[0])
+	}
+	if !strings.Contains(log.Chain[0].Error, "unsupported feature") {
+		t.Fatalf("unexpected chain error: %+v", log.Chain[0])
+	}
+}
+
 func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var gotPath string

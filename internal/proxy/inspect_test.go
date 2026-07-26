@@ -175,6 +175,12 @@ func TestInspectMessagesFeatures(t *testing.T) {
 			if tc.nativeOnly && !res.Requirements.NativeOnly {
 				t.Fatal("expected native only")
 			}
+			if !tc.nativeOnly && res.Requirements.NativeOnly {
+				t.Fatal("did not expect native only")
+			}
+			if !tc.nativeOnly && res.Requirements.UnknownSemantic {
+				t.Fatal("did not expect unknown semantic")
+			}
 		})
 	}
 }
@@ -460,7 +466,9 @@ func TestInspectResponsesPreservationAndReasoning(t *testing.T) {
 		nativeOnly bool
 		wantErr    bool
 	}{
-		{"tool_choice marks native", `{"model":"m","input":"hi","tool_choice":"auto"}`, nil, true, false},
+		{"tool_choice auto with tools+streaming stays convertible", `{"model":"m","input":"hi","stream":true,"tool_choice":"auto","metadata":{"client":"x"},"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}`, []model.Feature{model.FeatureTools, model.FeatureStreaming}, false, false},
+		{"tool_choice auto is convertible", `{"model":"m","input":"hi","tool_choice":"auto"}`, nil, false, false},
+		{"metadata is convertible", `{"model":"m","input":"hi","metadata":{"client":"x"}}`, nil, false, false},
 		{"parallel_tool_calls marks native", `{"model":"m","input":"hi","parallel_tool_calls":true}`, nil, true, false},
 		{"truncation marks native", `{"model":"m","input":"hi","truncation":"auto"}`, nil, true, false},
 		{"non-function tool marks native", `{"model":"m","input":"hi","tools":[{"type":"host","name":"x"}]}`, nil, true, false},

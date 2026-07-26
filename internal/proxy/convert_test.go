@@ -42,6 +42,7 @@ func TestMessagesToResponsesRequestConversion(t *testing.T) {
 func TestResponsesToMessagesRequestConversion(t *testing.T) {
 	body := []byte(`{
 		"model":"client-model","instructions":"be brief","max_output_tokens":77,
+		"tool_choice":"auto","metadata":{"client":"sdk"},
 		"input":[
 			{"role":"user","content":[{"type":"input_text","text":"hi"}]},
 			{"id":"item_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"},
@@ -58,6 +59,9 @@ func TestResponsesToMessagesRequestConversion(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"max_tokens":77`) || !strings.Contains(string(out), `"input_schema"`) {
 		t.Fatalf("tokens/tools not mapped: %s", out)
+	}
+	if !strings.Contains(string(out), `"tool_choice":{"type":"auto"}`) || !strings.Contains(string(out), `"metadata":{"client":"sdk"}`) {
+		t.Fatalf("tool_choice/metadata not mapped: %s", out)
 	}
 	if !strings.Contains(string(out), `"tool_use"`) || !strings.Contains(string(out), `"tool_result"`) {
 		t.Fatalf("tool items missing: %s", out)
@@ -198,6 +202,10 @@ func TestProtocolConversionRejections(t *testing.T) {
 			_, err := responsesToMessagesRequest([]byte(`{"model":"m","input":[],"tools":[{"type":"code_interpreter","name":"c"}]}`), "u")
 			return err
 		}, "unsupported Responses tool type"},
+		{"unsupported Responses tool_choice", func() error {
+			_, err := responsesToMessagesRequest([]byte(`{"model":"m","input":[],"tool_choice":"required"}`), "u")
+			return err
+		}, "tool_choice"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
