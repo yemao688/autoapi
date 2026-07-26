@@ -633,6 +633,8 @@ func (p *Proxy) authenticate(r *http.Request) (apiKeyID, apiKeyName string, allo
 
 // writeError writes an OpenAI-compatible error JSON body.
 func (p *Proxy) writeError(w http.ResponseWriter, status int, typ, message string) {
+	w.Header().Del("Content-Encoding")
+	w.Header().Del("Content-Length")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1493,6 +1495,7 @@ outer:
 					req.Header.Set("Content-Type", "application/json")
 				}
 				applyExtraHeaders(req.Header, prep.ExtraHeaders)
+				req.Header.Set("Accept-Encoding", "identity")
 			}
 
 			buf := &responseBuffer{statusCode: 0, header: make(http.Header), body: bytes.NewBuffer(nil)}
@@ -2488,6 +2491,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		attemptReq.Header.Set("Content-Type", "application/json")
 	}
 	applyExtraHeaders(attemptReq.Header, prep.ExtraHeaders)
+	attemptReq.Header.Set("Accept-Encoding", "identity")
 	attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 
 	// Per-attempt transport with the candidate-specific first-byte

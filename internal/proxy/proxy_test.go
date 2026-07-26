@@ -1808,6 +1808,77 @@ func TestResponsesNativeStreamingPassthroughE2E(t *testing.T) {
 	}
 }
 
+func TestResponsesNativeStreamingRequestsIdentityEncoding(t *testing.T) {
+	var gotAcceptEncoding string
+	const upstream = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"identity\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAcceptEncoding = r.Header.Get("Accept-Encoding")
+		if gotAcceptEncoding != "identity" {
+			w.Header().Set("Content-Encoding", "zstd")
+			_, _ = w.Write([]byte{0x28, 0xb5, 0x2f, 0xfd})
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, upstream)
+	}))
+	defer srv.Close()
+
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "native", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"client-model","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Accept-Encoding", "zstd")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if gotAcceptEncoding != "identity" {
+		t.Fatalf("upstream Accept-Encoding=%q, want identity", gotAcceptEncoding)
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != upstream {
+		t.Fatalf("status=%d body=%q, want native SSE passthrough", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("downstream Content-Encoding=%q, want empty", got)
+	}
+}
+
+func TestResponsesNativeNonStreamingRequestsIdentityEncoding(t *testing.T) {
+	var gotAcceptEncoding string
+	const upstream = `{"id":"resp_identity","object":"response","model":"native","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAcceptEncoding = r.Header.Get("Accept-Encoding")
+		if gotAcceptEncoding != "identity" {
+			w.Header().Set("Content-Encoding", "zstd")
+			_, _ = w.Write([]byte{0x28, 0xb5, 0x2f, 0xfd})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, upstream)
+	}))
+	defer srv.Close()
+
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "client-model", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "native", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"client-model","input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("Accept-Encoding", "zstd")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+
+	if gotAcceptEncoding != "identity" {
+		t.Fatalf("upstream Accept-Encoding=%q, want identity", gotAcceptEncoding)
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != upstream {
+		t.Fatalf("status=%d body=%q, want native JSON passthrough", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("downstream Content-Encoding=%q, want empty", got)
+	}
+}
+
 func TestResponsesNativeEmptyTerminalFailsOverE2E(t *testing.T) {
 	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
