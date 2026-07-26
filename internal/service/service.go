@@ -620,12 +620,17 @@ func (s *Service) CancelModelTest(testID string) bool {
 // ListUpstreamMonitorModels returns active models belonging to enabled
 // providers, choosing the first enabled native protocol configured for the
 // model (then provider). A model capability row overrides its provider row.
+// Chat is preferred when nothing is pinned explicitly: it is the baseline
+// every OpenAI-compatible provider claims, so probing it avoids false
+// failures on models whose responses/messages endpoints are not actually
+// served. Pin a model's API type (model capability rows) to probe a
+// different protocol.
 func (s *Service) ListUpstreamMonitorModels() ([]model.UpstreamMonitorModel, error) {
 	providers, err := s.store.ListProviders()
 	if err != nil {
 		return nil, err
 	}
-	protocols := []string{"openai_responses", "anthropic_messages", "gemini", "openai_chat"}
+	protocols := []string{"openai_chat", "openai_responses", "anthropic_messages", "gemini"}
 	out := make([]model.UpstreamMonitorModel, 0)
 	for _, p := range providers {
 		if !p.Enabled {

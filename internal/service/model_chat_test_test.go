@@ -315,3 +315,45 @@ func TestUpstreamMonitorListAndBatch(t *testing.T) {
 		t.Fatalf("endpoint=%q, want %q", single.Endpoint, srv.URL+"/v1/messages")
 	}
 }
+
+// TestUpstreamMonitorListPrefersChatUnlessPinned guards the monitor probe
+// protocol default: an unpinned model must be probed via chat (the baseline
+// every provider claims) even when the provider explicitly enables responses,
+// while an explicit per-model pin still wins over the default.
+func TestUpstreamMonitorListPrefersChatUnlessPinned(t *testing.T) {
+	st, err := store.New(t.Context(), store.StoreDeps{DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	svc := New(st, nil, t.TempDir())
+	p, err := st.CreateProvider(model.ProviderInput{Name: "Monitor", BaseURL: "http://127.0.0.1:1", ResponsesEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.AddProviderModels(p.ID, []string{"plain-model", "pinned-responses"}); err != nil {
+		t.Fatal(err)
+	}
+	// Mirror production data: provider explicitly enables responses.
+	if err := st.SetProviderCapability(p.ID, "openai_responses", "native", true); err != nil {
+		t.Fatal(err)
+	}
+	// pinned-responses carries a full explicit pin: responses on, the rest off.
+	for proto, enabled := range map[string]bool{"openai_responses": true, "openai_chat": false, "anthropic_messages": false, "gemini": false} {
+		if err := st.SetModelCapability(p.ID, "pinned-responses", proto, "native", enabled); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	listed, err := svc.ListUpstreamMonitorModels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]string, len(listed))
+	for _, row := range listed {
+		got[row.ModelName] = row.Protocol
+	}
+	if len(got) != 2 || got["plain-model"] != "chat" || got["pinned-responses"] != "responses" {
+		t.Fatalf("listed=%+v, want plain-model=chat and pinned-responses=responses", listed)
+	}
+}
