@@ -538,6 +538,7 @@ func (s *Service) TestModelChat(providerID, modelName, protocol string, stream b
 			LatencyMs:    int(time.Since(start).Milliseconds()),
 			FinishReason: finishReason,
 			Error:        errMsg,
+			Endpoint:     chatURL,
 		}
 	}
 
@@ -577,6 +578,7 @@ func (s *Service) TestModelChat(providerID, modelName, protocol string, stream b
 			out = s.parseGenericStream(resp.Body, start)
 		}
 		out.HTTPStatus = resp.StatusCode
+		out.Endpoint = chatURL
 		return out, nil
 	}
 
@@ -601,6 +603,7 @@ func (s *Service) TestModelChat(providerID, modelName, protocol string, stream b
 		out = parseGenericNonStream(respBody, start)
 	}
 	out.HTTPStatus = resp.StatusCode
+	out.Endpoint = chatURL
 	return out, nil
 }
 
@@ -702,6 +705,7 @@ func (s *Service) ProbeUpstreamMonitorModel(row model.UpstreamMonitorSelection) 
 	}
 	r.HTTPStatus = probe.HTTPStatus
 	r.Response, r.Error, r.FirstByteLatencyMs, r.TotalLatencyMs = probe.Response, probe.Error, probe.FirstByteLatencyMs, probe.LatencyMs
+	r.Endpoint = probe.Endpoint
 	if probe.OK {
 		r.Status, r.Detail = "available", probe.Response
 	} else if strings.Contains(strings.ToLower(probe.Error), "empty") {
@@ -751,11 +755,19 @@ func parseGenericNonStream(body []byte, start time.Time) *model.ModelChatTestRes
 	if err := json.Unmarshal(body, &v); err != nil {
 		return &model.ModelChatTestResult{Error: fmt.Sprintf("parse response: %v", err), LatencyMs: int(time.Since(start).Milliseconds())}
 	}
+	latency := int(time.Since(start).Milliseconds())
 	text := genericText(v)
 	if text == "" {
-		return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: int(time.Since(start).Milliseconds())}
+		// Reasoning-only output still proves the model responded (e.g. the
+		// token budget was consumed by thinking before visible text).
+		if reasoning := strings.TrimSpace(genericReasoningText(v)); reasoning != "" {
+			return &model.ModelChatTestResult{OK: true, Response: reasoning, FirstByteLatencyMs: latency, LatencyMs: latency}
+		}
+		if genericIncompleteMaxTokens(v) {
+			return &model.ModelChatTestResult{OK: true, Response: incompleteMaxTokensNote, FirstByteLatencyMs: latency, LatencyMs: latency}
+		}
+		return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: latency}
 	}
-	latency := int(time.Since(start).Milliseconds())
 	return &model.ModelChatTestResult{OK: true, Response: text, FirstByteLatencyMs: latency, LatencyMs: latency}
 }
 func genericText(v interface{}) string {
@@ -783,11 +795,67 @@ func genericText(v interface{}) string {
 	walk(v)
 	return b.String()
 }
+
+// incompleteMaxTokensNote is returned as a successful probe response when the
+// model answered but spent the whole token budget on reasoning, so no visible
+// text was produced. It still proves the upstream is alive and responding.
+const incompleteMaxTokensNote = "(model responded, but the token limit was consumed by reasoning before visible output)"
+
+// genericReasoningText walks decoded JSON collecting reasoning/thinking text
+// that providers emit instead of visible output (Anthropic thinking blocks,
+// OpenAI-compatible reasoning_content, Responses reasoning summaries). Reasoning
+// output proves the model responded even when no visible content exists yet.
+func genericReasoningText(v interface{}) string {
+	var b strings.Builder
+	var walk func(interface{})
+	walk = func(x interface{}) {
+		switch q := x.(type) {
+		case map[string]interface{}:
+			for _, k := range []string{"thinking", "reasoning", "reasoning_content"} {
+				if z, ok := q[k].(string); ok {
+					b.WriteString(z)
+				}
+			}
+			for _, z := range q {
+				walk(z)
+			}
+		case []interface{}:
+			for _, z := range q {
+				walk(z)
+			}
+		}
+	}
+	walk(v)
+	return b.String()
+}
+
+// genericIncompleteMaxTokens reports whether decoded JSON is a Responses-style
+// terminal event marking the response incomplete because reasoning exhausted
+// the token budget (no visible output follows in that case).
+func genericIncompleteMaxTokens(v interface{}) bool {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	resp, ok := m["response"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	if status, _ := resp["status"].(string); status != "incomplete" {
+		return false
+	}
+	details, _ := resp["incomplete_details"].(map[string]interface{})
+	reason, _ := details["reason"].(string)
+	return reason == "max_output_tokens" || reason == "max_tokens"
+}
+
 func (s *Service) parseGenericStream(body io.Reader, start time.Time) *model.ModelChatTestResult {
 	cr := &countingReader{r: body}
 	scanner := bufio.NewScanner(io.LimitReader(cr, 256*1024))
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 	var b strings.Builder
+	var reasoningBuilder strings.Builder
+	sawIncompleteMaxTokens := false
 	firstByteMs := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -806,15 +874,36 @@ func (s *Service) parseGenericStream(body io.Reader, start time.Time) *model.Mod
 				}
 				b.WriteString(text)
 			}
+			if reasoning := genericReasoningText(v); reasoning != "" {
+				if firstByteMs == 0 {
+					firstByteMs = int(time.Since(start).Milliseconds())
+				}
+				if reasoningBuilder.Len()+len(reasoning) <= 64*1024 {
+					reasoningBuilder.WriteString(reasoning)
+				}
+			}
+			if genericIncompleteMaxTokens(v) {
+				sawIncompleteMaxTokens = true
+			}
 		}
 	}
 	if scanner.Err() != nil {
 		return &model.ModelChatTestResult{Error: scanner.Err().Error(), LatencyMs: int(time.Since(start).Milliseconds())}
 	}
-	if strings.TrimSpace(b.String()) == "" {
-		return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: int(time.Since(start).Milliseconds())}
+	latency := int(time.Since(start).Milliseconds())
+	if content := strings.TrimSpace(b.String()); content != "" {
+		return &model.ModelChatTestResult{OK: true, Response: b.String(), FirstByteLatencyMs: firstByteMs, LatencyMs: latency}
 	}
-	return &model.ModelChatTestResult{OK: true, Response: b.String(), FirstByteLatencyMs: firstByteMs, LatencyMs: int(time.Since(start).Milliseconds())}
+	// Reasoning-only output (or a token budget fully consumed by reasoning)
+	// still proves the model responded; report success instead of a
+	// misleading "empty response content".
+	if reasoning := strings.TrimSpace(reasoningBuilder.String()); reasoning != "" {
+		return &model.ModelChatTestResult{OK: true, Response: reasoningBuilder.String(), FirstByteLatencyMs: firstByteMs, LatencyMs: latency}
+	}
+	if sawIncompleteMaxTokens {
+		return &model.ModelChatTestResult{OK: true, Response: incompleteMaxTokensNote, FirstByteLatencyMs: firstByteMs, LatencyMs: latency}
+	}
+	return &model.ModelChatTestResult{Error: "empty response content", LatencyMs: latency}
 }
 
 func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.ModelChatTestResult {
@@ -823,7 +912,9 @@ func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.Mo
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
-				Content json.RawMessage `json:"content"`
+				Content          json.RawMessage `json:"content"`
+				ReasoningContent string          `json:"reasoning_content"`
+				Reasoning        string          `json:"reasoning"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -847,6 +938,17 @@ func (s *Service) parseChatNonStream(respBody []byte, start time.Time) *model.Mo
 	response := chatTestContentText(chatResp.Choices[0].Message.Content)
 	finishReason := chatResp.Choices[0].FinishReason
 	if strings.TrimSpace(response) == "" {
+		// Reasoning-only output still proves the model responded (the token
+		// budget was consumed by reasoning before visible content).
+		if reasoning := chatTestReasoningText(chatResp.Choices[0].Message.ReasoningContent, chatResp.Choices[0].Message.Reasoning); reasoning != "" {
+			return &model.ModelChatTestResult{
+				OK:                 true,
+				Response:           reasoning,
+				LatencyMs:          latencyMs(),
+				FirstByteLatencyMs: latencyMs(),
+				FinishReason:       finishReason,
+			}
+		}
 		return &model.ModelChatTestResult{
 			OK:           false,
 			Error:        emptyChatTestContentError(finishReason),
@@ -892,6 +994,16 @@ func chatTestContentText(raw json.RawMessage) string {
 	return builder.String()
 }
 
+// chatTestReasoningText returns the first non-empty reasoning payload.
+// Providers expose reasoning under reasoning_content (DeepSeek/GLM/QwQ style)
+// or reasoning; either proves the model responded when visible content is empty.
+func chatTestReasoningText(reasoningContent, reasoning string) string {
+	if strings.TrimSpace(reasoningContent) != "" {
+		return reasoningContent
+	}
+	return reasoning
+}
+
 func emptyChatTestContentError(finishReason string) string {
 	if finishReason == "length" {
 		return "model reached the max_tokens limit before producing visible content (usually consumed by reasoning); increase the model test token limit"
@@ -922,6 +1034,7 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 	reader := bufio.NewReader(cr)
 
 	var builder strings.Builder
+	var reasoningBuilder strings.Builder
 	finishReason := ""
 	firstByteMs := 0
 	for {
@@ -968,7 +1081,9 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content json.RawMessage `json:"content"`
+					Content          json.RawMessage `json:"content"`
+					ReasoningContent string          `json:"reasoning_content"`
+					Reasoning        string          `json:"reasoning"`
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
@@ -999,6 +1114,16 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 				}
 				builder.WriteString(delta)
 			}
+			// Reasoning deltas prove the model is alive even when the whole
+			// token budget is consumed before any visible content.
+			if reasoning := chatTestReasoningText(chunk.Choices[0].Delta.ReasoningContent, chunk.Choices[0].Delta.Reasoning); reasoning != "" {
+				if firstByteMs == 0 {
+					firstByteMs = latencyMs()
+				}
+				if reasoningBuilder.Len()+len(reasoning) <= maxContentBytes {
+					reasoningBuilder.WriteString(reasoning)
+				}
+			}
 		}
 
 		if errors.Is(err, io.EOF) {
@@ -1015,6 +1140,17 @@ func (s *Service) parseChatStream(body io.Reader, start time.Time) *model.ModelC
 		}
 	}
 	if content == "" {
+		// Reasoning-only output still proves the model responded (the token
+		// budget was consumed by reasoning before visible content).
+		if reasoning := strings.TrimSpace(reasoningBuilder.String()); reasoning != "" {
+			return &model.ModelChatTestResult{
+				OK:                 true,
+				Response:           reasoningBuilder.String(),
+				LatencyMs:          latencyMs(),
+				FirstByteLatencyMs: firstByteMs,
+				FinishReason:       finishReason,
+			}
+		}
 		return &model.ModelChatTestResult{
 			OK:           false,
 			Error:        emptyChatTestContentError(finishReason),

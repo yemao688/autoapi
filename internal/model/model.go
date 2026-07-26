@@ -168,6 +168,8 @@ type ModelChatTestResult struct {
 	FirstByteLatencyMs int    `json:"first_byte_latency_ms,omitempty"`
 	FinishReason       string `json:"finish_reason,omitempty"`
 	Error              string `json:"error,omitempty"`
+	// Endpoint is the full upstream URL the probe was sent to.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // UpstreamMonitorModel identifies one enabled upstream model that can be
@@ -197,6 +199,8 @@ type UpstreamMonitorResult struct {
 	Error              string `json:"error,omitempty"`
 	FirstByteLatencyMs int    `json:"first_byte_latency_ms"`
 	TotalLatencyMs     int    `json:"total_latency_ms"`
+	// Endpoint is the full upstream URL the probe was sent to.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 type UpstreamMonitorBatch struct {

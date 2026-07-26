@@ -39,13 +39,67 @@ func TestParseChatNonStreamContentForms(t *testing.T) {
 func TestParseChatStreamReasoningAndLength(t *testing.T) {
 	s := &Service{}
 	start := time.Now()
-	stream := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"hidden\"},\"finish_reason\":null}]}\n\n" +
-		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
-		"data: [DONE]\n\n"
-	result := s.parseChatStream(strings.NewReader(stream), start)
-	if result.OK || result.FinishReason != "length" || !strings.Contains(result.Error, "max_tokens") || !strings.Contains(result.Error, "reasoning") {
-		t.Fatalf("result=%+v", result)
-	}
+	t.Run("reasoning-only output still proves the model responded", func(t *testing.T) {
+		stream := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking hard\"},\"finish_reason\":null}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+			"data: [DONE]\n\n"
+		result := s.parseChatStream(strings.NewReader(stream), start)
+		if !result.OK || result.Response != "thinking hard" || result.FinishReason != "length" {
+			t.Fatalf("result=%+v", result)
+		}
+	})
+	t.Run("reasoning_content variant counts too", func(t *testing.T) {
+		stream := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"deep thought\"}}]}\n\n" +
+			"data: [DONE]\n\n"
+		result := s.parseChatStream(strings.NewReader(stream), start)
+		if !result.OK || result.Response != "deep thought" {
+			t.Fatalf("result=%+v", result)
+		}
+	})
+	t.Run("length without any output stays diagnostic", func(t *testing.T) {
+		stream := "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+			"data: [DONE]\n\n"
+		result := s.parseChatStream(strings.NewReader(stream), start)
+		if result.OK || result.FinishReason != "length" || !strings.Contains(result.Error, "max_tokens") || !strings.Contains(result.Error, "reasoning") {
+			t.Fatalf("result=%+v", result)
+		}
+	})
+}
+
+func TestParseGenericStreamReasoningOnly(t *testing.T) {
+	s := &Service{}
+	t.Run("anthropic thinking delta counts as a response", func(t *testing.T) {
+		stream := strings.NewReader(
+			"event: content_block_delta\n" +
+				"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"pondering\"}}\n\n" +
+				"event: message_stop\n" +
+				"data: {\"type\":\"message_stop\"}\n\n",
+		)
+		result := s.parseGenericStream(stream, time.Now())
+		if !result.OK || result.Response != "pondering" {
+			t.Fatalf("result=%+v", result)
+		}
+	})
+	t.Run("responses incomplete from max_output_tokens is alive", func(t *testing.T) {
+		stream := strings.NewReader(
+			"data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n" +
+				"data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
+		)
+		result := s.parseGenericStream(stream, time.Now())
+		if !result.OK || !strings.Contains(result.Response, "reasoning") {
+			t.Fatalf("result=%+v", result)
+		}
+	})
+	t.Run("truly empty stream still reports empty content", func(t *testing.T) {
+		stream := strings.NewReader(
+			"data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+		)
+		result := s.parseGenericStream(stream, time.Now())
+		if result.OK || !strings.Contains(result.Error, "empty response content") {
+			t.Fatalf("result=%+v", result)
+		}
+	})
 }
 
 func TestParseResponsesStreamDelta(t *testing.T) {
@@ -256,5 +310,8 @@ func TestUpstreamMonitorListAndBatch(t *testing.T) {
 	single, err := svc.ProbeUpstreamMonitorModel(model.UpstreamMonitorSelection{ProviderID: p.ID, ModelName: "message-model", Protocol: "messages"})
 	if err != nil || single.Status != "available" || single.HTTPStatus != http.StatusOK || single.Response != "message ok" {
 		t.Fatalf("single=%+v err=%v", single, err)
+	}
+	if single.Endpoint != srv.URL+"/v1/messages" {
+		t.Fatalf("endpoint=%q, want %q", single.Endpoint, srv.URL+"/v1/messages")
 	}
 }

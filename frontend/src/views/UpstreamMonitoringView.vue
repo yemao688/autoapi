@@ -252,7 +252,7 @@ async function runCheck() {
 
 async function retest(target: model.UpstreamMonitorModel) {
   const key = monitorKey(target)
-  if (running.value || retestingKeys.value.size > 0) return
+  if (running.value || retestingKeys.value.has(key)) return
 
   retestingKeys.value = new Set(retestingKeys.value).add(key)
   statuses.value = { ...statuses.value, [key]: 'checking' }
@@ -399,7 +399,7 @@ onMounted(() => {
                       <button
                         class="btn btn-icon monitor-retest"
                         type="button"
-                        :disabled="running || retestingKeys.size > 0"
+                        :disabled="running || retestingKeys.has(monitorKey(target))"
                         :aria-busy="retestingKeys.has(monitorKey(target))"
                         :aria-label="t('monitoring.retest')"
                         :title="t('monitoring.retest')"
@@ -419,6 +419,10 @@ onMounted(() => {
                   <tr v-if="expandedKey === monitorKey(target)" class="monitor-detail-row">
                     <td colspan="8">
                       <div class="monitor-detail">
+                        <div v-if="resultFor(target)?.endpoint" class="monitor-detail-endpoint">
+                          <span class="field-label">{{ t('monitoring.endpoint') }}</span>
+                          <span class="text-mono" :title="resultFor(target)?.endpoint">{{ resultFor(target)?.endpoint }}</span>
+                        </div>
                         <div class="row-between monitor-detail-heading">
                           <span class="field-label">{{ t('monitoring.returnedResult') }}</span>
                           <span v-if="resultFor(target)?.detail && resultFor(target)?.detail !== resultFor(target)?.response" class="text-muted monitor-detail-error">{{ resultFor(target)?.detail }}</span>
@@ -511,6 +515,18 @@ onMounted(() => {
   background: var(--bg);
 }
 .monitor-detail-heading { margin-bottom: 8px; }
+.monitor-detail-endpoint {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.monitor-detail-endpoint .field-label { margin: 0; white-space: nowrap; }
+.monitor-detail-endpoint .text-mono { min-width: 0; overflow-wrap: anywhere; word-break: break-all; }
 .monitor-detail-error { max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .monitor-detail .test-response {
   width: 100%;

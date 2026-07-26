@@ -655,6 +655,7 @@ export namespace model {
 	    first_byte_latency_ms?: number;
 	    finish_reason?: string;
 	    error?: string;
+	    endpoint?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelChatTestResult(source);
@@ -669,6 +670,7 @@ export namespace model {
 	        this.first_byte_latency_ms = source["first_byte_latency_ms"];
 	        this.finish_reason = source["finish_reason"];
 	        this.error = source["error"];
+	        this.endpoint = source["endpoint"];
 	    }
 	}
 	export class ModelRanking {
@@ -1399,6 +1401,7 @@ export namespace model {
 	    error?: string;
 	    first_byte_latency_ms: number;
 	    total_latency_ms: number;
+	    endpoint?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpstreamMonitorResult(source);
@@ -1416,6 +1419,7 @@ export namespace model {
 	        this.error = source["error"];
 	        this.first_byte_latency_ms = source["first_byte_latency_ms"];
 	        this.total_latency_ms = source["total_latency_ms"];
+	        this.endpoint = source["endpoint"];
 	    }
 	}
 	export class UpstreamMonitorBatch {

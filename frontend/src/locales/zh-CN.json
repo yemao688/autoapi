@@ -26,6 +26,7 @@
     "retry": "重试",
     "empty": "暂无可监测的模型",
     "runHint": "点击“并发检测”开始检查已启用的模型。",
+    "endpoint": "测试端点",
     "returnedResult": "返回结果",
     "noResult": "暂无返回结果",
     "showDetails": "显示详情",
