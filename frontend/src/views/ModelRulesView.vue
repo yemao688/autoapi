@@ -153,6 +153,8 @@ async function loadBreakerStatuses() {
   }
 }
 
+usePolling(loadBreakerStatuses, 5000)
+
 async function resetTargetBreakers() {
   const ok = await confirm.open({
     title: t('modelRules.breaker.resetTitle'),
@@ -630,7 +632,6 @@ function closeModal() {
 
 onMounted(() => {
   void loadRules()
-  usePolling(loadBreakerStatuses, 5000)
   loadProviders()
   loadSettings().catch((e: any) => toast.push(t('toast.loadSettingsFailed') + ': ' + (e?.message || e?.toString() || ''), 'error'))
 })

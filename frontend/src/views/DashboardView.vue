@@ -11,7 +11,6 @@ import { useCompactNumber } from '@/composables/useCompactNumber'
 
 const { t, locale } = useI18n()
 
-useRelativeTime()
 const { download } = useExportDownload()
 const toast = useToast()
 const { format: compact } = useCompactNumber()
