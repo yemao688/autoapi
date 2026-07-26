@@ -39,7 +39,21 @@ const saving = ref(false)
 const deleting = ref(false)
 const testingIds = ref<Set<string>>(new Set())
 
-const models = ref<model.Model[]>([])
+type EditableModelRow = {
+  model: model.Model
+  originalName: string
+  originalRequestPrice: number
+  originalApiType: ModelApiType
+  name: string
+  requestPrice: string
+  apiType: ModelApiType
+  capabilitiesLoading: boolean
+  saving: boolean
+  deleting: boolean
+}
+
+const modelRows = ref<EditableModelRow[]>([])
+const models = computed(() => modelRows.value.map((row) => row.model))
 const testingModelIds = ref<Set<string>>(new Set())
 const fetchingModels = ref(false)
 
@@ -64,16 +78,6 @@ const selectedModelNames = ref<Set<string>>(new Set())
 // Manual add inline input
 const manualAddVisible = ref(false)
 const manualAddName = ref('')
-
-// Model name and per-call price are edited together through the atomic backend API.
-const modelEditOpen = ref(false)
-const editingModel = ref<model.Model | null>(null)
-const modelEditName = ref('')
-const modelEditPrice = ref('0.1')
-const modelEditSaving = ref(false)
-const modelCapabilitiesLoading = ref(false)
-const modelCapabilitiesError = ref('')
-const modelApiType = ref<ModelApiType>('openai_chat')
 
 const modelApiTypeOptions: Array<{ value: ModelApiType; labelKey: string }> = [
   { value: 'openai_chat', labelKey: 'providers.modal.apiTypeOpenAICompatible' },
@@ -194,18 +198,85 @@ async function refreshModels() {
     // Race-condition guard: only apply if the modal is still open for the
     // same provider.
     if (editingId.value === idAtCall && modalOpen.value) {
-      models.value = list
-      // If the row being edited disappeared (deleted / renamed), bail out.
-      const editedModelId = editingModel.value?.id
-      if (editedModelId && !list.find((m) => m.id === editedModelId)) {
-        closeModelEdit()
-      }
+      await setModelRows(list, idAtCall)
     }
     // Also refresh the card's badge map for this provider.
     modelsMap.value = { ...modelsMap.value, [idAtCall]: list }
   } catch {
     // ignore — keep stale list visible
   }
+}
+
+function createModelRow(m: model.Model): EditableModelRow {
+  const requestPrice = Number.isFinite(m.request_price) ? m.request_price : 0.1
+  return {
+    model: m,
+    originalName: m.name,
+    originalRequestPrice: requestPrice,
+    originalApiType: 'openai_chat',
+    name: m.name,
+    requestPrice: String(requestPrice),
+    apiType: 'openai_chat',
+    capabilitiesLoading: true,
+    saving: false,
+    deleting: false,
+  }
+}
+
+function modelRowIsDirty(row: EditableModelRow) {
+  return row.name.trim() !== row.originalName
+    || Number(row.requestPrice) !== row.originalRequestPrice
+    || row.apiType !== row.originalApiType
+}
+
+function modelRowError(row: EditableModelRow) {
+  if (!row.name.trim()) return t('providers.modal.modelNameRequired')
+  const price = Number(row.requestPrice)
+  if (!Number.isFinite(price) || price < 0) return t('providers.modal.invalidModelPrice')
+  if (modelRows.value.some((candidate) => candidate !== row && candidate.name.trim() === row.name.trim())) {
+    return t('providers.modal.alreadyAdded')
+  }
+  return ''
+}
+
+async function loadModelRowCapabilities(row: EditableModelRow, providerId: string, modelName: string) {
+  row.capabilitiesLoading = true
+  try {
+    const capabilities = await api.listModelCapabilities(providerId, modelName)
+    if (editingId.value !== providerId || !modalOpen.value || !modelRows.value.includes(row)) return
+    // Do not replace a selection the user has already changed while the
+    // capability request was in flight.
+    if (row.apiType === row.originalApiType) {
+      const apiType = resolveModelApiType(capabilities)
+      row.apiType = apiType
+      row.originalApiType = apiType
+    }
+  } catch {
+    // A missing capability record means OpenAI Chat. Keep other rows usable
+    // when a single lookup fails.
+    if (editingId.value === providerId && modalOpen.value && modelRows.value.includes(row)) {
+      row.apiType = 'openai_chat'
+      row.originalApiType = 'openai_chat'
+    }
+  } finally {
+    if (editingId.value === providerId && modelRows.value.includes(row)) {
+      row.capabilitiesLoading = false
+    }
+  }
+}
+
+async function setModelRows(list: model.Model[], providerId: string) {
+  const existing = new Map(modelRows.value.map((row) => [row.model.id, row]))
+  const rows = list.map((m) => {
+    const current = existing.get(m.id)
+    if (current && (modelRowIsDirty(current) || current.saving || current.deleting)) {
+      current.model = m
+      return current
+    }
+    return createModelRow(m)
+  })
+  modelRows.value = rows
+  await Promise.all(rows.map((row) => loadModelRowCapabilities(row, providerId, row.model.name)))
 }
 
 async function testOne(id: string) {
@@ -367,27 +438,6 @@ async function confirmManualAdd() {
   }
 }
 
-function startEditModel(m: model.Model) {
-  if (mutationBusy.value) return
-  editingModel.value = m
-  modelEditName.value = m.name
-  modelEditPrice.value = Number.isFinite(m.request_price) ? String(m.request_price) : '0.1'
-  modelApiType.value = 'openai_chat'
-  modelCapabilitiesError.value = ''
-  modelEditOpen.value = true
-  void loadModelCapabilities(m.name)
-}
-
-function closeModelEdit() {
-  modelEditOpen.value = false
-  editingModel.value = null
-  modelEditName.value = ''
-  modelEditPrice.value = '0.1'
-  modelCapabilitiesLoading.value = false
-  modelCapabilitiesError.value = ''
-  modelApiType.value = 'openai_chat'
-}
-
 function resolveModelApiType(capabilities: model.ModelCapability[]): ModelApiType {
   for (const protocol of capabilityProtocolPriority) {
     const match = capabilities.find((capability) => capability.feature === 'native' && capability.protocol === protocol && capability.enabled)
@@ -396,104 +446,69 @@ function resolveModelApiType(capabilities: model.ModelCapability[]): ModelApiTyp
   return 'openai_chat'
 }
 
-async function resolveModelApiTypeForTest(modelName: string): Promise<ModelApiType> {
+async function resolveModelApiTypeForTest(m: model.Model): Promise<ModelApiType> {
   if (!editingId.value) return 'openai_chat'
-  if (editingModel.value?.name === modelName && modelEditOpen.value) {
-    return modelApiType.value
-  }
-  const capabilities = await api.listModelCapabilities(editingId.value, modelName)
+  const row = modelRows.value.find((candidate) => candidate.model.id === m.id)
+  if (row) return row.apiType
+  const capabilities = await api.listModelCapabilities(editingId.value, m.name)
   return resolveModelApiType(capabilities)
 }
 
-async function loadModelCapabilities(modelName: string) {
-  if (!editingId.value) return
-  const providerId = editingId.value
-  const modelId = editingModel.value?.id
-  modelCapabilitiesLoading.value = true
-  modelCapabilitiesError.value = ''
-  try {
-    const capabilities = await api.listModelCapabilities(providerId, modelName)
-    if (!modelEditOpen.value || editingId.value !== providerId || editingModel.value?.id !== modelId) return
-    const selected = resolveModelApiType(capabilities)
-    modelApiType.value = selected
-  } catch (e: any) {
-    if (!modelEditOpen.value || editingId.value !== providerId || editingModel.value?.id !== modelId) return
-    modelCapabilitiesError.value = t('providers.modal.capabilitiesLoadFailed', { error: e?.message || String(e) })
-    toast.push(modelCapabilitiesError.value, 'error')
-  } finally {
-    if (editingId.value === providerId && editingModel.value?.id === modelId) {
-      modelCapabilitiesLoading.value = false
-    }
-  }
-}
-
-const modelEditPriceNumber = computed(() => Number(modelEditPrice.value))
-const modelEditError = computed(() => {
-  if (!modelEditName.value.trim()) return t('providers.modal.modelNameRequired')
-  if (!Number.isFinite(modelEditPriceNumber.value) || modelEditPriceNumber.value < 0) return t('providers.modal.invalidModelPrice')
-  return ''
-})
-
-async function saveModelEdit() {
-  if (mutationBusy.value || modelEditSaving.value || !editingId.value || !editingModel.value) return
-  const oldName = editingModel.value.name
-  const newName = modelEditName.value.trim()
-  if (modelEditError.value) {
-    toast.push(modelEditError.value, 'error')
+async function saveModelRow(row: EditableModelRow) {
+  if (row.saving || row.deleting || row.capabilitiesLoading || !editingId.value) return
+  const error = modelRowError(row)
+  if (error) {
+    toast.push(error, 'error')
     return
   }
-  if (models.value.some((m) => m.name === newName && m.id !== editingModel.value?.id)) {
-    toast.push(t('providers.modal.alreadyAdded'), 'error')
-    return
-  }
-  mutationBusy.value = true
-  modelEditSaving.value = true
+  const name = row.name.trim()
+  const requestPrice = Number(row.requestPrice)
+  row.saving = true
   let capabilitySaveStarted = false
   try {
-    await api.updateProviderModel({ provider_id: editingId.value, old_name: oldName, name: newName, request_price: modelEditPriceNumber.value })
-    // Keep the renamed model in local state if a later capability write fails.
-    editingModel.value.name = newName
-    const row = models.value.find((m) => m.id === editingModel.value?.id)
-    if (row) row.name = newName
+    if (name !== row.originalName || requestPrice !== row.originalRequestPrice) {
+      await api.updateProviderModel({ provider_id: editingId.value, old_name: row.originalName, name, request_price: requestPrice })
+      // A capability failure can be retried after a successful rename.
+      row.model.name = name
+      row.originalName = name
+      row.originalRequestPrice = requestPrice
+    }
     for (const protocol of modelApiTypeOptions) {
       capabilitySaveStarted = true
-      await api.setModelCapability(editingId.value, newName, protocol.value, 'native', protocol.value === modelApiType.value)
+      await api.setModelCapability(editingId.value, name, protocol.value, 'native', protocol.value === row.apiType)
     }
-    toast.push(t('providers.modal.modelUpdated', { name: newName }), 'success')
-    closeModelEdit()
+    row.originalApiType = row.apiType
+    toast.push(t('providers.modal.modelUpdated', { name }), 'success')
     await refreshModels()
   } catch (e: any) {
-    const error = e?.message || String(e)
+    const messageError = e?.message || String(e)
     const message = capabilitySaveStarted
-      ? t('providers.modal.capabilitiesSaveFailed', { error })
-      : t('providers.modal.modelSaveFailed', { error })
-    modelCapabilitiesError.value = message
+      ? t('providers.modal.capabilitiesSaveFailed', { error: messageError })
+      : t('providers.modal.modelSaveFailed', { error: messageError })
     toast.push(message, 'error')
   } finally {
-    modelEditSaving.value = false
-    mutationBusy.value = false
+    row.saving = false
   }
 }
 
-async function deleteModelConfirm(m: model.Model) {
-  if (mutationBusy.value) return
+async function deleteModelConfirm(row: EditableModelRow) {
+  if (row.saving || row.deleting) return
   const ok = await confirm.open({
     title: t('providers.modal.deleteModel'),
-    message: t('providers.modal.deleteModelConfirm', { name: m.name }),
+    message: t('providers.modal.deleteModelConfirm', { name: row.model.name }),
     confirmText: t('common.delete'),
     danger: true,
   })
   if (!ok || !editingId.value) return
-  mutationBusy.value = true
+  row.deleting = true
   try {
-    await api.deleteModel(editingId.value, m.name)
-    toast.push(t('providers.modal.modelDeleted', { name: m.name }), 'success')
-    if (editingModel.value?.id === m.id) closeModelEdit()
+    await api.deleteModel(editingId.value, row.model.name)
+    toast.push(t('providers.modal.modelDeleted', { name: row.model.name }), 'success')
     await refreshModels()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
   } finally {
-    mutationBusy.value = false
+    row.deleting = false
   }
 }
 
@@ -509,7 +524,7 @@ async function clearAllModels() {
   mutationBusy.value = true
   try {
     await api.clearProviderModels(editingId.value)
-    models.value = []
+    modelRows.value = []
     toast.push(t('providers.modelsCleared'), 'success')
   } catch (e: any) {
     toast.push(t('providers.modelsClearFailed') + ': ' + (e?.message || ''), 'error')
@@ -532,7 +547,7 @@ async function runModelToastTest(m: model.Model) {
   if (!editingId.value) return
   testingModelIds.value.add(m.id)
   try {
-    const apiType = await resolveModelApiTypeForTest(m.name)
+    const apiType = await resolveModelApiTypeForTest(m)
     await runModelTest({
       providerId: editingId.value,
       modelName: m.name,
@@ -553,7 +568,7 @@ function resetModalState() {
   selectedModelNames.value = new Set()
   manualAddVisible.value = false
   manualAddName.value = ''
-  closeModelEdit()
+  modelRows.value = []
   keyVisible.value = false
   keyDirty.value = false
   originalKey.value = ''
@@ -586,7 +601,7 @@ function openEdit(provider: model.Provider) {
     gemini_enabled: provider.gemini_enabled,
   }
   loadingKey.value = true
-  models.value = []
+  modelRows.value = []
   modalOpen.value = true
 
   const gen = modalGeneration.value
@@ -613,13 +628,13 @@ function openEdit(provider: model.Provider) {
   // Refresh the local model list.
   void api
     .listModels(provider.id)
-    .then((list) => {
+    .then(async (list) => {
       if (modalGeneration.value !== gen) return
-      models.value = list
+      await setModelRows(list, provider.id)
     })
     .catch(() => {
       if (modalGeneration.value === gen) {
-        models.value = []
+        modelRows.value = []
       }
     })
 }
@@ -668,11 +683,11 @@ async function saveProvider() {
       try {
         const list = await api.listModels(created.id)
         if (modalGeneration.value === gen && editingId.value === created.id) {
-          models.value = list
+          await setModelRows(list, created.id)
         }
       } catch {
         if (modalGeneration.value === gen && editingId.value === created.id) {
-          models.value = []
+          modelRows.value = []
         }
       }
       toast.push(t('providers.modal.createdCanManage'), 'success')
@@ -687,7 +702,7 @@ async function saveProvider() {
 function closeModal() {
   modalGeneration.value++
   modalOpen.value = false
-  models.value = []
+  modelRows.value = []
   testingModelIds.value.clear()
   form.value.upstream_key = ''
   resetModalState()
@@ -986,51 +1001,84 @@ onMounted(() => {
               <thead>
                 <tr>
                   <th>{{ t('providers.modal.model') }}</th>
-                  <th class="right">{{ t('providers.modal.price') }}</th>
+                  <th>{{ t('providers.modal.price') }}</th>
+                  <th>{{ t('providers.modal.apiType') }}</th>
                   <th class="right">{{ t('providers.modal.enabled') }}</th>
                   <th></th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="m in models" :key="m.id">
+                <tr v-for="row in modelRows" :key="row.model.id" :class="{ 'model-row-dirty': modelRowIsDirty(row) }">
                   <td>
-                    <div class="model-name">{{ m.name }}</div>
+                    <input
+                      v-model="row.name"
+                      class="model-inline-input mono"
+                      autocomplete="off"
+                      :aria-label="t('providers.modal.modelName')"
+                      :disabled="row.saving || row.deleting"
+                      @keydown.enter="saveModelRow(row)"
+                    >
+                    <div v-if="modelRowError(row)" class="model-row-error" role="alert">{{ modelRowError(row) }}</div>
                     <div class="model-owner">{{ currentProviderName }}</div>
                   </td>
-                  <td class="num">${{ (Number.isFinite(m.request_price) ? m.request_price : 0.1).toFixed(4) }} / {{ t('providers.modal.call') }}</td>
+                  <td>
+                    <div class="model-price-control">
+                      <span aria-hidden="true">$</span>
+                      <input
+                        v-model="row.requestPrice"
+                        class="model-inline-input model-price-input mono"
+                        type="number"
+                        min="0"
+                        step="any"
+                        inputmode="decimal"
+                        :aria-label="t('providers.modal.price')"
+                        :disabled="row.saving || row.deleting"
+                        @keydown.enter="saveModelRow(row)"
+                      >
+                    </div>
+                  </td>
+                  <td>
+                    <select
+                      v-model="row.apiType"
+                      class="select model-inline-select"
+                      :aria-label="t('providers.modal.apiType')"
+                      :disabled="row.saving || row.deleting || row.capabilitiesLoading"
+                    >
+                      <option v-for="option in modelApiTypeOptions" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
+                    </select>
+                    <div v-if="row.capabilitiesLoading" class="model-capabilities-loading">{{ t('providers.modal.loadingCapabilities') }}</div>
+                  </td>
                   <td class="right">
                     <label class="toggle">
-                      <input type="checkbox" :checked="m.active" @change="toggleModelActive(m)">
+                      <input type="checkbox" :checked="row.model.active" :disabled="row.saving || row.deleting" @change="toggleModelActive(row.model)">
                       <span class="toggle-slider blue"></span>
                     </label>
                   </td>
                   <td class="right">
                     <div class="row" style="gap: 4px; justify-content: flex-end;">
-                      <button class="btn btn-icon" :disabled="testingModelIds.has(m.id)" :title="t('testModel.title')" :aria-label="t('testModel.title')" @click="runModelToastTest(m)">
+                      <button class="btn btn-icon" :disabled="testingModelIds.has(row.model.id) || row.saving || row.deleting" :title="t('testModel.title')" :aria-label="t('testModel.title')" @click="runModelToastTest(row.model)">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                       </button>
                     </div>
                   </td>
                   <td class="right">
-                    <DropdownMenu :menu-id="`model-${m.id}`" :min-width="140">
-                      <template #trigger="{ toggle, open }">
-                        <button
-                          class="btn btn-icon"
-                          :title="t('providers.more')"
-                          :aria-expanded="open"
-                          aria-haspopup="menu"
-                          :aria-label="t('providers.moreActions', { name: m.name })"
-                          @click="toggle"
-                        >
-                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-                        </button>
-                      </template>
-                      <template #menu="{ close }">
-                        <button class="dropdown-item" role="menuitem" @click="startEditModel(m); close()">{{ t('providers.modal.editModel') }}</button>
-                        <button class="dropdown-item danger" role="menuitem" @click="deleteModelConfirm(m); close()">{{ t('providers.modal.deleteModel') }}</button>
-                      </template>
-                    </DropdownMenu>
+                    <div class="model-row-actions">
+                      <button
+                        type="button"
+                        class="btn btn-primary"
+                        :disabled="row.saving || row.deleting || row.capabilitiesLoading || !!modelRowError(row)"
+                        :aria-label="t('providers.modal.saveModelRow', { name: row.name || row.model.name })"
+                        @click="saveModelRow(row)"
+                      >{{ row.saving ? t('common.processing') : t('common.save') }}</button>
+                      <button
+                        type="button"
+                        class="btn btn-danger-text"
+                        :disabled="row.saving || row.deleting"
+                        :aria-label="t('providers.modal.deleteModelRow', { name: row.model.name })"
+                        @click="deleteModelConfirm(row)"
+                      >{{ row.deleting ? t('common.processing') : t('common.delete') }}</button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -1041,54 +1089,6 @@ onMounted(() => {
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
           <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? t('common.processing') : (modalMode === 'add' ? t('providers.modal.createAndContinue') : t('common.save')) }}</button>
-        </div>
-      </div>
-    </div>
-  </Teleport>
-
-  <!-- Focused model editor: pricing belongs to the model catalog, not a separate screen. -->
-  <Teleport to="body">
-    <div v-if="modelEditOpen" class="modal-overlay" @click.self="closeModelEdit">
-      <div class="modal-card modal-card-scroll" role="dialog" aria-modal="true" :aria-label="t('providers.modal.editModel')">
-        <div class="modal-title">{{ t('providers.modal.editModel') }}</div>
-        <p class="field-help">{{ t('providers.modal.editModelHelp') }}</p>
-        <div class="field">
-          <label class="field-label" for="model-edit-name">{{ t('providers.modal.modelName') }}</label>
-          <input id="model-edit-name" v-model="modelEditName" class="input mono" autocomplete="off" @keydown.enter="saveModelEdit" @keydown.escape="closeModelEdit">
-        </div>
-        <div class="field">
-          <label class="field-label" for="model-edit-price">{{ t('providers.modal.price') }}</label>
-          <div class="row" style="gap: 8px;">
-            <span class="text-muted">$</span>
-            <input id="model-edit-price" v-model="modelEditPrice" class="input mono" type="number" min="0" step="any" inputmode="decimal" @keydown.enter="saveModelEdit" @keydown.escape="closeModelEdit">
-            <span class="text-muted" style="white-space: nowrap;">{{ t('providers.modal.perCall') }}</span>
-          </div>
-          <div v-if="modelEditError" class="field-error" role="alert">{{ modelEditError }}</div>
-        </div>
-        <div class="field model-capabilities-field">
-          <div class="row-between" style="margin-bottom: 6px;">
-            <label class="field-label" style="margin: 0;">{{ t('providers.modal.apiType') }}</label>
-            <span v-if="modelCapabilitiesLoading" class="text-muted" style="font-size: 12px;">{{ t('providers.modal.loadingCapabilities') }}</span>
-          </div>
-          <div class="field-help" :id="`model-native-apis-help-${editingModel?.id || 'model'}`">{{ t('providers.modal.apiTypeHelp') }}</div>
-          <div class="model-capabilities" :aria-busy="modelCapabilitiesLoading">
-            <div class="model-capability-row model-capability-row-single">
-              <select
-                v-model="modelApiType"
-                class="select model-capability-select"
-                :aria-label="t('providers.modal.apiType')"
-                :aria-describedby="`model-native-apis-help-${editingModel?.id || 'model'}`"
-                :disabled="modelEditSaving || modelCapabilitiesLoading"
-              >
-                <option v-for="option in modelApiTypeOptions" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
-              </select>
-            </div>
-          </div>
-          <div v-if="modelCapabilitiesError" class="field-error" role="alert">{{ modelCapabilitiesError }}</div>
-        </div>
-        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
-          <button class="btn btn-secondary" @click="closeModelEdit">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" :disabled="!!modelEditError || modelEditSaving" @click="saveModelEdit">{{ modelEditSaving ? t('common.processing') : t('common.save') }}</button>
         </div>
       </div>
     </div>
@@ -1149,50 +1149,85 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.model-capabilities-field {
-  padding: 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+.model-table {
+  min-width: 780px;
 }
-.model-capabilities {
-  margin-top: 10px;
-  overflow: hidden;
-  border: 1px solid var(--border);
+.model-table td {
+  vertical-align: top;
+}
+.model-row-dirty {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.model-inline-input,
+.model-inline-select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.model-inline-input {
+  padding: 5px 7px;
+}
+.model-inline-input:hover:not(:disabled),
+.model-inline-select:hover:not(:disabled) {
+  border-color: var(--border);
   background: var(--surface);
 }
-.model-capability-row {
+.model-inline-input:focus,
+.model-inline-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.model-inline-input:disabled,
+.model-inline-select:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+.model-price-control {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 42px;
-  padding: 6px 10px;
-}
-.model-capability-row-single {
-  justify-content: flex-start;
-}
-.model-capability-row + .model-capability-row {
-  border-top: 1px solid var(--border);
-}
-.model-capability-select {
-  flex: 0 0 100%;
-  min-width: 0;
-  padding-top: 5px;
-  padding-bottom: 5px;
+  gap: 3px;
+  min-width: 112px;
+  color: var(--muted);
   font-size: 12px;
 }
-@media (max-width: 520px) {
-  .model-capability-row {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .model-capability-select {
-    flex-basis: auto;
-    width: 100%;
-  }
+.model-price-input {
+  min-width: 0;
+}
+.model-inline-select {
+  min-width: 156px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.model-row-error,
+.model-capabilities-loading {
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+.model-row-error {
+  color: var(--negative);
+}
+.model-capabilities-loading {
+  color: var(--muted);
+}
+.model-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 112px;
+}
+.model-row-actions .btn {
+  min-height: 30px;
+  padding: 4px 9px;
+  font-size: 11.5px;
 }
 .btn-danger-text {
   background: transparent;

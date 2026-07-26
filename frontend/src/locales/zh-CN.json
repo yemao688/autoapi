@@ -468,6 +468,8 @@
       "modelAdded": "已添加模型 {name}",
       "modelDeleted": "已删除模型 {name}",
       "modelUpdated": "模型已更新：{name}",
+      "saveModelRow": "保存模型 {name}",
+      "deleteModelRow": "删除模型 {name}",
       "editModel": "编辑模型",
       "editModelHelp": "设置客户端可见的名称，以及单次上游调用的美元价格。",
       "modelName": "模型名称",

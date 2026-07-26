@@ -468,6 +468,8 @@
       "modelAdded": "Added model {name}",
       "modelDeleted": "Deleted model {name}",
       "modelUpdated": "Model updated: {name}",
+      "saveModelRow": "Save model {name}",
+      "deleteModelRow": "Delete model {name}",
       "editModel": "Edit model",
       "editModelHelp": "Set the client-facing name and the USD price for one upstream call.",
       "modelName": "Model name",
