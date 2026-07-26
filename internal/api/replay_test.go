@@ -45,6 +45,52 @@ func (s replayMetricsStub) CurrentSnapshot(k model.TargetMetricKey) metrics.Snap
 	return out
 }
 
+func TestReplayLogUsesRecordedChainEndpoint(t *testing.T) {
+	rule := &model.ModelRule{ID: "r", Name: "rule", Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", Tier: 1, Enabled: true}}}
+	log := &model.RequestLog{ID: "log", RouteID: "r", RequestURI: "/v1/chat/completions", Chain: []model.RequestLogChainEntry{{TargetID: "t", ProviderID: "p", ModelName: "m", Endpoint: "/v1/messages", Status: "success", UpstreamStarted: true, RequestCostAvailable: true}}}
+	app := &App{deps: Deps{Store: &replayStoreStub{log: log, rule: rule, providers: map[string]*model.Provider{"p": {ID: "p"}}, models: map[string]*model.Model{}}, Metrics: replayMetricsStub{snapshot: metrics.Snapshot{Requests: 3}}}}
+
+	got, err := app.ReplayLog("log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Endpoint != "/v1/messages" || got.EndpointAssumed {
+		t.Fatalf("endpoint=%q assumed=%v", got.Endpoint, got.EndpointAssumed)
+	}
+	if got.Attempts[0].Attempt.Endpoint != "/v1/messages" {
+		t.Fatalf("attempt endpoint=%q", got.Attempts[0].Attempt.Endpoint)
+	}
+	if got.Attempts[0].Score.Metrics.Key.Endpoint != "/v1/messages" {
+		t.Fatalf("metrics key=%+v", got.Attempts[0].Score.Metrics.Key)
+	}
+}
+
+func TestReplayLogSynthesizesLegacyAttemptWhenChainMissing(t *testing.T) {
+	rule := &model.ModelRule{ID: "r", Name: "rule", Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", Tier: 2, Enabled: true}}}
+	log := &model.RequestLog{ID: "legacy", RouteID: "r", RouteLabel: "rule", ProviderID: "p", ProviderName: "Provider", Model: "m", RequestURI: "/v1/messages", StatusCode: 499, Error: "client disconnected"}
+	app := &App{deps: Deps{Store: &replayStoreStub{log: log, rule: rule, providers: map[string]*model.Provider{"p": {ID: "p", Name: "Provider"}}, models: map[string]*model.Model{}}, Metrics: replayMetricsStub{snapshot: metrics.Snapshot{Attempts: 2, ClientAborts: 1}}}}
+
+	got, err := app.ReplayLog("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Attempts) != 1 {
+		t.Fatalf("attempts=%+v", got.Attempts)
+	}
+	if got.Endpoint != "/v1/messages" || !got.EndpointAssumed {
+		t.Fatalf("endpoint=%q assumed=%v", got.Endpoint, got.EndpointAssumed)
+	}
+	if got.Attempts[0].Attempt.Status != "client_abort" {
+		t.Fatalf("attempt=%+v", got.Attempts[0].Attempt)
+	}
+	if got.Attempts[0].Attempt.Endpoint != "/v1/messages" || got.Attempts[0].Attempt.ProviderID != "p" || got.Attempts[0].Attempt.ModelName != "m" {
+		t.Fatalf("attempt=%+v", got.Attempts[0].Attempt)
+	}
+	if len(got.Warnings) == 0 || got.Warnings[0] != "no attempt chain; replay synthesized from legacy top-level fields with low confidence" {
+		t.Fatalf("warnings=%v", got.Warnings)
+	}
+}
+
 func TestReplayOutcomeTable(t *testing.T) {
 	tests := []struct {
 		name, want string

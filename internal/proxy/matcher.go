@@ -91,6 +91,8 @@ var conversionEdges = []conversionEdge{
 	{From: ProtocolAnthropicMessages, To: ProtocolOpenAIResponses, UpstreamPath: "/v1/responses", Priority: 10, SupportsStream: true, Preserves: preservesTextTools},
 	{From: ProtocolOpenAIResponses, To: ProtocolAnthropicMessages, UpstreamPath: "/v1/messages", Priority: 10, SupportsStream: true, Preserves: preservesTextTools},
 	{From: ProtocolOpenAIChat, To: ProtocolOpenAIResponses, UpstreamPath: "/v1/responses", Priority: 10, SupportsStream: true, Preserves: preservesTextTools},
+	{From: ProtocolOpenAIChat, To: ProtocolAnthropicMessages, UpstreamPath: "/v1/messages", Priority: 20, SupportsStream: true, Preserves: preservesTextTools},
+	{From: ProtocolAnthropicMessages, To: ProtocolOpenAIChat, UpstreamPath: "/v1/chat/completions", Priority: 20, SupportsStream: true, Preserves: preservesTextTools},
 	{From: ProtocolOpenAIResponses, To: ProtocolOpenAIChat, UpstreamPath: "/v1/chat/completions", Priority: 20, SupportsStream: true, Preserves: preservesTextTools},
 }
 

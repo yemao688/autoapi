@@ -21,6 +21,8 @@ type ConversionMode string
 func supportsStreamConversion(from, to Protocol) bool {
 	return (from == ProtocolOpenAIResponses && to == ProtocolAnthropicMessages) ||
 		(from == ProtocolAnthropicMessages && to == ProtocolOpenAIResponses) ||
+		(from == ProtocolOpenAIChat && to == ProtocolAnthropicMessages) ||
+		(from == ProtocolAnthropicMessages && to == ProtocolOpenAIChat) ||
 		(from == ProtocolOpenAIChat && to == ProtocolOpenAIResponses) ||
 		(from == ProtocolOpenAIResponses && to == ProtocolOpenAIChat)
 }

@@ -95,6 +95,9 @@ func (s capabilitySnapshot) featureEnabled(providerID, modelName string, protoco
 			return v.enabled, true
 		}
 	}
+	if feature == string(model.FeatureTools) && s.modelNativeExplicitlyEnabled(providerID, modelName, protocol) {
+		return true, false
+	}
 	if feature == string(model.FeatureStreaming) {
 		return true, false
 	}
@@ -102,6 +105,17 @@ func (s capabilitySnapshot) featureEnabled(providerID, modelName string, protoco
 		return false, false
 	}
 	return true, false
+}
+
+func (s capabilitySnapshot) modelNativeExplicitlyEnabled(providerID, modelName string, protocol Protocol) bool {
+	if s.models == nil {
+		return false
+	}
+	protocols, ok := s.models[providerID+"\x00"+modelName]
+	if !ok {
+		return false
+	}
+	return protocols[protocol]
 }
 
 func (s capabilitySnapshot) withModels(rows []model.ModelCapability) capabilitySnapshot {

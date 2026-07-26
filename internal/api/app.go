@@ -1163,16 +1163,19 @@ func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
 		}
 		return nil, fmt.Errorf("replay rule %q: %w", log.RouteID, err)
 	}
-	endpoint := "/v1/chat/completions"
+	attempts, synthesized := replayAttempts(log, *rule)
+	endpoint, endpointAssumed := replayEndpoint(log, attempts, synthesized)
 	snapshots := map[model.TargetMetricKey]metrics.Snapshot{}
 	if a.deps.Metrics != nil {
-		for _, attempt := range log.Chain {
-			k := model.TargetMetricKey{TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, Endpoint: endpoint}
+		for _, attempt := range attempts {
+			k := model.TargetMetricKey{TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, Endpoint: replayAttemptEndpoint(attempt, endpoint)}
 			snapshots[k] = a.deps.Metrics.CurrentSnapshot(k)
 		}
 	}
-	costs := make([]model.EffectiveCost, len(log.Chain))
-	for i, attempt := range log.Chain {
+	replayLog := log
+	replayLog.Chain = attempts
+	costs := make([]model.EffectiveCost, len(attempts))
+	for i, attempt := range attempts {
 		var target model.ModelRuleTarget
 		for _, candidate := range rule.Targets {
 			if candidate.ID == attempt.TargetID && candidate.ProviderID == attempt.ProviderID && candidate.ModelName == attempt.ModelName {
@@ -1190,18 +1193,22 @@ func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
 			costs[i] = model.DefaultEffectiveCost()
 		}
 	}
-	scores := scoring.ReplayOneRequest(log, *rule, endpoint, snapshots, costs)
-	result := &model.ReplayResult{LogID: log.ID, Timestamp: log.Timestamp, RuleID: rule.ID, RuleName: rule.Name, RequestOutcome: outcomeFor(log), Endpoint: endpoint, EndpointAssumed: true}
+	scores := scoring.ReplayOneRequest(replayLog, *rule, endpoint, snapshots, costs)
+	result := &model.ReplayResult{LogID: log.ID, Timestamp: log.Timestamp, RuleID: rule.ID, RuleName: rule.Name, RequestOutcome: outcomeFor(replayLog), Endpoint: endpoint, EndpointAssumed: endpointAssumed}
 	if len(log.Chain) == 0 {
-		result.Warnings = append(result.Warnings, "no attempt chain; legacy log has low replay confidence")
+		if synthesized {
+			result.Warnings = append(result.Warnings, "no attempt chain; replay synthesized from legacy top-level fields with low confidence")
+		} else {
+			result.Warnings = append(result.Warnings, "no attempt chain; legacy log has low replay confidence")
+		}
 	}
-	for _, attempt := range log.Chain {
+	for _, attempt := range attempts {
 		if attempt.UpstreamStarted && !attempt.RequestCostAvailable {
 			result.Warnings = append(result.Warnings, "one or more upstream attempt prices were unavailable")
 			break
 		}
 	}
-	for i, attempt := range log.Chain {
+	for i, attempt := range attempts {
 		var target model.ModelRuleTarget
 		for _, t := range rule.Targets {
 			if t.ID == attempt.TargetID && t.ProviderID == attempt.ProviderID && t.ModelName == attempt.ModelName {
@@ -1216,7 +1223,8 @@ func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
 		}
 		entry := model.ReplayAttemptScore{Attempt: attempt, TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, TargetMissing: target.ID == "", ProviderMissing: providerMissing, ReplayLimitation: "historical breaker state unavailable"}
 		if i < len(scores) {
-			entry.Score = replayShadowScore(scores[i], snapshots[model.TargetMetricKey{TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, Endpoint: endpoint}], endpoint, costs[i])
+			attemptEndpoint := replayAttemptEndpoint(attempt, endpoint)
+			entry.Score = replayShadowScore(scores[i], snapshots[model.TargetMetricKey{TargetID: attempt.TargetID, ProviderID: attempt.ProviderID, ModelName: attempt.ModelName, Endpoint: attemptEndpoint}], attemptEndpoint, costs[i])
 		}
 		if entry.TargetMissing || entry.ProviderMissing {
 			entry.Score.Availability = scoring.Unavailable
@@ -1229,8 +1237,94 @@ func (a *App) ReplayLog(id string) (*model.ReplayResult, error) {
 		}
 		result.Attempts = append(result.Attempts, entry)
 	}
-	result.SelectedTarget = selectedTarget(log.Chain)
+	result.SelectedTarget = selectedTarget(attempts)
 	return result, nil
+}
+
+func replayAttempts(log model.RequestLog, rule model.ModelRule) ([]model.RequestLogChainEntry, bool) {
+	if len(log.Chain) > 0 {
+		attempts := make([]model.RequestLogChainEntry, len(log.Chain))
+		copy(attempts, log.Chain)
+		return attempts, false
+	}
+	if log.Model == "" || (log.ProviderID == "" && log.ProviderName == "") {
+		return nil, false
+	}
+	endpoint := replayLegacyEndpoint(log)
+	attempt := model.RequestLogChainEntry{
+		AttemptOrder:         1,
+		ProviderID:           log.ProviderID,
+		ProviderName:         log.ProviderName,
+		ModelName:            log.Model,
+		TargetID:             replayLegacyTargetID(rule, log.ProviderID, log.Model),
+		Endpoint:             endpoint,
+		Status:               replayLegacyAttemptStatus(log),
+		StatusCode:           log.StatusCode,
+		Error:                log.Error,
+		LatencyMs:            log.LatencyMs,
+		FirstTokenMs:         log.FirstTokenMs,
+		UpstreamStarted:      log.StatusCode != 0 || log.FirstTokenMs > 0 || log.LatencyMs > 0,
+		RequestCost:          log.Cost,
+		RequestCostAvailable: log.CostAvailable,
+	}
+	return []model.RequestLogChainEntry{attempt}, true
+}
+
+func replayEndpoint(log model.RequestLog, attempts []model.RequestLogChainEntry, synthesized bool) (string, bool) {
+	for _, attempt := range attempts {
+		if attempt.Endpoint != "" {
+			return attempt.Endpoint, synthesized
+		}
+	}
+	if endpoint := replayLegacyEndpoint(log); endpoint != "" {
+		return endpoint, true
+	}
+	return "/v1/chat/completions", true
+}
+
+func replayAttemptEndpoint(attempt model.RequestLogChainEntry, fallback string) string {
+	if attempt.Endpoint != "" {
+		return attempt.Endpoint
+	}
+	return fallback
+}
+
+func replayLegacyEndpoint(log model.RequestLog) string {
+	if log.RequestURI != "" {
+		return log.RequestURI
+	}
+	return "/v1/chat/completions"
+}
+
+func replayLegacyTargetID(rule model.ModelRule, providerID, modelName string) string {
+	for _, target := range rule.Targets {
+		if target.ProviderID == providerID && target.ModelName == modelName {
+			return target.ID
+		}
+	}
+	return ""
+}
+
+func replayLegacyAttemptStatus(log model.RequestLog) string {
+	if log.StatusCode == 499 || strings.Contains(log.Error, "client disconnected") || strings.Contains(log.Error, "context canceled") {
+		return string(model.AttemptOutcomeClientAbort)
+	}
+	if log.StatusCode >= 200 && log.StatusCode < 300 {
+		if log.Error == "" {
+			return string(model.AttemptOutcomeSuccess)
+		}
+		if log.IsStream || log.FirstTokenMs > 0 {
+			return string(model.AttemptOutcomeTruncated)
+		}
+		return string(model.AttemptOutcomeDownstreamError)
+	}
+	if log.StatusCode == 0 {
+		return string(model.AttemptOutcomePreflightError)
+	}
+	if log.StatusCode == http.StatusTooManyRequests || log.StatusCode >= 500 {
+		return string(model.AttemptOutcomeRetryable)
+	}
+	return string(model.AttemptOutcomeNonRetryable)
 }
 
 // replayShadowScore is the single conversion boundary between the pure scorer

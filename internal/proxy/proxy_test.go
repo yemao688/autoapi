@@ -865,6 +865,7 @@ func TestConversionPreservationAvailabilityE2E(t *testing.T) {
 	tests := []struct {
 		name             string
 		provider         *model.Provider
+		capabilities     []model.ProviderCapability
 		body             string
 		breakerOpen      bool
 		wantStatus       int
@@ -891,6 +892,7 @@ func TestConversionPreservationAvailabilityE2E(t *testing.T) {
 		{
 			name:             "native-only no target protocol is 503",
 			provider:         &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: false},
+			capabilities:     []model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
 			body:             `{"model":"m","system":[{"type":"text","text":"system"}],"messages":[]}`,
 			wantStatus:       http.StatusServiceUnavailable,
 			wantKeyLookups:   0,
@@ -918,9 +920,10 @@ func TestConversionPreservationAvailabilityE2E(t *testing.T) {
 			provider := *tc.provider
 			provider.BaseURL = srv.URL
 			st := &mockStore{
-				providers: map[string]*model.Provider{"p": &provider},
-				rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
-				apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+				providers:    map[string]*model.Provider{"p": &provider},
+				rules:        []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+				capabilities: tc.capabilities,
+				apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 			}
 			p := New(st, &mockService{}, 0, nil)
 			defer p.Shutdown()
@@ -6761,6 +6764,54 @@ func TestFeatureEnforcementCachedNoPerRequestSettingsQuery(t *testing.T) {
 	}
 }
 
+func TestChatToMessagesModelNativeSelectionAllowsToolsInEnforce(t *testing.T) {
+	var upstreamHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path=%s want /v1/messages", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n"+
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n"+
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n"+
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n"+
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"+
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	store := &mockStore{
+		settings:  &model.Settings{Advanced: model.AdvancedSettings{FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementEnforce}},
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r1", Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p", ModelName: "claude-upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+		capabilities: []model.ProviderCapability{
+			{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
+		},
+		modelCapabilities: []model.ModelCapability{
+			{ProviderID: "p", ModelName: "claude-upstream", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"},
+		},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"claude-opus-5","stream":true,"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamHits != 1 {
+		t.Fatalf("expected one upstream hit, got %d", upstreamHits)
+	}
+	if !strings.Contains(rec.Body.String(), "data: [DONE]") {
+		t.Fatalf("expected chat stream response, got %s", rec.Body.String())
+	}
+}
+
 func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var gotPath string
@@ -6849,9 +6900,10 @@ func TestChar_MessagesE2EAndPreflightReject(t *testing.T) {
 		defer srv.Close()
 
 		store := &mockStore{
-			providers: map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: false}},
-			rules:     []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
-			apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+			providers:    map[string]*model.Provider{"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL, Enabled: true, MessagesEnabled: false}},
+			rules:        []model.ModelRule{{ID: "r1", Name: "claude", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t0", ProviderID: "p0", ModelName: "claude-upstream", Enabled: true}}}},
+			capabilities: []model.ProviderCapability{{ProviderID: "p0", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}},
+			apiKeys:      []model.ApiKey{{ID: "key1", Enabled: true}},
 		}
 		p := New(store, &mockService{}, 0, func() (*model.Settings, error) { return &model.Settings{}, nil })
 		defer p.Shutdown()

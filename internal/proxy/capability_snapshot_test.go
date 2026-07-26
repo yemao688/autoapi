@@ -54,6 +54,14 @@ func TestFeatureEnabledPrecedenceAndIsolation(t *testing.T) {
 	if ok, _ := s.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureStreaming), false); !ok {
 		t.Fatal("streaming unknown should default true")
 	}
+	s = s.withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "m", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}})
+	if ok, known := s.featureEnabled("p", "m", ProtocolAnthropicMessages, string(model.FeatureTools), true); !ok || known {
+		t.Fatalf("model native=true should implicitly allow tools without explicit row: ok=%v known=%v", ok, known)
+	}
+	s = s.withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "m", Protocol: string(ProtocolAnthropicMessages), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"}})
+	if ok, _ := s.featureEnabled("p", "m", ProtocolAnthropicMessages, string(model.FeatureTools), true); ok {
+		t.Fatal("explicit tools=false must override implicit model-native default")
+	}
 	if ok, _ := s.featureEnabled("p", "m", ProtocolOpenAIResponses, string(model.FeatureReasoning), true); ok {
 		t.Fatal("non-streaming unknown should default false in enforce")
 	}
@@ -124,6 +132,17 @@ func TestNativeSelectorPrefersNativeBeforeConversionFallback(t *testing.T) {
 	}
 }
 
+func TestSelectCandidatesModelNativeProtocolImpliesToolsForEnforce(t *testing.T) {
+	p := &model.Provider{ID: "p", Enabled: true}
+	rule := []model.ModelRule{{Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "upstream", Enabled: true}}}}
+	snap := newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "upstream", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}})
+	req := &InboundRequest{Model: "claude-opus-5", Protocol: ProtocolAnthropicMessages, Stream: true, Enforcement: model.FeatureCapabilityEnforcementEnforce, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools, model.FeatureStreaming}}}
+	candidates, err := selectCandidates(req, rule, nil, func(string) (*model.Provider, error) { return p, nil }, snap)
+	if err != nil || len(candidates) != 1 || candidates[0].convertTo != ProtocolUnknown {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+}
+
 func TestConversionRejectsUnpreservableFeatures(t *testing.T) {
 	rule := []model.ModelRule{{
 		Name: "r", Enabled: true,
@@ -178,6 +197,7 @@ func TestConversionToolsRequireExplicitCapability(t *testing.T) {
 	// An explicit false capability is authoritative in both modes.
 	falseCaps := newCapabilitySnapshot([]model.ProviderCapability{
 		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
 	}, providers)
 	for _, enforcement := range []string{model.FeatureCapabilityEnforcementObserve, model.FeatureCapabilityEnforcementEnforce} {
 		req.Enforcement = enforcement
@@ -236,6 +256,7 @@ func TestConversionFeatureFilteringRespectsAvailability(t *testing.T) {
 	providersOpen := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
 	capsTools := newCapabilitySnapshot([]model.ProviderCapability{
 		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: true, Source: "manual"},
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"},
 	}, providersOpen)
 	cb := NewCircuitBreaker()
 	for i := 0; i < failureThreshold+1; i++ {
@@ -249,7 +270,7 @@ func TestConversionFeatureFilteringRespectsAvailability(t *testing.T) {
 
 	// 2) Tools request, target protocol not supported -> regular unavailable.
 	providersNoProto := map[string]*model.Provider{"p": {ID: "p", Enabled: true, MessagesEnabled: false}}
-	_, err = selectCandidates(reqTools, makeRule("p"), nil, func(id string) (*model.Provider, error) { return providersNoProto[id], nil }, newCapabilitySnapshot(nil, providersNoProto))
+	_, err = selectCandidates(reqTools, makeRule("p"), nil, func(id string) (*model.Provider, error) { return providersNoProto[id], nil }, newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}}, providersNoProto))
 	if err == nil || errors.Is(err, errUnsupportedFeature) {
 		t.Fatalf("expected regular conversion unavailable, got %v", err)
 	}
@@ -258,6 +279,7 @@ func TestConversionFeatureFilteringRespectsAvailability(t *testing.T) {
 	providersFalse := map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: true}}
 	capsFalse := newCapabilitySnapshot([]model.ProviderCapability{
 		{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
 	}, providersFalse)
 	_, err = selectCandidates(reqTools, makeRule("p"), nil, func(id string) (*model.Provider, error) { return providersFalse[id], nil }, capsFalse)
 	if err == nil || !errors.Is(err, errUnsupportedFeature) {
@@ -306,7 +328,7 @@ func TestSelectConversionCandidatesUsesUpstreamModelCapability(t *testing.T) {
 	p := &model.Provider{ID: "p", Enabled: true}
 	rule := []model.ModelRule{{Name: "client", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", ModelName: "upstream", Enabled: true}}}}
 	lookup := func(string) (*model.Provider, error) { return p, nil }
-	s := newCapabilitySnapshot(nil, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "upstream", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}})
+	s := newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}}, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "upstream", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}})
 	if _, err := selectCandidates(&InboundRequest{Model: "client", Protocol: ProtocolAnthropicMessages}, rule, nil, lookup, s); err == nil {
 		t.Fatal("Messages→Responses ignored upstream model override")
 	}
@@ -358,7 +380,7 @@ func TestSelectConversionCandidatesCapabilityGate(t *testing.T) {
 	p := &model.Provider{ID: "p", Enabled: true}
 	rule := []model.ModelRule{{Name: "r", Enabled: true, Targets: []model.ModelRuleTarget{{ProviderID: "p", Enabled: true}}}}
 	lookup := func(string) (*model.Provider, error) { return p, nil }
-	if _, err := selectCandidates(&InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages}, rule, nil, lookup, newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}}, map[string]*model.Provider{"p": p})); err == nil {
+	if _, err := selectCandidates(&InboundRequest{Model: "r", Protocol: ProtocolAnthropicMessages}, rule, nil, lookup, newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIResponses), Feature: "native", Enabled: false, Source: "manual"}, {ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}}, map[string]*model.Provider{"p": p})); err == nil {
 		t.Fatal("Messages to Responses should be gated")
 	}
 	if _, err := selectCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIResponses}, rule, nil, lookup, newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}}, map[string]*model.Provider{"p": p})); err != nil {
@@ -392,6 +414,7 @@ func TestSelectConversionCandidatesPreservationClassificationAfterBasicAvailabil
 		{
 			name:     "native-only with no target protocol is unavailable",
 			provider: &model.Provider{ID: "p", Enabled: true, ResponsesEnabled: false},
+			snap:     newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}}, map[string]*model.Provider{"p": {ID: "p", Enabled: true, ResponsesEnabled: false}}),
 			reqs:     nativeOnly,
 		},
 		{
@@ -432,11 +455,17 @@ func TestConversionEdgeRegistryPrioritiesAndStreams(t *testing.T) {
 	if got, ok := edgeFor(ProtocolAnthropicMessages, ProtocolOpenAIResponses); !ok || got.Priority != 10 || !got.SupportsStream {
 		t.Fatalf("Messages edge = %+v, ok=%v", got, ok)
 	}
+	if got, ok := edgeFor(ProtocolAnthropicMessages, ProtocolOpenAIChat); !ok || got.Priority != 20 || !got.SupportsStream {
+		t.Fatalf("Messages→Chat edge = %+v, ok=%v", got, ok)
+	}
 	if got, ok := edgeFor(ProtocolOpenAIResponses, ProtocolAnthropicMessages); !ok || got.Priority != 10 || !got.SupportsStream {
 		t.Fatalf("Responses→Messages edge = %+v, ok=%v", got, ok)
 	}
 	if got, ok := edgeFor(ProtocolOpenAIChat, ProtocolOpenAIResponses); !ok || got.Priority != 10 || !got.SupportsStream {
 		t.Fatalf("Chat edge = %+v, ok=%v", got, ok)
+	}
+	if got, ok := edgeFor(ProtocolOpenAIChat, ProtocolAnthropicMessages); !ok || got.Priority != 20 || !got.SupportsStream {
+		t.Fatalf("Chat→Messages edge = %+v, ok=%v", got, ok)
 	}
 	if got, ok := edgeFor(ProtocolOpenAIResponses, ProtocolOpenAIChat); !ok || got.Priority != 20 || !got.SupportsStream {
 		t.Fatalf("Responses→Chat edge = %+v, ok=%v", got, ok)
@@ -485,6 +514,44 @@ func TestSelectConversionCandidatesChatStreamResponsesIsSupported(t *testing.T) 
 	snapshot := newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}}, map[string]*model.Provider{"p": p})
 	candidates, err := selectCandidates(&InboundRequest{Model: "r", Protocol: ProtocolOpenAIChat, Stream: true}, rule, nil, func(string) (*model.Provider, error) { return p, nil }, snapshot)
 	if err != nil || len(candidates) != 1 || candidates[0].convertTo != ProtocolOpenAIResponses {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+}
+
+func TestSelectConversionCandidatesChatStreamToolsCanUseMessagesEdge(t *testing.T) {
+	rule := []model.ModelRule{{Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}}
+	p := &model.Provider{ID: "p", Enabled: true}
+	snapshot := newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}}, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{{ProviderID: "p", ModelName: "claude-opus-5", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"}})
+	candidates, err := selectCandidates(&InboundRequest{Model: "claude-opus-5", Protocol: ProtocolOpenAIChat, Stream: true, Enforcement: model.FeatureCapabilityEnforcementEnforce, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools, model.FeatureStreaming}}}, rule, nil, func(string) (*model.Provider, error) { return p, nil }, snapshot)
+	if err != nil || len(candidates) != 1 || candidates[0].convertTo != ProtocolAnthropicMessages {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+}
+
+func TestSelectConversionCandidatesChatToMessagesExplicitToolsFalseStillRejects(t *testing.T) {
+	rule := []model.ModelRule{{Name: "claude-opus-5", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "claude-opus-5", Enabled: true}}}}
+	p := &model.Provider{ID: "p", Enabled: true}
+	snapshot := newCapabilitySnapshot([]model.ProviderCapability{{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: false, Source: "manual"}}, map[string]*model.Provider{"p": p}).withModels([]model.ModelCapability{
+		{ProviderID: "p", ModelName: "claude-opus-5", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: true, Source: "manual"},
+		{ProviderID: "p", ModelName: "claude-opus-5", Protocol: string(ProtocolAnthropicMessages), Feature: string(model.FeatureTools), Enabled: false, Source: "manual"},
+	})
+	_, err := selectCandidates(&InboundRequest{Model: "claude-opus-5", Protocol: ProtocolOpenAIChat, Stream: true, Enforcement: model.FeatureCapabilityEnforcementEnforce, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools, model.FeatureStreaming}}}, rule, nil, func(string) (*model.Provider, error) { return p, nil }, snapshot)
+	if err == nil || !errors.Is(err, errUnsupportedFeature) {
+		t.Fatalf("expected explicit tools=false rejection, got %v", err)
+	}
+}
+
+func TestSelectConversionCandidatesMessagesStreamToolsCanUseChatEdge(t *testing.T) {
+	rule := []model.ModelRule{{Name: "gpt-4.1", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}}
+	p := &model.Provider{ID: "p", Enabled: true}
+	snapshot := newCapabilitySnapshot([]model.ProviderCapability{
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: "native", Enabled: true, Source: "manual"},
+		{ProviderID: "p", Protocol: string(ProtocolAnthropicMessages), Feature: "native", Enabled: false, Source: "manual"},
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: string(model.FeatureTools), Enabled: true, Source: "manual"},
+		{ProviderID: "p", Protocol: string(ProtocolOpenAIChat), Feature: string(model.FeatureStreaming), Enabled: true, Source: "manual"},
+	}, map[string]*model.Provider{"p": p})
+	candidates, err := selectCandidates(&InboundRequest{Model: "gpt-4.1", Protocol: ProtocolAnthropicMessages, Stream: true, Requirements: &model.RequestRequirements{Features: []model.Feature{model.FeatureTools, model.FeatureStreaming}}}, rule, nil, func(string) (*model.Provider, error) { return p, nil }, snapshot)
+	if err != nil || len(candidates) != 1 || candidates[0].convertTo != ProtocolOpenAIChat {
 		t.Fatalf("candidates=%+v err=%v", candidates, err)
 	}
 }

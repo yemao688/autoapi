@@ -95,6 +95,34 @@ func TestResponsesToChatAdapterSetsStreamConverter(t *testing.T) {
 	}
 }
 
+func TestChatToMessagesAdapterSetsStreamConverterAndSuppressesBearer(t *testing.T) {
+	c := candidate{modelName: "m", protocol: ProtocolOpenAIChat}
+	prep, err := conversionAdapter{from: ProtocolOpenAIChat, to: ProtocolAnthropicMessages}.PrepareAttempt([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.ConvertResponse == nil || prep.NewStreamConverter == nil {
+		t.Fatalf("prep=%+v", prep)
+	}
+	if prep.Path != "/v1/messages" || !prep.SuppressBearerAuth {
+		t.Fatalf("prep=%+v", prep)
+	}
+}
+
+func TestMessagesToChatAdapterSetsStreamConverter(t *testing.T) {
+	c := candidate{modelName: "m", protocol: ProtocolAnthropicMessages}
+	prep, err := conversionAdapter{from: ProtocolAnthropicMessages, to: ProtocolOpenAIChat}.PrepareAttempt([]byte(`{"model":"m","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"stream":true}`), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.ConvertResponse == nil || prep.NewStreamConverter == nil {
+		t.Fatalf("prep=%+v", prep)
+	}
+	if prep.Path != "/v1/chat/completions" {
+		t.Fatalf("prep=%+v", prep)
+	}
+}
+
 func TestConversionEdgeRegistryMatchesAdapters(t *testing.T) {
 	bodyFor := func(protocol Protocol) []byte {
 		switch protocol {

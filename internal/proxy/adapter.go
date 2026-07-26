@@ -92,6 +92,33 @@ func (a conversionAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPrep
 		prep.Path = "/v1/chat/completions"
 		prep.ConvertResponse = func(body []byte) ([]byte, error) { return chatToResponsesResponse(body, c.ruleLabel) }
 		prep.NewStreamConverter = newChatToResponsesStreamConverter
+	case a.from == ProtocolOpenAIChat && a.to == ProtocolAnthropicMessages:
+		converted, err := composeRequestConversion(body, c.modelName, chatToResponsesRequest, responsesToMessagesRequest)
+		if err != nil {
+			return AttemptPreparation{}, err
+		}
+		prep.Body = converted
+		prep.Path = "/v1/messages"
+		prep.SuppressBearerAuth = true
+		prep.ConvertResponse = func(body []byte) ([]byte, error) {
+			return composeResponseConversion(body, c.ruleLabel, messagesToResponsesResponse, responsesToChatResponse)
+		}
+		prep.NewStreamConverter = func() StreamConverter {
+			return composeStreamConverters(newMessagesToResponsesStreamConverter(), newResponsesToChatStreamConverter())
+		}
+	case a.from == ProtocolAnthropicMessages && a.to == ProtocolOpenAIChat:
+		converted, err := composeRequestConversion(body, c.modelName, messagesToResponsesRequest, responsesToChatRequest)
+		if err != nil {
+			return AttemptPreparation{}, err
+		}
+		prep.Body = converted
+		prep.Path = "/v1/chat/completions"
+		prep.ConvertResponse = func(body []byte) ([]byte, error) {
+			return composeResponseConversion(body, c.ruleLabel, chatToResponsesResponse, responsesToMessagesResponse)
+		}
+		prep.NewStreamConverter = func() StreamConverter {
+			return composeStreamConverters(newChatToResponsesStreamConverter(), newResponsesToMessagesStreamConverter())
+		}
 	case a.from == ProtocolAnthropicMessages && a.to == ProtocolOpenAIResponses:
 		converted, err := messagesToResponsesRequest(body, c.modelName)
 		if err != nil {
@@ -117,4 +144,67 @@ func (a conversionAdapter) PrepareAttempt(body []byte, c candidate) (AttemptPrep
 		return AttemptPreparation{}, errUnsupportedConversion(a.from, a.to)
 	}
 	return prep, nil
+}
+
+func composeRequestConversion(body []byte, upstreamModel string, steps ...func([]byte, string) ([]byte, error)) ([]byte, error) {
+	out := body
+	var err error
+	for _, step := range steps {
+		out, err = step(out, upstreamModel)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func composeResponseConversion(body []byte, clientModel string, steps ...func([]byte, string) ([]byte, error)) ([]byte, error) {
+	out := body
+	var err error
+	for _, step := range steps {
+		out, err = step(out, clientModel)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func composeStreamConverters(steps ...StreamConverter) StreamConverter {
+	return &composedStreamConverter{steps: steps}
+}
+
+type composedStreamConverter struct{ steps []StreamConverter }
+
+func (c *composedStreamConverter) Write(p []byte) ([]byte, error) {
+	out := p
+	var err error
+	for _, step := range c.steps {
+		out, err = step.Write(out)
+		if err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+func (c *composedStreamConverter) Close() ([]byte, error) {
+	var out []byte
+	for i, step := range c.steps {
+		chunk, err := step.Close()
+		if err != nil {
+			return out, err
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		for _, next := range c.steps[i+1:] {
+			chunk, err = next.Write(chunk)
+			if err != nil {
+				return out, err
+			}
+		}
+		out = append(out, chunk...)
+	}
+	return out, nil
 }
