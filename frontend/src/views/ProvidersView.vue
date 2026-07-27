@@ -276,7 +276,12 @@ async function setModelRows(list: model.Model[], providerId: string) {
     return createModelRow(m)
   })
   modelRows.value = rows
-  await Promise.all(rows.map((row) => loadModelRowCapabilities(row, providerId, row.model.name)))
+  // Iterate modelRows.value (reactive proxies), NOT the raw `rows` array.
+  // loadModelRowCapabilities mutates row.capabilitiesLoading / row.apiType;
+  // writing to raw objects bypasses Vue's proxy-based reactivity, so the UI
+  // would stay stuck on the initial render — "加载中" forever and the
+  // select showing the default apiType instead of the saved one.
+  await Promise.all(modelRows.value.map((row) => loadModelRowCapabilities(row, providerId, row.model.name)))
 }
 
 async function testOne(id: string) {
