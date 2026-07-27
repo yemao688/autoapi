@@ -596,6 +596,54 @@ ALTER TABLE provider_capabilities_new RENAME TO provider_capabilities;`,
 		SQL:             `ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';`,
 		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "request_logs", "reasoning_effort") },
 	},
+	{
+		ID: "037_tool_access_tables",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) {
+			allPresent := true
+			for _, table := range []string{"tool_presets", "tool_state", "tool_file_state"} {
+				exists, err := tableExists(tx, table)
+				if err != nil {
+					return false, err
+				}
+				if !exists {
+					allPresent = false
+				}
+			}
+			return allPresent, nil
+		},
+		SQL: `
+CREATE TABLE IF NOT EXISTS tool_presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tool TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'direct',
+  name TEXT NOT NULL,
+  provider_id TEXT NOT NULL DEFAULT '',
+  vendor TEXT NOT NULL DEFAULT '',
+  base_url TEXT NOT NULL DEFAULT '',
+  api_key_enc TEXT NOT NULL DEFAULT '',
+  api_key_id TEXT NOT NULL DEFAULT '',
+  models_json TEXT NOT NULL DEFAULT '[]',
+  extra_json TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(tool, name)
+);
+CREATE TABLE IF NOT EXISTS tool_state (
+  tool TEXT PRIMARY KEY,
+  active_preset_id INTEGER NOT NULL DEFAULT 0,
+  config_path TEXT NOT NULL DEFAULT '',
+  applied_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tool_file_state (
+  tool TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  path TEXT NOT NULL DEFAULT '',
+  applied_file_hash TEXT NOT NULL DEFAULT '',
+  applied_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (tool, resource)
+);
+`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

@@ -36,7 +36,9 @@ import (
 	"autoapi/internal/proxy"
 	"autoapi/internal/routing"
 	"autoapi/internal/scoring"
+	"autoapi/internal/service"
 	"autoapi/internal/store"
+	"autoapi/internal/toolconfig"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -168,6 +170,24 @@ type BusinessService interface {
 	ResolveProviderKey(providerID string) (string, error)
 	// AddProviderModels adds model names to a provider's local catalog.
 	AddProviderModels(providerID string, names []string) error
+}
+
+// toolAccessService is optional so existing API test doubles that only model
+// the older BusinessService surface remain source-compatible.
+type toolAccessService interface {
+	ListToolStatuses() ([]toolconfig.ToolStatus, error)
+	CreateToolPreset(toolconfig.Preset, string) (*toolconfig.Preset, error)
+	UpdateToolPreset(toolconfig.Preset, string) (*toolconfig.Preset, error)
+	GetToolPresets(string) ([]toolconfig.Preset, error)
+	DeleteToolPreset(int64) error
+	ApplyToolPreset(int64, bool) (service.ToolApplyResult, error)
+	CheckToolDrift(string) ([]service.DriftState, error)
+	ImportToolPreset(string, string, string) (*toolconfig.Preset, error)
+	ExportToolSnippet(int64) (toolconfig.Snippet, error)
+	GetOmoConfig() (toolconfig.OmoConfig, []string, error)
+	ApplyOmoConfig(toolconfig.OmoChange, bool) error
+	ListToolBackups(string) ([]service.ToolBackupInfo, error)
+	RestoreToolBackup(string, string, string) error
 }
 
 // ProxyService controls the local OpenAI-compatible HTTP gateway.
@@ -1004,6 +1024,147 @@ func (a *App) SetAPIKeyEnabled(id string, enabled bool) error {
 		return errNotImpl
 	}
 	return a.deps.Store.SetAPIKeyEnabled(id, enabled)
+}
+
+// ----- Tool access -----
+
+func (a *App) toolAccess() (toolAccessService, error) {
+	if a.deps.Service == nil {
+		return nil, errNotImpl
+	}
+	svc, ok := a.deps.Service.(toolAccessService)
+	if !ok {
+		return nil, fmt.Errorf("tool access service is unavailable")
+	}
+	return svc, nil
+}
+
+func (a *App) ListToolStatuses() ([]toolconfig.ToolStatus, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	return svc.ListToolStatuses()
+}
+
+func (a *App) ListToolPresets(tool string) ([]toolconfig.Preset, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	presets, err := svc.GetToolPresets(tool)
+	return redactToolPresets(presets), err
+}
+
+func (a *App) CreateToolPreset(preset toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	p, err := svc.CreateToolPreset(preset, plaintextKey)
+	return redactToolPreset(p), err
+}
+
+func (a *App) UpdateToolPreset(preset toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	p, err := svc.UpdateToolPreset(preset, plaintextKey)
+	return redactToolPreset(p), err
+}
+
+func (a *App) DeleteToolPreset(id int64) error {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return err
+	}
+	return svc.DeleteToolPreset(id)
+}
+
+func (a *App) ApplyToolPreset(id int64, allowDrift bool) (service.ToolApplyResult, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return service.ToolApplyResult{}, err
+	}
+	return svc.ApplyToolPreset(id, allowDrift)
+}
+
+func (a *App) CheckToolDrift(tool string) ([]service.DriftState, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	return svc.CheckToolDrift(tool)
+}
+
+func (a *App) ImportToolPreset(tool, providerID, name string) (*toolconfig.Preset, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	p, err := svc.ImportToolPreset(tool, providerID, name)
+	return redactToolPreset(p), err
+}
+
+func (a *App) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return toolconfig.Snippet{}, err
+	}
+	return svc.ExportToolSnippet(id)
+}
+
+func (a *App) GetOmoConfig() (toolconfig.OmoConfig, []string, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return toolconfig.OmoConfig{}, nil, err
+	}
+	return svc.GetOmoConfig()
+}
+
+func (a *App) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return err
+	}
+	return svc.ApplyOmoConfig(change, allowDrift)
+}
+
+func (a *App) ListToolBackups(tool string) ([]service.ToolBackupInfo, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	return svc.ListToolBackups(tool)
+}
+
+func (a *App) RestoreToolBackup(tool, resource, backupPath string) error {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return err
+	}
+	return svc.RestoreToolBackup(tool, resource, backupPath)
+}
+
+func redactToolPreset(p *toolconfig.Preset) *toolconfig.Preset {
+	if p == nil {
+		return nil
+	}
+	copy := *p
+	copy.APIKeyEnc = ""
+	return &copy
+}
+
+func redactToolPresets(presets []toolconfig.Preset) []toolconfig.Preset {
+	if presets == nil {
+		return []toolconfig.Preset{}
+	}
+	out := make([]toolconfig.Preset, len(presets))
+	for i := range presets {
+		out[i] = *redactToolPreset(&presets[i])
+	}
+	return out
 }
 
 // ----- Model rules -----
