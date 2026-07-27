@@ -236,6 +236,13 @@
     "targetRetries": "重试 {count}",
     "targetHits": "命中 {count}",
     "targetFailures": "失败 {count}",
+    "targetSuccessRateRecent": "近100次成功率 {rate}",
+    "targetSuccessRateHour": "1小时成功率 {rate}",
+    "targetSuccessRateRecentTooltip": "最近 100 次真实上游尝试的成功率",
+    "targetSuccessRateHourTooltip": "最近 1 小时内真实上游尝试的成功率",
+    "targetTest": "测试此模型",
+    "targetTesting": "正在测试此模型",
+    "targetTestDisabled": "默认模型映射无法测试，请填写具体模型名称",
     "breaker": {
       "normal": "正常",
       "open": "熔断中",

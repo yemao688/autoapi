@@ -284,6 +284,13 @@ type ModelRuleTarget struct {
 	HitCount                 int64 `json:"hit_count"`     // incremented once on successful dispatch
 	FailureCount             int64 `json:"failure_count"` // incremented on each failed attempt (hit + failure = total attempts)
 	Enabled                  bool  `json:"enabled"`       // when false, the proxy skips this target during candidate selection (tier order preserved)
+	// SuccessRateRecent100 is the success percentage over the target's 100
+	// most recent real upstream attempts (request_logs chain entries with
+	// upstream_started). nil when the scan window holds no such attempts.
+	SuccessRateRecent100 *float64 `json:"success_rate_recent_100,omitempty"`
+	// SuccessRateHour is the same rate over real upstream attempts within
+	// the last hour. nil when there were no attempts in that window.
+	SuccessRateHour *float64 `json:"success_rate_hour,omitempty"`
 }
 
 // ModelRuleTargetInput is the payload for creating or updating a target.

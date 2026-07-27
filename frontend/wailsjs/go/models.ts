@@ -704,6 +704,8 @@ export namespace model {
 	    hit_count: number;
 	    failure_count: number;
 	    enabled: boolean;
+	    success_rate_recent_100?: number;
+	    success_rate_hour?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelRuleTarget(source);
@@ -721,6 +723,8 @@ export namespace model {
 	        this.hit_count = source["hit_count"];
 	        this.failure_count = source["failure_count"];
 	        this.enabled = source["enabled"];
+	        this.success_rate_recent_100 = source["success_rate_recent_100"];
+	        this.success_rate_hour = source["success_rate_hour"];
 	    }
 	}
 	export class ModelRule {

@@ -236,6 +236,13 @@
     "targetRetries": "Retries {count}",
     "targetHits": "Hits {count}",
     "targetFailures": "Failures {count}",
+    "targetSuccessRateRecent": "Last 100 success rate {rate}",
+    "targetSuccessRateHour": "Last-hour success rate {rate}",
+    "targetSuccessRateRecentTooltip": "Success rate over the 100 most recent real upstream attempts",
+    "targetSuccessRateHourTooltip": "Success rate over real upstream attempts in the last hour",
+    "targetTest": "Test this model",
+    "targetTesting": "Testing this model",
+    "targetTestDisabled": "The provider default cannot be tested; enter a specific model name",
     "breaker": {
       "normal": "Normal",
       "open": "Breaker open",

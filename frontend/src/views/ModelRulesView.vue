@@ -9,6 +9,7 @@ import { useProviderStyle } from '../composables/useProviderStyle'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import { usePolling } from '../composables/usePolling'
+import { useModelTestToast, type ModelApiType } from '@/composables/useModelTestToast'
 import DropdownMenu from '@/components/DropdownMenu.vue'
 import ModelRuleTargetModal from '@/components/ModelRuleTargetModal.vue'
 import { model, type proxy } from '../../wailsjs/go/models'
@@ -18,6 +19,7 @@ const { format } = useRelativeTime()
 const { color: providerColor, initial: providerLetter, textColor: providerTextColor } = useProviderStyle()
 const toast = useToast()
 const confirm = useConfirm()
+const { runModelTest } = useModelTestToast()
 
 const {
   data: rules,
@@ -70,7 +72,11 @@ const displayedRuleList = computed({
     ...ruleList.value.filter((rule) => !rule.enabled),
   ],
   set: (reorderedRules: model.ModelRule[]) => {
-    ruleList.value.splice(0, ruleList.value.length, ...reorderedRules)
+    const groupedRules = [
+      ...reorderedRules.filter((rule) => rule.enabled),
+      ...reorderedRules.filter((rule) => !rule.enabled),
+    ]
+    ruleList.value.splice(0, ruleList.value.length, ...groupedRules)
   },
 })
 
@@ -192,6 +198,8 @@ function cloneTarget(target: model.ModelRuleTarget): model.ModelRuleTarget {
     tier: target.tier,
     hit_count: target.hit_count,
     failure_count: target.failure_count,
+    success_rate_recent_100: target.success_rate_recent_100,
+    success_rate_hour: target.success_rate_hour,
     enabled: target.enabled,
   })
   clone.first_token_timeout_seconds = target.first_token_timeout_seconds ?? 0
@@ -230,16 +238,57 @@ function targetProviderName(target: model.ModelRuleTarget): string {
   return providerNameMap.value[target.provider_id] || t('common.unknown')
 }
 
-function formatHits(n: number): string {
-  return n.toLocaleString()
-}
-
 function formatSuccessRate(rule: model.ModelRule): string {
   if (rule.today_request_count === 0) {
     return '—'
   }
   const rate = rule.today_success_rate ?? 0
   return `${rate.toFixed(1)}%`
+}
+
+function formatTargetSuccessRate(rate?: number | null): string {
+  return typeof rate === 'number' && Number.isFinite(rate) ? `${rate.toFixed(0)}%` : '—'
+}
+
+const capabilityProtocolPriority: ModelApiType[] = [
+  'openai_responses',
+  'anthropic_messages',
+  'gemini',
+  'openai_chat',
+]
+
+function resolveModelApiType(capabilities: model.ModelCapability[]): ModelApiType {
+  for (const protocol of capabilityProtocolPriority) {
+    const match = capabilities.find((capability) => capability.feature === 'native' && capability.protocol === protocol && capability.enabled)
+    if (match) return protocol
+  }
+  return 'openai_chat'
+}
+
+const testingTargetIds = ref<Set<string>>(new Set())
+
+function isTestingTarget(id: string): boolean {
+  return testingTargetIds.value.has(id)
+}
+
+async function testTarget(target: model.ModelRuleTarget) {
+  const providerId = target.provider_id?.trim()
+  const modelName = target.model_name?.trim()
+  if (!providerId || !modelName || (target.id && testingTargetIds.value.has(target.id))) return
+
+  const targetId = target.id || `${providerId}:${modelName}`
+  testingTargetIds.value = new Set(testingTargetIds.value).add(targetId)
+  try {
+    const capabilities = await api.listModelCapabilities(providerId, modelName)
+    const apiType = resolveModelApiType(capabilities)
+    await runModelTest({ providerId, modelName, apiType, t })
+  } catch (e: any) {
+    toast.push(e?.message || String(e), 'error')
+  } finally {
+    const next = new Set(testingTargetIds.value)
+    next.delete(targetId)
+    testingTargetIds.value = next
+  }
 }
 
 async function loadRules() {
@@ -425,13 +474,14 @@ async function deleteTarget(rule: model.ModelRule, target: model.ModelRuleTarget
 
 // Per-rule target reorder state. We keep this separate from the rule-level
 // drag reorder to avoid coupling their lifecycles.
-const reorderStates = ref<Record<string, { inFlight: boolean; reconciling: boolean }>>({})
+const reorderStates = ref<Record<string, { inFlight: boolean; reconciling: boolean; pending: boolean }>>({})
 
 function getReorderState(ruleId: string) {
   if (!reorderStates.value[ruleId]) {
     reorderStates.value[ruleId] = {
       inFlight: false,
       reconciling: false,
+      pending: false,
     }
   }
   return reorderStates.value[ruleId]
@@ -460,7 +510,10 @@ async function persistReorder(ruleId: string, targetIds: string[]): Promise<Reor
 }
 
 async function onTargetsReorder(rule: model.ModelRule) {
-  if (isSavingRule(rule.id) || isReconcilingRule(rule.id)) return
+  if (isSavingRule(rule.id) || isReconcilingRule(rule.id)) {
+    getReorderState(rule.id).pending = true
+    return
+  }
 
   const targetIds = rule.targets.map((t) => t.id).filter((id): id is string => !!id)
   if (targetIds.length < 2) return
@@ -484,6 +537,10 @@ async function onTargetsReorder(rule: model.ModelRule) {
     await recoverTargetRule(rule)
   } finally {
     state.inFlight = false
+    if (state.pending) {
+      state.pending = false
+      await onTargetsReorder(rule)
+    }
   }
 }
 
@@ -511,14 +568,22 @@ async function recoverTargetRule(rule: model.ModelRule) {
     // removed the rule if it is missing from the authoritative list.
   } finally {
     state.reconciling = false
+    if (state.pending) {
+      state.pending = false
+      await onTargetsReorder(rule)
+    }
   }
 }
 
 // ---- Rule-level drag reorder ----
 const rulesOrderSaving = ref(false)
+const pendingRulesReorder = ref(false)
 
 async function onRulesReorder() {
-  if (rulesOrderSaving.value) return
+  if (rulesOrderSaving.value) {
+    pendingRulesReorder.value = true
+    return
+  }
 
   const ids = ruleList.value.map((r) => r.id)
   rulesOrderSaving.value = true
@@ -535,6 +600,10 @@ async function onRulesReorder() {
     await reconcileRulesOrder()
   } finally {
     rulesOrderSaving.value = false
+    if (pendingRulesReorder.value) {
+      pendingRulesReorder.value = false
+      await onRulesReorder()
+    }
   }
 }
 
@@ -697,6 +766,8 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
     et.tier = st.tier
     et.hit_count = st.hit_count
     et.failure_count = st.failure_count
+    et.success_rate_recent_100 = st.success_rate_recent_100
+    et.success_rate_hour = st.success_rate_hour
     et.enabled = st.enabled
   }
 }
@@ -842,11 +913,29 @@ function syncTargets(existing: model.ModelRule, source: model.ModelRule) {
                       </div>
                     </div>
                     <div class="target-counters">
-                      <span>{{ t('modelRules.targetHits', { count: formatHits(target.hit_count) }) }}</span>
-                      <span :class="{ 'fail-hi': target.failure_count > 0 }">{{ t('modelRules.targetFailures', { count: formatHits(target.failure_count) }) }}</span>
+                      <span
+                        :class="{ 'rate-zero': target.success_rate_recent_100 === 0 }"
+                        :title="t('modelRules.targetSuccessRateRecentTooltip')"
+                      >{{ t('modelRules.targetSuccessRateRecent', { rate: formatTargetSuccessRate(target.success_rate_recent_100) }) }}</span>
+                      <span
+                        :class="{ 'rate-zero': target.success_rate_hour === 0 }"
+                        :title="t('modelRules.targetSuccessRateHourTooltip')"
+                      >{{ t('modelRules.targetSuccessRateHour', { rate: formatTargetSuccessRate(target.success_rate_hour) }) }}</span>
                       <span>T{{ tidx + 1 }}</span>
                     </div>
                     <div class="target-actions">
+                      <button
+                        class="btn btn-icon target-test-button"
+                        style="width: 26px; height: 26px;"
+                        :class="{ 'target-test-busy': isTestingTarget(target.id || `${target.provider_id}:${target.model_name}`) }"
+                        :disabled="!target.provider_id?.trim() || !target.model_name?.trim() || isTestingTarget(target.id || `${target.provider_id}:${target.model_name}`)"
+                        :aria-busy="isTestingTarget(target.id || `${target.provider_id}:${target.model_name}`)"
+                        :aria-label="t(isTestingTarget(target.id || `${target.provider_id}:${target.model_name}`) ? 'modelRules.targetTesting' : 'modelRules.targetTest')"
+                        :title="t(!target.provider_id?.trim() || !target.model_name?.trim() ? 'modelRules.targetTestDisabled' : isTestingTarget(target.id || `${target.provider_id}:${target.model_name}`) ? 'modelRules.targetTesting' : 'modelRules.targetTest')"
+                        @click="testTarget(target)"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      </button>
                       <label class="toggle toggle-target" :aria-label="target.enabled ? t('modelRules.targetToggleDisable') : t('modelRules.targetToggleEnable')">
                         <input
                           type="checkbox"
@@ -1157,11 +1246,18 @@ html[data-theme="dark"] .rule-drag-handle:hover {
   color: var(--negative);
   font-weight: 500;
 }
+.target-counters .rate-zero {
+  color: var(--negative);
+  font-weight: 500;
+}
 .target-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+.target-test-button.target-test-busy {
+  opacity: 0.55;
 }
 
 .drag-handle {
