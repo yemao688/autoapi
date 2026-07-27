@@ -126,6 +126,35 @@ func TestInspectReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestInspectReasoningEffortAllProtocols(t *testing.T) {
+	// Messages stores the reasoning_effort string so the request log shows it.
+	messages, err := inspectMessagesRequest([]byte(`{"model":"m","max_tokens":8,"reasoning_effort":"high","messages":[]}`))
+	if err != nil || messages.ReasoningEffort != "high" {
+		t.Fatalf("messages reasoning effort: got %q, err=%v", messages.ReasoningEffort, err)
+	}
+
+	// Gemini 3 thinking level is an effort label; a numeric budget is not.
+	gemini, err := inspectGeminiRequest([]byte(`{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingLevel":"low"}}}`))
+	if err != nil || gemini.ReasoningEffort != "low" {
+		t.Fatalf("gemini thinking level: got %q, err=%v", gemini.ReasoningEffort, err)
+	}
+	geminiBudget, err := inspectGeminiRequest([]byte(`{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":1000}}}`))
+	if err != nil || geminiBudget.ReasoningEffort != "" {
+		t.Fatalf("gemini thinking budget must not become an effort: got %q, err=%v", geminiBudget.ReasoningEffort, err)
+	}
+
+	// OpenRouter-style chat reasoning object fills in when reasoning_effort
+	// is absent; the explicit string always wins.
+	chatObj, err := inspectChatRequest([]byte(`{"model":"m","reasoning":{"effort":"xhigh"},"messages":[]}`))
+	if err != nil || chatObj.ReasoningEffort != "xhigh" {
+		t.Fatalf("chat reasoning object: got %q, err=%v", chatObj.ReasoningEffort, err)
+	}
+	chatBoth, err := inspectChatRequest([]byte(`{"model":"m","reasoning_effort":"low","reasoning":{"effort":"xhigh"},"messages":[]}`))
+	if err != nil || chatBoth.ReasoningEffort != "low" {
+		t.Fatalf("chat reasoning_effort must win over reasoning object: got %q, err=%v", chatBoth.ReasoningEffort, err)
+	}
+}
+
 func TestInspectResponsesToolSchema(t *testing.T) {
 	valid := `{"model":"m","input":"hi","tools":[{"type":"function","name":"n","parameters":{"type":"object"}}]}`
 	if _, err := inspectResponsesRequest([]byte(valid)); err != nil {

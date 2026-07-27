@@ -70,6 +70,29 @@ func chatToResponsesRequest(body []byte, upstreamModel string) ([]byte, error) {
 		return nil, err
 	}
 	out["input"] = input
+	// Preserve reasoning configuration: chat carries reasoning_effort (and
+	// occasionally an OpenRouter-style reasoning object); Responses expects
+	// reasoning.effort. Dropping it would let the upstream apply its default.
+	var reasoningEffortStr string
+	if raw, ok := req["reasoning_effort"]; ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &reasoningEffortStr); err != nil {
+			return nil, fmt.Errorf("reasoning_effort must be a string")
+		}
+	}
+	effort, err := reasoningEffortOf(req["reasoning"], reasoningEffortStr)
+	if err != nil {
+		return nil, err
+	}
+	if effort != "" {
+		reasoningOut := map[string]any{}
+		if raw, ok := req["reasoning"]; ok && string(raw) != "null" {
+			if err := json.Unmarshal(raw, &reasoningOut); err != nil {
+				return nil, fmt.Errorf("reasoning must be an object")
+			}
+		}
+		reasoningOut["effort"] = effort
+		out["reasoning"] = reasoningOut
+	}
 	if raw, ok := req["stream"]; ok && string(raw) != "null" {
 		var stream bool
 		if err := json.Unmarshal(raw, &stream); err != nil {
@@ -135,6 +158,22 @@ func responsesToChatRequest(body []byte, upstreamModel string) ([]byte, error) {
 		return nil, err
 	}
 	out["messages"] = messages
+	// Preserve reasoning configuration: Responses carries reasoning.effort;
+	// chat upstreams expect the reasoning_effort string. Dropping it would let
+	// the upstream apply its default effort.
+	var reasoningEffortStr string
+	if raw, ok := req["reasoning_effort"]; ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &reasoningEffortStr); err != nil {
+			return nil, fmt.Errorf("reasoning_effort must be a string")
+		}
+	}
+	effort, err := reasoningEffortOf(req["reasoning"], reasoningEffortStr)
+	if err != nil {
+		return nil, err
+	}
+	if effort != "" {
+		out["reasoning_effort"] = effort
+	}
 	if raw, ok := req["stream"]; ok && string(raw) != "null" {
 		var stream bool
 		if err := json.Unmarshal(raw, &stream); err != nil {
