@@ -16,6 +16,7 @@ const confirm = useConfirm()
 const tools: ToolName[] = ['opencode', 'codex', 'claude']
 const statuses = ref<toolconfig.ToolStatus[]>([])
 const presets = ref<Record<string, toolconfig.Preset[]>>({})
+const opencodeLive = ref<service.OpencodeLiveState | null>(null)
 const apiKeys = ref<model.ApiKey[]>([])
 const modelRules = ref<model.ModelRule[]>([])
 const loading = ref(true)
@@ -33,6 +34,10 @@ const driftOpen = ref(false)
 const driftTool = ref<ToolName>('opencode')
 const driftStates = ref<service.DriftState[]>([])
 const driftLoading = ref(false)
+const applyDriftOpen = ref(false)
+const applyDriftPreset = ref<toolconfig.Preset | null>(null)
+const applyDriftStates = ref<service.DriftState[]>([])
+const applyDriftLoading = ref(false)
 
 const importOpen = ref(false)
 const importTool = ref<ToolName>('opencode')
@@ -83,8 +88,12 @@ async function refresh() {
   refreshing.value = true
   loadError.value = ''
   try {
-    const nextStatuses = await api.listToolStatuses()
+    const [nextStatuses, nextLive] = await Promise.all([
+      api.listToolStatuses(),
+      api.getOpencodeLiveState(),
+    ])
     statuses.value = nextStatuses
+    opencodeLive.value = nextLive
     const results = await Promise.all(tools.map(async (tool) => [tool, await api.listToolPresets(tool)] as const))
     presets.value = Object.fromEntries(results)
   } catch (e: any) {
@@ -136,13 +145,6 @@ async function openDrift(tool: ToolName) {
   }
 }
 
-function driftMessage(states: service.DriftState[]) {
-  const details = states.length
-    ? states.map((state) => `${state.Resource}: ${state.Missing ? t('toolAccess.drift.missing') : state.Drifted ? t('toolAccess.drift.changed') : t('toolAccess.drift.unchanged')}\n${state.Path}`).join('\n\n')
-    : t('toolAccess.drift.none')
-  return `${t('toolAccess.drift.confirmMessage')}\n\n${details}`
-}
-
 async function applyPreset(preset: toolconfig.Preset, allowDrift = false) {
   if (mutationBusy.value && !allowDrift) return
   mutationBusy.value = true
@@ -150,20 +152,22 @@ async function applyPreset(preset: toolconfig.Preset, allowDrift = false) {
     const result = await api.applyToolPreset(preset.ID, allowDrift)
     toast.push(result.HotReload ? t('toolAccess.toast.hotReloaded') : t('toolAccess.toast.restartRequired'), 'success')
     await refresh()
+    if (preset.Tool === 'opencode' && opencodeLive.value?.OmoConfigured) {
+      omoOpen.value = true
+    }
   } catch (e: any) {
     const message = e?.message || String(e)
     if (!allowDrift && message.includes('config file changed externally since last apply')) {
+      applyDriftLoading.value = true
       try {
         const states = await api.checkToolDrift(preset.Tool)
-        const ok = await confirm.open({
-          title: t('toolAccess.drift.confirmTitle'),
-          message: driftMessage(states),
-          confirmText: t('toolAccess.drift.confirm'),
-          danger: true,
-        })
-        if (ok) await applyPreset(preset, true)
+        applyDriftPreset.value = preset
+        applyDriftStates.value = states
+        applyDriftOpen.value = true
       } catch (driftError: any) {
         toast.push(driftError?.message || String(driftError), 'error')
+      } finally {
+        applyDriftLoading.value = false
       }
     } else {
       toast.push(message, 'error')
@@ -193,11 +197,29 @@ async function deletePreset(preset: toolconfig.Preset) {
   }
 }
 
-function openImport(tool: ToolName) {
+function openImport(tool: ToolName, providerID = '', name = '') {
   importTool.value = tool
-  importProviderID.value = ''
-  importName.value = ''
+  importProviderID.value = providerID
+  importName.value = name
   importOpen.value = true
+}
+
+async function continueApplyAfterDrift() {
+  const preset = applyDriftPreset.value
+  applyDriftOpen.value = false
+  if (preset) await applyPreset(preset, true)
+}
+
+function importDriftedConfig() {
+  const preset = applyDriftPreset.value
+  if (!preset) return
+  const current = activePreset(statusFor(preset.Tool as ToolName), preset.Tool as ToolName)
+  applyDriftOpen.value = false
+  openImport(
+    preset.Tool as ToolName,
+    current?.ProviderID || preset.ProviderID || '',
+    t('toolAccess.import.suggestedName', { tool: toolLabel(preset.Tool) })
+  )
 }
 
 async function importPreset() {
@@ -308,7 +330,7 @@ onMounted(() => {
       <div v-if="loading" class="text-muted tool-page-state">{{ t('toolAccess.loading') }}</div>
       <div v-else-if="loadError" class="tool-page-error" role="alert">{{ t('toolAccess.loadFailed', { error: loadError }) }} <button class="btn btn-secondary" @click="refresh">{{ t('toolAccess.retry') }}</button></div>
       <section v-else class="tool-grid">
-        <article v-for="card in toolCards" :key="card.tool" class="card card-hover tool-card">
+        <article v-for="card in toolCards" :key="card.tool" class="card card-hover tool-card" :class="{ 'tool-card-opencode': card.tool === 'opencode' }">
           <div class="row-between tool-card-heading">
             <div class="row" style="gap: 10px; min-width: 0;">
               <div class="list-icon tool-icon" :class="card.tool">{{ card.label.slice(0, 1) }}</div>
@@ -336,6 +358,10 @@ onMounted(() => {
             <span v-if="activePreset(statusFor(card.tool), card.tool)" class="badge info">{{ activePreset(statusFor(card.tool), card.tool)?.Name }}</span>
             <span v-else class="text-muted">{{ t('toolAccess.status.unconfigured') }}</span>
           </div>
+          <div v-if="card.tool === 'opencode'" class="row-between tool-live-line">
+            <span class="text-muted">{{ t('toolAccess.status.currentLive') }}</span>
+            <span class="text-mono" :class="{ 'text-muted': !opencodeLive?.Model }">{{ opencodeLive?.Model || t('toolAccess.status.modelUnset') }}</span>
+          </div>
 
           <div class="h-divider tool-divider"></div>
           <div class="row-between tool-section-heading">
@@ -359,10 +385,20 @@ onMounted(() => {
             </div>
           </div>
 
+          <div v-if="card.tool === 'opencode'" class="omo-card-block">
+            <div class="row-between omo-card-heading">
+              <div>
+                <div class="omo-card-label">OMO</div>
+                <div v-if="opencodeLive?.OmoConfigured" class="omo-card-summary">{{ t('toolAccess.omo.activeSummary', { preset: opencodeLive.OmoActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoAgentCount, disabled: opencodeLive.OmoDisabledCount }) }}</div>
+                <div v-else class="omo-card-summary muted">{{ t('toolAccess.omo.notConfigured') }}</div>
+              </div>
+              <button v-if="opencodeLive?.OmoConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omo.edit') }}</button>
+            </div>
+          </div>
+
           <div class="row tool-card-actions">
             <button class="btn btn-ghost" style="padding-left: 0;" @click="openImport(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>{{ t('toolAccess.presets.import') }}</button>
             <button class="btn btn-ghost" @click="openBackups(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button>
-            <button v-if="card.tool === 'opencode' && statusFor(card.tool)?.ExtraPaths?.omo_config" class="btn btn-ghost tool-omo-button" @click="omoOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg>{{ t('toolAccess.omo.entry') }}</button>
             <button class="btn btn-ghost tool-drift-link" @click="openDrift(card.tool)">{{ t('toolAccess.status.checkDrift') }}</button>
           </div>
         </article>
@@ -374,6 +410,15 @@ onMounted(() => {
   <OmoModal :open="omoOpen" @close="omoOpen = false" @applied="refresh" />
 
   <Teleport to="body">
+    <div v-if="applyDriftOpen" class="modal-overlay" @click.self="applyDriftOpen = false">
+      <div class="modal-card wide">
+        <div class="row-between"><div><div class="modal-title">{{ t('toolAccess.drift.confirmTitle') }}</div><div class="section-sub">{{ t('toolAccess.drift.confirmMessage') }}</div></div><button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="applyDriftOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <div v-if="applyDriftLoading" class="tool-page-state">{{ t('toolAccess.drift.loading') }}</div>
+        <div v-else class="drift-list"><div v-for="state in applyDriftStates" :key="state.Resource" class="drift-row"><div class="row"><span class="dot" :class="state.Missing ? 'red' : state.Drifted ? 'amber' : 'green'"/><strong>{{ state.Resource }}</strong><span class="badge" :class="state.Missing || state.Drifted ? 'warn' : 'success'">{{ state.Missing ? t('toolAccess.drift.missing') : state.Drifted ? t('toolAccess.drift.changed') : t('toolAccess.drift.unchanged') }}</span></div><div class="text-mono drift-path">{{ state.Path }}</div></div></div>
+        <div class="row drift-choice-actions"><button class="btn btn-secondary" @click="applyDriftOpen = false">{{ t('common.cancel') }}</button><button class="btn btn-secondary" @click="importDriftedConfig">{{ t('toolAccess.drift.importBackfill') }}</button><button class="btn btn-danger" @click="continueApplyAfterDrift">{{ t('toolAccess.drift.applyAnyway') }}</button></div>
+      </div>
+    </div>
+
     <div v-if="driftOpen" class="modal-overlay" @click.self="driftOpen = false">
       <div class="modal-card wide">
         <div class="row-between"><div><div class="modal-title">{{ t('toolAccess.drift.title', { tool: toolLabel(driftTool) }) }}</div><div class="section-sub">{{ t('toolAccess.drift.subtitle') }}</div></div><button class="btn btn-icon" @click="driftOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -401,6 +446,7 @@ onMounted(() => {
 <style scoped>
 .tool-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .tool-card { padding: 16px; min-width: 0; }
+.tool-card-opencode { grid-column: span 2; }
 .tool-card-heading { align-items: flex-start; margin-bottom: 14px; }
 .tool-icon { color: white; background: var(--graphite); text-transform: uppercase; }
 .tool-icon.opencode { background: var(--accent); }
@@ -416,6 +462,7 @@ onMounted(() => {
 .tool-extra-path { display: flex; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 10.5px; min-width: 0; }
 .tool-extra-path span:last-child { flex: 1; min-width: 0; }
 .tool-active-line { font-size: 12px; min-height: 26px; }
+.tool-live-line { min-height: 24px; font-size: 12px; }
 .tool-divider { margin: 12px 0; }
 .tool-section-heading { align-items: flex-start; margin-bottom: 9px; }
 .tool-empty, .tool-page-state { padding: 18px 8px; text-align: center; color: var(--muted); font-size: 12px; }
@@ -434,6 +481,11 @@ onMounted(() => {
 .tool-card-actions { flex-wrap: wrap; gap: 2px 10px; margin-top: 10px; }
 .tool-card-actions .btn-ghost { font-size: 11.5px; }
 .tool-drift-link { margin-left: auto; }
+.omo-card-block { margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
+.omo-card-heading { align-items: center; gap: 12px; }
+.omo-card-label { font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.omo-card-summary { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.omo-card-summary.muted { color: var(--muted); }
 .tool-page-error { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 40px 0; color: var(--negative); font-size: 13px; }
 .drift-list { margin-top: 18px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .drift-row { padding: 11px 12px; border-bottom: 1px solid var(--border); }
@@ -448,6 +500,7 @@ onMounted(() => {
 .export-code { max-height: 400px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #1d1d1f; color: #f5f5f7; font: 11.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .backups-table { min-width: 640px; }
 .backup-path { max-width: 300px; overflow-wrap: anywhere; font-size: 11px; }
-@media (max-width: 1050px) { .tool-grid { grid-template-columns: 1fr 1fr; } }
+ .drift-choice-actions { justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+@media (max-width: 1050px) { .tool-grid { grid-template-columns: 1fr 1fr; } .tool-card-opencode { grid-column: span 1; } }
 @media (max-width: 700px) { .tool-grid { grid-template-columns: 1fr; } .tool-page-error { flex-direction: column; } }
 </style>

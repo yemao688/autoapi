@@ -627,6 +627,8 @@
       "configMissing": "暂无配置",
       "configPath": "配置文件",
       "activePreset": "当前预设",
+      "currentLive": "当前生效",
+      "modelUnset": "未设置",
       "unconfigured": "未配置",
       "notFound": "未找到",
       "drifted": "配置已漂移",
@@ -677,7 +679,9 @@
       "unchanged": "未变化",
       "confirmTitle": "配置文件已变化",
       "confirmMessage": "配置文件自上次应用后发生了外部变化。继续应用将覆盖这些变化：",
-      "confirm": "仍然应用"
+      "confirm": "仍然应用",
+      "applyAnyway": "仍然应用",
+      "importBackfill": "导入回填"
     },
     "import": {
       "title": "导入 {tool} 配置",
@@ -686,6 +690,7 @@
       "providerPlaceholder": "例如 openai",
       "name": "预设名称",
       "namePlaceholder": "例如 当前工作配置",
+      "suggestedName": "{tool} 漂移回填",
       "confirm": "导入"
     },
     "export": {
@@ -755,20 +760,48 @@
     "omo": {
       "title": "OMO 插件配置",
       "entry": "OMO 插件配置",
+      "edit": "编辑",
+      "activeSummary": "{preset} · {agents} 个 Agent · {disabled} 个禁用",
+      "notConfigured": "未检测到 OMO 配置",
       "pathUnavailable": "配置路径不可用",
       "loading": "正在读取 OMO 配置…",
       "loadFailed": "OMO 配置不可用",
       "retry": "重试",
       "activePreset": "激活预设",
       "activePresetHelp": "只能选择已知预设。",
+      "switchPreview": "切换预览",
+      "switchPreviewHelp": "预览 {preset} 的内置 Agent 配置，保存后才会应用。",
+      "previewOnly": "仅预览",
+      "noProjection": "该预设暂无内置 Agent 投影。",
       "agents": "Agents",
+      "agentHelp": "内置 Agent 来自当前激活预设；其余为自定义 Agent。",
       "agentCount": "{count} 个 Agent",
       "agent": "Agent",
+      "builtInAgents": "内置 Agents",
+      "customAgents": "自定义 Agents",
       "model": "模型",
+      "modelPlaceholder": "输入或选择模型",
+      "modelUnknown": "不在已知模型列表中，保存时可能被拒绝",
       "variant": "Variant",
       "variantNone": "清除",
+      "enabled": "启用",
+      "enableAgent": "启用 {name}",
+      "disableAgent": "禁用 {name}",
       "disabledAgents": "禁用 Agents",
-      "disabledHelp": "勾选后会写入 disabled_agents。"
+      "disabledHelp": "关闭开关后会写入 disabled_agents。",
+      "otherDisabled": "其他已禁用",
+      "reenableAgent": "重新启用 {name}",
+      "modelUnset": "未设置",
+      "agentDesc": {
+        "orchestrator": "主编排代理，分派与汇总任务",
+        "oracle": "高级顾问，架构决策与评审",
+        "librarian": "文档与外部资料调研",
+        "explorer": "代码库快速勘察",
+        "designer": "UI/UX 设计与实现",
+        "fixer": "有界实现与修复执行",
+        "observer": "图像与文档视觉分析",
+        "council": "多顾问会商评审"
+      }
     }
   },
   "usage": {

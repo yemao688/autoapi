@@ -627,6 +627,8 @@
       "configMissing": "No config",
       "configPath": "Config file",
       "activePreset": "Active preset",
+      "currentLive": "Currently active",
+      "modelUnset": "Not set",
       "unconfigured": "Not configured",
       "notFound": "Not found",
       "drifted": "Config changed",
@@ -677,7 +679,9 @@
       "unchanged": "Unchanged",
       "confirmTitle": "Config file changed",
       "confirmMessage": "A config file changed externally since the last apply. Applying again will overwrite those changes:",
-      "confirm": "Apply anyway"
+      "confirm": "Apply anyway",
+      "applyAnyway": "Apply anyway",
+      "importBackfill": "Import to backfill"
     },
     "import": {
       "title": "Import {tool} config",
@@ -686,6 +690,7 @@
       "providerPlaceholder": "e.g. openai",
       "name": "Preset name",
       "namePlaceholder": "e.g. Current work config",
+      "suggestedName": "{tool} drift backfill",
       "confirm": "Import"
     },
     "export": {
@@ -755,20 +760,48 @@
     "omo": {
       "title": "OMO plugin config",
       "entry": "OMO plugin config",
+      "edit": "Edit",
+      "activeSummary": "{preset} · {agents} agents · {disabled} disabled",
+      "notConfigured": "No OMO config detected",
       "pathUnavailable": "Config path unavailable",
       "loading": "Loading OMO config…",
       "loadFailed": "OMO config is unavailable",
       "retry": "Retry",
       "activePreset": "Active preset",
       "activePresetHelp": "Only known presets can be selected.",
+      "switchPreview": "Switch preview",
+      "switchPreviewHelp": "Preview the built-in agent configuration for {preset}; nothing applies until you save.",
+      "previewOnly": "Preview only",
+      "noProjection": "This preset has no built-in agent projection.",
       "agents": "Agents",
+      "agentHelp": "Built-in agents come from the currently active preset; the rest are custom agents.",
       "agentCount": "{count} agents",
       "agent": "Agent",
+      "builtInAgents": "Built-in agents",
+      "customAgents": "Custom agents",
       "model": "Model",
+      "modelPlaceholder": "Type or select a model",
+      "modelUnknown": "Not in the known model list; save may be rejected",
       "variant": "Variant",
       "variantNone": "Clear",
+      "enabled": "Enabled",
+      "enableAgent": "Enable {name}",
+      "disableAgent": "Disable {name}",
       "disabledAgents": "Disabled agents",
-      "disabledHelp": "Checked agents are written to disabled_agents."
+      "disabledHelp": "Turning the switch off writes the name to disabled_agents.",
+      "otherDisabled": "Other disabled",
+      "reenableAgent": "Re-enable {name}",
+      "modelUnset": "Not set",
+      "agentDesc": {
+        "orchestrator": "Main orchestrating agent, dispatches and consolidates work",
+        "oracle": "Senior advisor for architecture and review",
+        "librarian": "Docs and external research",
+        "explorer": "Fast codebase recon",
+        "designer": "UI/UX design and implementation",
+        "fixer": "Bounded implementation and fixes",
+        "observer": "Visual analysis of images and docs",
+        "council": "Multi-advisor council review"
+      }
     }
   },
   "usage": {
