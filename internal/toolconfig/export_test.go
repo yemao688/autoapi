@@ -15,7 +15,7 @@ func TestExportSnippetDispatchesByTool(t *testing.T) {
 			BaseURL: "https://api.example.test/v1",
 			Models:  []PresetModel{{Name: "model", Default: true}},
 		}, APIKey: "secret"}
-		snippet, err := ExportSnippet(preset, t.TempDir())
+		snippet, err := ExportSnippet(preset)
 		if err != nil {
 			t.Fatalf("%s: %v", tool, err)
 		}
@@ -26,7 +26,7 @@ func TestExportSnippetDispatchesByTool(t *testing.T) {
 }
 
 func TestExportSnippetRejectsUnsupportedTool(t *testing.T) {
-	_, err := ExportSnippet(PresetPlaintext{Preset: Preset{Tool: Tool("unknown")}}, t.TempDir())
+	_, err := ExportSnippet(PresetPlaintext{Preset: Preset{Tool: Tool("unknown")}})
 	if !errors.Is(err, ErrInvalidPreset) {
 		t.Fatalf("error = %v, want ErrInvalidPreset", err)
 	}

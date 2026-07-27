@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -23,13 +22,6 @@ type ToolApplyResult struct {
 	BackupPaths []string
 	HotReload   bool
 	RestartHint string
-}
-
-// ToolProviderView is the UI-facing row: a preset plus its live mirror state.
-type ToolProviderView struct {
-	Preset  toolconfig.Preset
-	Enabled bool // provider currently present in the tool's config file
-	InDB    bool // false for synthesized rows that exist only in the file
 }
 
 // DriftState reports the current drift state of one managed tool resource.
@@ -96,7 +88,6 @@ func (s *Service) ListToolStatuses() ([]toolconfig.ToolStatus, error) {
 
 // CreateToolPreset encrypts an optional plaintext key and persists a preset.
 func (s *Service) CreateToolPreset(p toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
-	normalizeToolPresetVendor(&p)
 	if plaintextKey != "" {
 		encoded, err := s.encryptToolKey(plaintextKey)
 		if err != nil {
@@ -113,7 +104,6 @@ func (s *Service) CreateToolPreset(p toolconfig.Preset, plaintextKey string) (*t
 // UpdateToolPreset updates a preset. An empty plaintext key preserves the
 // existing encrypted key.
 func (s *Service) UpdateToolPreset(p toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
-	normalizeToolPresetVendor(&p)
 	existing, err := s.store.GetToolPreset(p.ID)
 	if err != nil {
 		return nil, err
@@ -144,156 +134,12 @@ func (s *Service) GetToolPresets(tool string) ([]toolconfig.Preset, error) {
 }
 
 func (s *Service) DeleteToolPreset(id int64) error {
-	preset, err := s.store.GetToolPreset(id)
-	if err != nil {
-		return err
-	}
-	if preset == nil {
-		return fmt.Errorf("service: tool preset %d not found", id)
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	adapter, err := adapterFor(preset.Tool)
-	if err != nil {
-		return err
-	}
-	providerIDs, err := providerIDsForTool(preset.Tool, adapter, homeDir)
-	if err != nil {
-		return err
-	}
-	providerID := toolconfig.ProviderKey(*preset)
-	for _, candidate := range providerIDs {
-		if candidate == providerID {
-			return fmt.Errorf("%w: 该供应商当前已启用，请先在列表中禁用", toolconfig.ErrConflict)
-		}
-	}
 	return s.store.DeleteToolPreset(id)
 }
 
-// ListToolProviders returns the live mirror of a tool config and its parked DB
-// presets. Provider entries present only on disk are synthesized as ID 0 rows.
-func (s *Service) ListToolProviders(tool string) ([]ToolProviderView, error) {
-	toolID := toolconfig.Tool(tool)
-	adapter, err := adapterFor(toolID)
-	if err != nil {
-		return nil, err
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	providerIDs, err := providerIDsForTool(toolID, adapter, homeDir)
-	if err != nil {
-		return nil, err
-	}
-	fileProviders := make(map[string]struct{}, len(providerIDs))
-	for _, providerID := range providerIDs {
-		fileProviders[providerID] = struct{}{}
-	}
-	presets, err := s.store.ListToolPresets(tool)
-	if err != nil {
-		return nil, err
-	}
-	views := make([]ToolProviderView, 0, len(presets)+len(providerIDs))
-	claimed := make(map[string]struct{}, len(presets))
-	for _, preset := range presets {
-		normalizeToolPresetVendor(&preset)
-		providerID := toolconfig.ProviderKey(preset)
-		_, enabled := fileProviders[providerID]
-		if enabled {
-			claimed[providerID] = struct{}{}
-		}
-		views = append(views, ToolProviderView{Preset: preset, Enabled: enabled, InDB: true})
-	}
-	for _, providerID := range providerIDs {
-		if _, exists := claimed[providerID]; exists {
-			continue
-		}
-		raw, err := adapter.ReadManagedRaw(homeDir, providerID)
-		if err != nil {
-			return nil, err
-		}
-		if !raw.Present {
-			continue
-		}
-		name := raw.Name
-		if name == "" {
-			name = providerID
-		}
-		vendor := ""
-		if toolID == toolconfig.ToolOpencode {
-			vendor = toolconfig.NormalizeVendor(raw.Vendor)
-		}
-		views = append(views, ToolProviderView{
-			Preset: toolconfig.Preset{
-				Tool:       toolID,
-				Kind:       toolconfig.PresetDirect,
-				Name:       name,
-				ProviderID: providerID,
-				Vendor:     vendor,
-				BaseURL:    raw.BaseURL,
-				Models:     raw.Models,
-				APIKeyEnc:  raw.APIKey,
-			},
-			Enabled: true,
-			InDB:    false,
-		})
-	}
-	sort.SliceStable(views, func(i, j int) bool {
-		if views[i].Enabled != views[j].Enabled {
-			return views[i].Enabled
-		}
-		leftName := strings.ToLower(views[i].Preset.Name)
-		rightName := strings.ToLower(views[j].Preset.Name)
-		if leftName != rightName {
-			return leftName < rightName
-		}
-		return toolconfig.ProviderKey(views[i].Preset) < toolconfig.ProviderKey(views[j].Preset)
-	})
-	return views, nil
-}
-
-// RevealToolProviderKey returns a provider key only after an explicit user
-// request from the provider editor. The plaintext value is never logged or
-// included in a redacted provider view.
-func (s *Service) RevealToolProviderKey(tool, providerID string) (string, error) {
-	toolID := toolconfig.Tool(tool)
-	adapter, err := adapterFor(toolID)
-	if err != nil {
-		return "", err
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	raw, err := adapter.ReadManagedRaw(homeDir, providerID)
-	if err != nil && !errors.Is(err, toolconfig.ErrConfigNotFound) {
-		return "", err
-	}
-	if err == nil && raw.Present {
-		return raw.APIKey, nil
-	}
-
-	presets, err := s.store.ListToolPresets(string(toolID))
-	if err != nil {
-		return "", err
-	}
-	for _, preset := range presets {
-		if toolconfig.ProviderKey(preset) != providerID {
-			continue
-		}
-		if preset.Kind == toolconfig.PresetAutoapi || preset.APIKeyEnc == "" {
-			return "", nil
-		}
-		return s.decryptToolKey(preset.APIKeyEnc)
-	}
-	return "", nil
-}
-
-// EnableToolPreset writes a parked DB preset into the live tool config.
-func (s *Service) EnableToolPreset(id int64) (ToolApplyResult, error) {
+// ApplyToolPreset plans and commits a provider preset, then persists the
+// resulting hashes and backup paths as one database operation.
+func (s *Service) ApplyToolPreset(id int64, allowDrift bool) (ToolApplyResult, error) {
 	preset, err := s.store.GetToolPreset(id)
 	if err != nil {
 		return ToolApplyResult{}, err
@@ -318,182 +164,7 @@ func (s *Service) EnableToolPreset(id int64) (ToolApplyResult, error) {
 		return ToolApplyResult{}, err
 	}
 	configPath := adapter.Detect(homeDir).ConfigPath
-	return s.commitToolChangeSet(preset.Tool, changeSet, true, 0, configPath)
-}
-
-// DisableToolPreset snapshots the live provider into the DB and removes it
-// from the tool config. The DB copy remains available for a later enable.
-func (s *Service) DisableToolPreset(tool, providerID string) (ToolApplyResult, error) {
-	toolID := toolconfig.Tool(tool)
-	adapter, err := adapterFor(toolID)
-	if err != nil {
-		return ToolApplyResult{}, err
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ToolApplyResult{}, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	raw, err := adapter.ReadManagedRaw(homeDir, providerID)
-	if err != nil {
-		return ToolApplyResult{}, err
-	}
-	existingPresets, err := s.store.ListToolPresets(tool)
-	if err != nil {
-		return ToolApplyResult{}, err
-	}
-	var existing *toolconfig.Preset
-	for i := range existingPresets {
-		if toolconfig.ProviderKey(existingPresets[i]) == providerID {
-			existing = &existingPresets[i]
-			break
-		}
-	}
-	if !raw.Present {
-		if existing != nil {
-			return ToolApplyResult{Tool: tool}, nil
-		}
-		return ToolApplyResult{}, fmt.Errorf("service: managed configuration for %s is not present: %w", tool, toolconfig.ErrConfigNotFound)
-	}
-
-	if existing != nil {
-		updated := *existing
-		if raw.Name != "" {
-			updated.Name = raw.Name
-		}
-		if toolID == toolconfig.ToolOpencode {
-			updated.Vendor = toolconfig.NormalizeVendor(raw.Vendor)
-		}
-		updated.BaseURL = raw.BaseURL
-		updated.Models = raw.Models
-		if raw.APIKey != "" {
-			updated.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
-			if err != nil {
-				return ToolApplyResult{}, err
-			}
-		}
-		if err := s.store.UpdateToolPreset(&updated); err != nil {
-			return ToolApplyResult{}, err
-		}
-	} else {
-		name := raw.Name
-		if name == "" {
-			name = providerID
-		}
-		preset := toolconfig.Preset{
-			Tool:       toolID,
-			Kind:       toolconfig.PresetDirect,
-			Name:       name,
-			ProviderID: providerID,
-			BaseURL:    raw.BaseURL,
-			Models:     raw.Models,
-		}
-		if toolID == toolconfig.ToolOpencode {
-			preset.Vendor = toolconfig.NormalizeVendor(raw.Vendor)
-		}
-		if raw.APIKey != "" {
-			preset.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
-			if err != nil {
-				return ToolApplyResult{}, err
-			}
-		}
-		if err := s.store.CreateToolPreset(&preset); err != nil {
-			return ToolApplyResult{}, err
-		}
-	}
-
-	changeSet, err := adapter.PlanRemoval(homeDir, providerID)
-	if err != nil {
-		return ToolApplyResult{}, err
-	}
-	configPath := adapter.Detect(homeDir).ConfigPath
-	return s.commitToolChangeSet(toolID, changeSet, true, 0, configPath)
-}
-
-// UpdateEnabledToolPreset writes an enabled provider through to disk and then
-// reconciles its DB row. ID 0 is used for a provider that exists only on disk.
-func (s *Service) UpdateEnabledToolPreset(p toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
-	toolID := p.Tool
-	adapter, err := adapterFor(toolID)
-	if err != nil {
-		return nil, err
-	}
-	if p.Kind == toolconfig.PresetAutoapi {
-		if p.ID == 0 {
-			return nil, fmt.Errorf("service: autoapi tool preset must already exist in the database")
-		}
-		if _, err := s.UpdateToolPreset(p, plaintextKey); err != nil {
-			return nil, err
-		}
-		if _, err := s.EnableToolPreset(p.ID); err != nil {
-			return nil, err
-		}
-		return s.store.GetToolPreset(p.ID)
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	var existing *toolconfig.Preset
-	if p.ID != 0 {
-		existing, err = s.store.GetToolPreset(p.ID)
-		if err != nil {
-			return nil, err
-		}
-		if existing == nil {
-			return nil, fmt.Errorf("service: tool preset %d not found", p.ID)
-		}
-	}
-	var resolvedPlaintextKey string
-	if plaintextKey != "" {
-		resolvedPlaintextKey = plaintextKey
-		p.APIKeyEnc, err = s.encryptToolKey(plaintextKey)
-		if err != nil {
-			return nil, err
-		}
-	} else if existing != nil && existing.APIKeyEnc != "" {
-		resolvedPlaintextKey, err = s.decryptToolKey(existing.APIKeyEnc)
-		if err != nil {
-			return nil, err
-		}
-		p.APIKeyEnc = existing.APIKeyEnc
-	} else {
-		raw, rawErr := adapter.ReadManagedRaw(homeDir, toolconfig.ProviderKey(p))
-		if rawErr != nil {
-			return nil, rawErr
-		}
-		if raw.APIKey != "" {
-			resolvedPlaintextKey = raw.APIKey
-			p.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			p.APIKeyEnc = ""
-		}
-	}
-	normalizeToolPresetVendor(&p)
-	plaintext := toolconfig.PresetPlaintext{Preset: p, APIKey: resolvedPlaintextKey}
-	changeSet, err := adapter.Plan(plaintext, homeDir)
-	if err != nil {
-		return nil, err
-	}
-	configPath := adapter.Detect(homeDir).ConfigPath
-	if _, err := s.commitToolChangeSet(toolID, changeSet, true, 0, configPath); err != nil {
-		return nil, err
-	}
-	if existing == nil {
-		if err := s.store.CreateToolPreset(&p); err != nil {
-			return nil, err
-		}
-	} else {
-		if p.CreatedAt == 0 {
-			p.CreatedAt = existing.CreatedAt
-		}
-		if err := s.store.UpdateToolPreset(&p); err != nil {
-			return nil, err
-		}
-	}
-	return s.store.GetToolPreset(p.ID)
+	return s.commitToolChangeSet(preset.Tool, changeSet, allowDrift, id, configPath)
 }
 
 // CheckToolDrift returns per-resource drift details for a tool.
@@ -525,6 +196,48 @@ func (s *Service) CheckToolDrift(tool string) ([]DriftState, error) {
 	return out, nil
 }
 
+// ImportToolPreset reconstructs a direct preset from the adapter's raw,
+// plaintext managed section. The plaintext key is encrypted before storage.
+func (s *Service) ImportToolPreset(tool, providerID, name string) (*toolconfig.Preset, error) {
+	toolID := toolconfig.Tool(tool)
+	adapter, err := adapterFor(toolID)
+	if err != nil {
+		return nil, err
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	raw, err := adapter.ReadManagedRaw(homeDir, providerID)
+	if err != nil {
+		return nil, err
+	}
+	if !raw.Present {
+		return nil, fmt.Errorf("service: managed configuration for %s is not present: %w", tool, toolconfig.ErrConfigNotFound)
+	}
+	if raw.ProviderID == "" {
+		raw.ProviderID = providerID
+	}
+	preset := toolconfig.Preset{
+		Tool:       toolID,
+		Kind:       toolconfig.PresetDirect,
+		Name:       name,
+		ProviderID: raw.ProviderID,
+		BaseURL:    raw.BaseURL,
+		Models:     raw.Models,
+	}
+	if raw.APIKey != "" {
+		preset.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := s.store.CreateToolPreset(&preset); err != nil {
+		return nil, err
+	}
+	return &preset, nil
+}
+
 // ExportToolSnippet decrypts a preset only for the pure export renderer.
 func (s *Service) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	preset, err := s.store.GetToolPreset(id)
@@ -538,164 +251,26 @@ func (s *Service) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	if err != nil {
 		return toolconfig.Snippet{}, err
 	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return toolconfig.Snippet{}, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	return toolconfig.ExportSnippet(plaintext, homeDir)
+	return toolconfig.ExportSnippet(plaintext)
 }
 
-// OmoSlimConfigView is the UI-facing projection of the OMO Slim config plus the
-// closed-choice lists the editor needs. It is a single return value because
-// the Wails binding only supports at most one data value plus error.
-type OmoSlimConfigView struct {
-	Path              string
-	ActivePreset      string
-	Agents            map[string]toolconfig.OmoSlimAgent
-	CustomAgents      map[string]toolconfig.OmoSlimCustomAgent
-	DisabledAgents    []string
-	DisabledSkills    []string
-	DisabledMcps      []string
-	KnownPresets      []string
-	ValidModels       []string
-	AvailableVariants []string
-	PresetAgents      map[string]map[string]toolconfig.OmoSlimAgent
-	KnownSkills       []string
-	KnownMcps         []string
-}
-
-func (s *Service) GetOmoSlimConfig() (OmoSlimConfigView, error) {
+func (s *Service) GetOmoConfig() (toolconfig.OmoConfig, []string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return OmoSlimConfigView{}, fmt.Errorf("service: resolve home dir: %w", err)
+		return toolconfig.OmoConfig{}, nil, fmt.Errorf("service: resolve home dir: %w", err)
 	}
-	config, err := toolconfig.ReadOmoSlimConfig(homeDir)
+	config, err := toolconfig.ReadOmoConfig(homeDir)
 	if err != nil {
-		return OmoSlimConfigView{}, err
+		return toolconfig.OmoConfig{}, nil, err
 	}
 	validModels, err := toolconfig.ListProviderModels(homeDir)
 	if err != nil {
-		return OmoSlimConfigView{}, err
+		return toolconfig.OmoConfig{}, nil, err
 	}
-	knownPresets, err := toolconfig.ListOmoSlimPresets(homeDir)
-	if err != nil {
-		return OmoSlimConfigView{}, err
-	}
-	variants, err := toolconfig.ListProviderVariants(homeDir)
-	if err != nil {
-		return OmoSlimConfigView{}, err
-	}
-	presetAgents, err := toolconfig.ListOmoSlimPresetAgents(homeDir)
-	if err != nil {
-		return OmoSlimConfigView{}, err
-	}
-	knownSkills, err := toolconfig.ListKnownSkills(homeDir)
-	if err != nil {
-		return OmoSlimConfigView{}, err
-	}
-	knownMcps, err := toolconfig.ListMcpNames(homeDir)
-	if err != nil {
-		return OmoSlimConfigView{}, err
-	}
-	return OmoSlimConfigView{
-		Path:              config.Path,
-		ActivePreset:      config.ActivePreset,
-		Agents:            config.Agents,
-		CustomAgents:      config.CustomAgents,
-		DisabledAgents:    config.DisabledAgents,
-		DisabledSkills:    config.DisabledSkills,
-		DisabledMcps:      config.DisabledMcps,
-		KnownPresets:      knownPresets,
-		ValidModels:       validModels,
-		AvailableVariants: variants,
-		PresetAgents:      presetAgents,
-		KnownSkills:       knownSkills,
-		KnownMcps:         knownMcps,
-	}, nil
+	return config, validModels, nil
 }
 
-// OmoSlimPreview renders the result of an OMO Slim change without writing anything, so
-// the UI can show the exact file content before the user confirms a write.
-type OmoSlimPreview struct {
-	Path   string
-	Before string
-	After  string
-}
-
-// PreviewToolOmoSlimChange plans an OMO Slim change and returns the resulting file
-// content. Nothing is written and no drift state is touched.
-func (s *Service) PreviewToolOmoSlimChange(ch toolconfig.OmoSlimChange) (OmoSlimPreview, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return OmoSlimPreview{}, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	validModels, err := toolconfig.ListProviderModels(homeDir)
-	if err != nil {
-		return OmoSlimPreview{}, err
-	}
-	changeSet, err := toolconfig.PlanOmoSlimChange(homeDir, ch, validModels)
-	if err != nil {
-		return OmoSlimPreview{}, err
-	}
-	if len(changeSet.Changes) == 0 {
-		return OmoSlimPreview{}, fmt.Errorf("service: OMO Slim plan produced no changes")
-	}
-	change := changeSet.Changes[0]
-	before, _ := os.ReadFile(change.Path)
-	return OmoSlimPreview{
-		Path:   change.Path,
-		Before: string(before),
-		After:  string(change.After),
-	}, nil
-}
-
-// GetOpencodeGlobalSettings reads the curated top-level opencode settings.
-func (s *Service) GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return toolconfig.OpencodeGlobalSettings{}, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	return toolconfig.ReadOpencodeGlobalSettings(homeDir)
-}
-
-// OpencodeLiveState is the on-disk snapshot shown on the opencode card: the
-// effective model pointer plus a compact OMO Slim overview. It is read live on
-// every call and intentionally bypasses the DB-tracked state so drift
-// becomes a concrete comparison instead of an abstract badge.
-type OpencodeLiveState struct {
-	Model                string
-	OmoSlimConfigured    bool
-	OmoSlimActivePreset  string
-	OmoSlimAgentCount    int
-	OmoSlimDisabledCount int
-}
-
-func (s *Service) GetOpencodeLiveState() (OpencodeLiveState, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return OpencodeLiveState{}, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	state := OpencodeLiveState{}
-	model, err := toolconfig.ReadModelPointer(homeDir)
-	if err != nil {
-		return OpencodeLiveState{}, err
-	}
-	state.Model = model
-	config, err := toolconfig.ReadOmoSlimConfig(homeDir)
-	if err != nil {
-		if errors.Is(err, toolconfig.ErrConfigNotFound) {
-			return state, nil
-		}
-		return OpencodeLiveState{}, err
-	}
-	state.OmoSlimConfigured = true
-	state.OmoSlimActivePreset = config.ActivePreset
-	state.OmoSlimAgentCount = len(config.Agents)
-	state.OmoSlimDisabledCount = len(config.DisabledAgents)
-	return state, nil
-}
-
-func (s *Service) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift bool) error {
+func (s *Service) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("service: resolve home dir: %w", err)
@@ -704,7 +279,7 @@ func (s *Service) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift
 	if err != nil {
 		return err
 	}
-	changeSet, err := toolconfig.PlanOmoSlimChange(homeDir, change, validModels)
+	changeSet, err := toolconfig.PlanOmoChange(homeDir, change, validModels)
 	if err != nil {
 		return err
 	}
@@ -716,18 +291,16 @@ func (s *Service) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift
 		state.Tool = toolconfig.ToolOpencode
 	}
 	if state.ConfigPath == "" {
-		state.ConfigPath, _ = toolconfig.ResolveConfigPath(toolconfig.ToolOpencode, homeDir)
+		state.ConfigPath = toolconfig.DefaultConfigPath(toolconfig.ToolOpencode, homeDir)
 	}
 	_, err = s.commitToolChangeSet(toolconfig.ToolOpencode, changeSet, allowDrift, state.ActivePresetID, state.ConfigPath)
 	return err
 }
 
-// ListToolBackups lists both legacy central backups and timestamped source
-// siblings for every resource owned by the tool.
+// ListToolBackups lists backups below the per-tool resource directories.
 func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 	toolID := toolconfig.Tool(tool)
-	adapter, err := adapterFor(toolID)
-	if err != nil {
+	if _, err := adapterFor(toolID); err != nil {
 		return nil, err
 	}
 	homeDir, err := os.UserHomeDir()
@@ -736,7 +309,6 @@ func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 	}
 	root := toolBackupRoot(homeDir)
 	entries := make([]ToolBackupInfo, 0)
-	seen := make(map[string]struct{})
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if os.IsNotExist(walkErr) {
@@ -751,61 +323,25 @@ func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 		if err != nil {
 			return err
 		}
-		resource := toolconfig.Resource(filepath.ToSlash(filepath.Dir(rel)))
-		if !resourceBelongsToTool(toolID, resource) {
+		relSlash := filepath.ToSlash(rel)
+		prefix := string(toolID) + "/"
+		if !strings.HasPrefix(relSlash, prefix) {
 			return nil
 		}
+		resource := toolconfig.Resource(filepath.ToSlash(filepath.Dir(rel)))
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		if _, exists := seen[path]; !exists {
-			seen[path] = struct{}{}
-			entries = append(entries, ToolBackupInfo{Resource: resource, Path: path, ModTime: info.ModTime()})
-		}
+		entries = append(entries, ToolBackupInfo{Resource: resource, Path: path, ModTime: info.ModTime()})
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("service: list %s tool backups: %w", tool, err)
 	}
-	for _, resource := range backupResourcesForTool(toolID) {
-		targetPath, targetErr := s.targetPathForResource(toolID, resource, homeDir, adapter)
-		if targetErr != nil {
-			continue
-		}
-		targetPath = resolveBackupTargetPath(targetPath)
-		dirEntries, readErr := os.ReadDir(filepath.Dir(targetPath))
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				continue
-			}
-			return nil, fmt.Errorf("service: list %s source backups: %w", tool, readErr)
-		}
-		for _, entry := range dirEntries {
-			if entry.IsDir() {
-				continue
-			}
-			path := filepath.Join(filepath.Dir(targetPath), entry.Name())
-			if !toolconfig.IsSourceBackup(targetPath, path) {
-				continue
-			}
-			info, infoErr := entry.Info()
-			if infoErr != nil {
-				return nil, infoErr
-			}
-			if _, exists := seen[path]; exists {
-				continue
-			}
-			seen[path] = struct{}{}
-			entries = append(entries, ToolBackupInfo{Resource: resource, Path: path, ModTime: info.ModTime()})
-		}
-	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Resource != entries[j].Resource {
 			return entries[i].Resource < entries[j].Resource
-		}
-		if !entries[i].ModTime.Equal(entries[j].ModTime) {
-			return entries[i].ModTime.After(entries[j].ModTime)
 		}
 		return entries[i].Path < entries[j].Path
 	})
@@ -827,17 +363,17 @@ func (s *Service) RestoreToolBackup(tool, resource, backupPath string) error {
 	if err != nil {
 		return fmt.Errorf("service: resolve home dir: %w", err)
 	}
-	targetPath, err := s.targetPathForResource(toolID, toolconfig.Resource(resource), homeDir, adapter)
-	if err != nil {
-		return err
-	}
 	backupRoot := toolBackupRoot(homeDir)
-	if err := validateBackupPath(backupRoot, toolconfig.Resource(resource), backupPath, targetPath); err != nil {
+	if err := validateBackupPath(backupRoot, toolconfig.Resource(resource), backupPath); err != nil {
 		return err
 	}
 	after, err := os.ReadFile(backupPath)
 	if err != nil {
 		return fmt.Errorf("service: read tool backup: %w", err)
+	}
+	targetPath, err := s.targetPathForResource(toolID, toolconfig.Resource(resource), homeDir, adapter)
+	if err != nil {
+		return err
 	}
 	before, err := os.ReadFile(targetPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -865,11 +401,9 @@ func (s *Service) RestoreToolBackup(tool, resource, backupPath string) error {
 		Changes: []toolconfig.FileChange{{
 			Resource:   toolconfig.Resource(resource),
 			Path:       targetPath,
-			Secret:     toolconfig.Resource(resource) == toolconfig.ResCodexAuth,
 			Before:     before,
 			BeforeHash: beforeHash,
 			After:      after,
-			Mode:       0o644,
 		}},
 	}
 	_, err = s.commitToolChangeSet(toolID, changeSet, true, state.ActivePresetID, state.ConfigPath)
@@ -973,7 +507,7 @@ func (s *Service) commitToolChangeSet(tool toolconfig.Tool, changeSet *toolconfi
 		}
 	}
 	if configPath == "" {
-		configPath, _ = toolconfig.ResolveConfigPath(tool, homeDir)
+		configPath = toolconfig.DefaultConfigPath(tool, homeDir)
 	}
 	if err := s.store.SaveToolApplyState(&toolconfig.ToolState{
 		Tool:           tool,
@@ -1009,19 +543,19 @@ func (s *Service) targetPathForResource(tool toolconfig.Tool, resource toolconfi
 	}
 	switch resource {
 	case toolconfig.ResOpencodeConfig, toolconfig.ResCodexConfig, toolconfig.ResClaudeSettings:
-		path, _ := toolconfig.ResolveConfigPath(tool, homeDir)
+		path := toolconfig.DefaultConfigPath(tool, homeDir)
 		if path == "" {
 			return "", fmt.Errorf("service: no path for resource %s", resource)
 		}
-		return resolveBackupTargetPath(path), nil
-	case toolconfig.ResOpencodeOmoSlim, toolconfig.ResOmoSlimConfig:
-		if path, ok := toolconfig.DetectOmoSlimConfig(homeDir); ok {
-			return resolveBackupTargetPath(path), nil
+		return path, nil
+	case toolconfig.ResOpencodeOMO:
+		if path, ok := toolconfig.DetectOmoConfig(homeDir); ok {
+			return path, nil
 		}
 	case toolconfig.ResCodexAuth:
 		status := adapter.Detect(homeDir)
 		if path := status.ExtraPaths["auth_json"]; path != "" {
-			return resolveBackupTargetPath(path), nil
+			return path, nil
 		}
 	}
 	return "", fmt.Errorf("service: no target path for resource %s", resource)
@@ -1067,13 +601,10 @@ func toolBackupRoot(homeDir string) string {
 
 func resourceBelongsToTool(tool toolconfig.Tool, resource toolconfig.Resource) bool {
 	prefix := string(tool) + "/"
-	if strings.HasPrefix(string(resource), prefix) && len(resource) > len(prefix) {
-		return true
-	}
-	return tool == toolconfig.ToolOpencode && resource == toolconfig.ResOmoSlimConfig
+	return strings.HasPrefix(string(resource), prefix) && len(resource) > len(prefix)
 }
 
-func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupPath string, targets ...string) error {
+func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupPath string) error {
 	resourceDir := filepath.Join(backupRoot, filepath.FromSlash(string(resource)))
 	rootAbs, err := filepath.Abs(resourceDir)
 	if err != nil {
@@ -1083,6 +614,10 @@ func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupP
 	if err != nil {
 		return fmt.Errorf("service: resolve backup path: %w", err)
 	}
+	rel, err := filepath.Rel(rootAbs, backupAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("service: backup path is outside resource directory")
+	}
 	info, err := os.Stat(backupAbs)
 	if err != nil {
 		return fmt.Errorf("service: stat backup path: %w", err)
@@ -1090,38 +625,7 @@ func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupP
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("service: backup path is not a regular file")
 	}
-	rel, err := filepath.Rel(rootAbs, backupAbs)
-	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
-		return nil
-	}
-	if len(targets) == 0 || !toolconfig.IsSourceBackup(resolveBackupTargetPath(targets[0]), backupAbs) {
-		return fmt.Errorf("service: backup path is outside resource directory")
-	}
 	return nil
-}
-
-func backupResourcesForTool(tool toolconfig.Tool) []toolconfig.Resource {
-	switch tool {
-	case toolconfig.ToolOpencode:
-		return []toolconfig.Resource{toolconfig.ResOpencodeConfig, toolconfig.ResOmoSlimConfig, toolconfig.ResOpencodeOmoSlim}
-	case toolconfig.ToolCodex:
-		return []toolconfig.Resource{toolconfig.ResCodexConfig, toolconfig.ResCodexAuth}
-	case toolconfig.ToolClaude:
-		return []toolconfig.Resource{toolconfig.ResClaudeSettings}
-	default:
-		return nil
-	}
-}
-
-func resolveBackupTargetPath(path string) string {
-	path = filepath.Clean(path)
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return filepath.Clean(resolved)
-	}
-	if resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-		return filepath.Join(filepath.Clean(resolvedDir), filepath.Base(path))
-	}
-	return path
 }
 
 func adapterFor(tool toolconfig.Tool) (toolconfig.Adapter, error) {
@@ -1132,32 +636,6 @@ func adapterFor(tool toolconfig.Tool) (toolconfig.Adapter, error) {
 		return toolconfig.NewCodexAdapter(), nil
 	case toolconfig.ToolClaude:
 		return toolconfig.NewClaudeAdapter(), nil
-	default:
-		return nil, fmt.Errorf("service: unsupported tool %q", tool)
-	}
-}
-
-func normalizeToolPresetVendor(p *toolconfig.Preset) {
-	if p != nil && p.Tool == toolconfig.ToolOpencode {
-		p.Vendor = toolconfig.NormalizeVendor(p.Vendor)
-	}
-}
-
-func providerIDsForTool(tool toolconfig.Tool, adapter toolconfig.Adapter, homeDir string) ([]string, error) {
-	switch tool {
-	case toolconfig.ToolOpencode:
-		return toolconfig.ListOpenCodeProviderIDs(homeDir)
-	case toolconfig.ToolCodex:
-		return toolconfig.ListCodexProviderIDs(homeDir)
-	case toolconfig.ToolClaude:
-		raw, err := adapter.ReadManagedRaw(homeDir, "anthropic")
-		if err != nil {
-			return nil, err
-		}
-		if raw.Present {
-			return []string{"anthropic"}, nil
-		}
-		return nil, nil
 	default:
 		return nil, fmt.Errorf("service: unsupported tool %q", tool)
 	}

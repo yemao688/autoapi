@@ -50,9 +50,11 @@ func Commit(cs *ChangeSet, opts CommitOpts) (*CommitResult, error) {
 		if !snapshots[i].exists {
 			continue
 		}
-		backupPath, err := backupBytesNextToSource(
+		backupPath, err := backupBytesWithMode(
 			snapshots[i].change.Before,
-			snapshots[i].change.Path,
+			opts.BackupRoot,
+			snapshots[i].change.Resource,
+			filepath.Base(snapshots[i].change.Path),
 			snapshots[i].change.Secret,
 			snapshots[i].beforeMode,
 		)
@@ -126,7 +128,7 @@ func Commit(cs *ChangeSet, opts CommitOpts) (*CommitResult, error) {
 		if pruned[snapshot.change.Resource] {
 			continue
 		}
-		if err := PruneSourceBackups(snapshot.change.Path, opts.KeepBackups); err != nil {
+		if err := PruneBackups(opts.BackupRoot, snapshot.change.Resource, opts.KeepBackups); err != nil {
 			// Pruning is housekeeping; a successful transaction remains successful
 			// when cleanup cannot remove an old backup.
 			continue

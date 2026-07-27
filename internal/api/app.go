@@ -180,20 +180,12 @@ type toolAccessService interface {
 	UpdateToolPreset(toolconfig.Preset, string) (*toolconfig.Preset, error)
 	GetToolPresets(string) ([]toolconfig.Preset, error)
 	DeleteToolPreset(int64) error
-	ListToolProviders(string) ([]service.ToolProviderView, error)
-	RevealToolProviderKey(string, string) (string, error)
-	EnableToolPreset(int64) (service.ToolApplyResult, error)
-	DisableToolPreset(string, string) (service.ToolApplyResult, error)
-	UpdateEnabledToolPreset(toolconfig.Preset, string) (*toolconfig.Preset, error)
+	ApplyToolPreset(int64, bool) (service.ToolApplyResult, error)
 	CheckToolDrift(string) ([]service.DriftState, error)
+	ImportToolPreset(string, string, string) (*toolconfig.Preset, error)
 	ExportToolSnippet(int64) (toolconfig.Snippet, error)
-	GetOmoSlimConfig() (service.OmoSlimConfigView, error)
-	GetOpencodeLiveState() (service.OpencodeLiveState, error)
-	ApplyOmoSlimConfig(toolconfig.OmoSlimChange, bool) error
-	PreviewToolOmoSlimChange(toolconfig.OmoSlimChange) (service.OmoSlimPreview, error)
-	GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error)
-	PreviewOpencodeConfigChange(service.OpencodeConfigPlan) (service.OmoSlimPreview, error)
-	ApplyOpencodeConfigChange(service.OpencodeConfigPlan, bool) error
+	GetOmoConfig() (toolconfig.OmoConfig, []string, error)
+	ApplyOmoConfig(toolconfig.OmoChange, bool) error
 	ListToolBackups(string) ([]service.ToolBackupInfo, error)
 	RestoreToolBackup(string, string, string) error
 }
@@ -1064,25 +1056,6 @@ func (a *App) ListToolPresets(tool string) ([]toolconfig.Preset, error) {
 	return redactToolPresets(presets), err
 }
 
-func (a *App) ListToolProviders(tool string) ([]service.ToolProviderView, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return nil, err
-	}
-	views, err := svc.ListToolProviders(tool)
-	return redactToolProviderViews(views), err
-}
-
-// RevealToolProviderKey returns plaintext only for an explicit user request
-// such as the provider editor eye-toggle; it is never returned by list views.
-func (a *App) RevealToolProviderKey(tool, providerID string) (string, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return "", err
-	}
-	return svc.RevealToolProviderKey(tool, providerID)
-}
-
 func (a *App) CreateToolPreset(preset toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
@@ -1109,29 +1082,12 @@ func (a *App) DeleteToolPreset(id int64) error {
 	return svc.DeleteToolPreset(id)
 }
 
-func (a *App) EnableToolPreset(id int64) (service.ToolApplyResult, error) {
+func (a *App) ApplyToolPreset(id int64, allowDrift bool) (service.ToolApplyResult, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
 		return service.ToolApplyResult{}, err
 	}
-	return svc.EnableToolPreset(id)
-}
-
-func (a *App) DisableToolPreset(tool, providerID string) (service.ToolApplyResult, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return service.ToolApplyResult{}, err
-	}
-	return svc.DisableToolPreset(tool, providerID)
-}
-
-func (a *App) UpdateEnabledToolPreset(preset toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return nil, err
-	}
-	p, err := svc.UpdateEnabledToolPreset(preset, plaintextKey)
-	return redactToolPreset(p), err
+	return svc.ApplyToolPreset(id, allowDrift)
 }
 
 func (a *App) CheckToolDrift(tool string) ([]service.DriftState, error) {
@@ -1142,6 +1098,15 @@ func (a *App) CheckToolDrift(tool string) ([]service.DriftState, error) {
 	return svc.CheckToolDrift(tool)
 }
 
+func (a *App) ImportToolPreset(tool, providerID, name string) (*toolconfig.Preset, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	p, err := svc.ImportToolPreset(tool, providerID, name)
+	return redactToolPreset(p), err
+}
+
 func (a *App) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
@@ -1150,62 +1115,20 @@ func (a *App) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	return svc.ExportToolSnippet(id)
 }
 
-func (a *App) GetOmoSlimConfig() (service.OmoSlimConfigView, error) {
+func (a *App) GetOmoConfig() (toolconfig.OmoConfig, []string, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
-		return service.OmoSlimConfigView{}, err
+		return toolconfig.OmoConfig{}, nil, err
 	}
-	return svc.GetOmoSlimConfig()
+	return svc.GetOmoConfig()
 }
 
-func (a *App) GetOpencodeLiveState() (service.OpencodeLiveState, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return service.OpencodeLiveState{}, err
-	}
-	return svc.GetOpencodeLiveState()
-}
-
-func (a *App) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift bool) error {
+func (a *App) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {
 	svc, err := a.toolAccess()
 	if err != nil {
 		return err
 	}
-	return svc.ApplyOmoSlimConfig(change, allowDrift)
-}
-
-// PreviewToolOmoSlimChange renders the OMO Slim file content a change would produce
-// without writing anything, powering the confirm-before-write preview modal.
-func (a *App) PreviewToolOmoSlimChange(change toolconfig.OmoSlimChange) (service.OmoSlimPreview, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return service.OmoSlimPreview{}, err
-	}
-	return svc.PreviewToolOmoSlimChange(change)
-}
-
-func (a *App) GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return toolconfig.OpencodeGlobalSettings{}, err
-	}
-	return svc.GetOpencodeGlobalSettings()
-}
-
-func (a *App) PreviewOpencodeConfigChange(plan service.OpencodeConfigPlan) (service.OmoSlimPreview, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return service.OmoSlimPreview{}, err
-	}
-	return svc.PreviewOpencodeConfigChange(plan)
-}
-
-func (a *App) ApplyOpencodeConfigChange(plan service.OpencodeConfigPlan, allowDrift bool) error {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return err
-	}
-	return svc.ApplyOpencodeConfigChange(plan, allowDrift)
+	return svc.ApplyOmoConfig(change, allowDrift)
 }
 
 func (a *App) ListToolBackups(tool string) ([]service.ToolBackupInfo, error) {
@@ -1229,9 +1152,7 @@ func redactToolPreset(p *toolconfig.Preset) *toolconfig.Preset {
 		return nil
 	}
 	copy := *p
-	// Reveal only whether a key exists so the UI can show a presence hint;
-	// the ciphertext itself never leaves the backend.
-	copy.APIKeyEnc = toolconfig.MaskSecret(p.APIKeyEnc)
+	copy.APIKeyEnc = ""
 	return &copy
 }
 
@@ -1242,18 +1163,6 @@ func redactToolPresets(presets []toolconfig.Preset) []toolconfig.Preset {
 	out := make([]toolconfig.Preset, len(presets))
 	for i := range presets {
 		out[i] = *redactToolPreset(&presets[i])
-	}
-	return out
-}
-
-func redactToolProviderViews(views []service.ToolProviderView) []service.ToolProviderView {
-	if views == nil {
-		return []service.ToolProviderView{}
-	}
-	out := make([]service.ToolProviderView, len(views))
-	for i := range views {
-		out[i] = views[i]
-		out[i].Preset = *redactToolPreset(&views[i].Preset)
 	}
 	return out
 }

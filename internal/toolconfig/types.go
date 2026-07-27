@@ -37,18 +37,16 @@ const (
 var SupportedTools = []Tool{ToolOpencode, ToolCodex, ToolClaude}
 
 // Resource identifies one managed file of a tool. A tool may manage several
-// files (Codex: config + auth; opencode: config + OMO Slim plugin config).
+// files (Codex: config + auth; opencode: config + OMO plugin config).
 type Resource string
 
 const (
 	ResOpencodeConfig Resource = "opencode/config"
-	// These string literals are persisted in tool_file_state and backup paths;
-	// keep them unchanged when renaming the Go constants.
-	ResOpencodeOmoSlim Resource = "opencode/omo"
-	ResOmoSlimConfig   Resource = "opencode-omo"
-	ResCodexConfig     Resource = "codex/config"
-	ResCodexAuth       Resource = "codex/auth"
-	ResClaudeSettings  Resource = "claude/settings"
+	ResOpencodeOMO    Resource = "opencode/omo"
+	ResOmoConfig      Resource = "opencode-omo"
+	ResCodexConfig    Resource = "codex/config"
+	ResCodexAuth      Resource = "codex/auth"
+	ResClaudeSettings Resource = "claude/settings"
 )
 
 // PresetKind distinguishes third-party direct presets from the Autoapi relay preset.
@@ -70,7 +68,7 @@ type Preset struct {
 	Kind       PresetKind
 	Name       string
 	ProviderID string // config-file provider key; empty => derived from slugified Name
-	Vendor     string // canonical interface-format key; mapped to an OpenCode npm package when rendered
+	Vendor     string // opencode npm package ("@ai-sdk/openai-compatible" | "@ai-sdk/openai"); informational for other tools
 	BaseURL    string // for PresetAutoapi this is resolved at apply time from current relay settings
 	APIKeyEnc  string // encrypted; empty when the preset has no key
 	APIKeyID   string // PresetAutoapi only: api_keys.id (UUID string; the id IS the relay token)
@@ -115,7 +113,7 @@ type ToolStatus struct {
 	Installed      bool              // primary config file exists
 	ConfigPath     string            // conventional absolute path (always set, even when absent)
 	ConfigExists   bool              // primary config file currently on disk
-	ExtraPaths     map[string]string // secondary managed files, e.g. "auth_json", "omo_slim_config" ("" when absent)
+	ExtraPaths     map[string]string // secondary managed files, e.g. "auth_json", "omo_config" ("" when absent)
 	ActivePresetID int64             // from tool_state; 0 = never applied by us
 	Drifted        bool
 }
@@ -133,7 +131,7 @@ type FileChange struct {
 
 // FileCheck is a read-only hash dependency of a ChangeSet: Commit validates
 // that the current on-disk hash of Path equals ExpectedHash before writing
-// anything (e.g. an OMO Slim apply depending on opencode.json staying unchanged).
+// anything (e.g. an OMO apply depending on opencode.json staying unchanged).
 type FileCheck struct {
 	Resource     Resource
 	Path         string
@@ -211,8 +209,6 @@ type ManagedSection struct {
 type RawManagedSection struct {
 	Present    bool
 	ProviderID string
-	Name       string
-	Vendor     string
 	BaseURL    string
 	APIKey     string        // plaintext ("" when none)
 	Model      string        // default model pointer
@@ -237,10 +233,6 @@ type Adapter interface {
 	// Plan snapshots current state and renders the ChangeSet for applying p.
 	// Fails closed on unexpected shapes or unowned provider-ID collisions.
 	Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error)
-	// PlanRemoval snapshots current state and renders the ChangeSet that removes
-	// providerID's managed section. Fails closed on unexpected shapes. Returns
-	// an ErrConfigNotFound-classified error when the provider is absent.
-	PlanRemoval(homeDir, providerID string) (*ChangeSet, error)
 	// ReadManaged extracts the managed section for providerID (required —
 	// callers derive it from persisted state, never "any provider").
 	// Secrets in the result are masked. Zero value + nil error when absent.
@@ -250,10 +242,8 @@ type Adapter interface {
 	// exposed through Wails bindings or logs.
 	ReadManagedRaw(homeDir, providerID string) (RawManagedSection, error)
 	// ExportSnippet renders config text + guidance for manual paste elsewhere.
-	// No writes, no decryption (input is already plaintext); homeDir is only
-	// used to point TargetPath at the config file actually in effect (e.g.
-	// opencode.jsonc vs opencode.json).
-	ExportSnippet(p PresetPlaintext, homeDir string) (Snippet, error)
+	// Pure function — no file access, no decryption (input is already plaintext).
+	ExportSnippet(p PresetPlaintext) (Snippet, error)
 }
 
 // ToolState is the persisted per-tool apply bookkeeping (table tool_state).
@@ -286,12 +276,10 @@ var (
 
 // DefaultConfigPath returns the conventional config path for a tool under homeDir.
 // Implemented in detect.go:
-//   - opencode: ~/.config/opencode/opencode.jsonc (preferred) or opencode.json
+//   - opencode: ~/.config/opencode/opencode.json
 //   - codex:    ~/.codex/config.toml   (+ extra auth_json: ~/.codex/auth.json)
 //   - claude:   ~/.claude/settings.json
 //
 // HashFile (drift.go) computes the sha256 hex of a file; "" when absent.
-// BackupFile (backup.go) copies a file next to the source with a localtime
-// timestamped sibling name and prunes source-directory backups; secret
-// backups are written 0600. CommitOpts.BackupRoot remains for compatibility
-// with the legacy central backup tree and validation of existing restores.
+// BackupFile (backup.go) copies a file under <backupRoot>/<resource>/ and
+// prunes; secret backups are written 0600.

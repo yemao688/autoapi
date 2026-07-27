@@ -3,15 +3,14 @@ package toolconfig
 import "fmt"
 
 // ExportSnippet dispatches snippet rendering to the adapter for p.Tool.
-// homeDir only steers TargetPath guidance (see Adapter.ExportSnippet).
-func ExportSnippet(p PresetPlaintext, homeDir string) (Snippet, error) {
+func ExportSnippet(p PresetPlaintext) (Snippet, error) {
 	switch p.Tool {
 	case ToolOpencode:
-		return (OpenCodeAdapter{}).ExportSnippet(p, homeDir)
+		return (OpenCodeAdapter{}).ExportSnippet(p)
 	case ToolCodex:
-		return (CodexAdapter{}).ExportSnippet(p, homeDir)
+		return (CodexAdapter{}).ExportSnippet(p)
 	case ToolClaude:
-		return (ClaudeAdapter{}).ExportSnippet(p, homeDir)
+		return (ClaudeAdapter{}).ExportSnippet(p)
 	default:
 		return Snippet{}, fmt.Errorf("%w: unsupported tool %q", ErrInvalidPreset, p.Tool)
 	}

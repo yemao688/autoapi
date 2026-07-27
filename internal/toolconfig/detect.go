@@ -21,32 +21,6 @@ func DefaultConfigPath(tool Tool, homeDir string) string {
 	}
 }
 
-// ResolveConfigPath returns the effective primary config path for tool — the
-// file the tool itself would load. opencode supports and prefers JSONC:
-// opencode.jsonc wins when both files exist; opencode.json is used when only
-// it exists; when neither exists the preferred creation target
-// (opencode.jsonc) is returned with found=false. Other tools resolve to their
-// conventional path.
-func ResolveConfigPath(tool Tool, homeDir string) (path string, found bool) {
-	if tool == ToolOpencode {
-		dir := filepath.Join(absoluteHomeDir(homeDir), ".config", "opencode")
-		jsonc := filepath.Join(dir, "opencode.jsonc")
-		if pathExists(jsonc) {
-			return jsonc, true
-		}
-		jsonPath := filepath.Join(dir, "opencode.json")
-		if pathExists(jsonPath) {
-			return jsonPath, true
-		}
-		return jsonc, false
-	}
-	path = DefaultConfigPath(tool, homeDir)
-	if path == "" {
-		return "", false
-	}
-	return path, pathExists(path)
-}
-
 func pathExists(path string) bool {
 	if path == "" {
 		return false
@@ -65,7 +39,8 @@ func pathExists(path string) bool {
 }
 
 func detectPrimary(tool Tool, homeDir string) ToolStatus {
-	primary, exists := ResolveConfigPath(tool, homeDir)
+	primary := DefaultConfigPath(tool, homeDir)
+	exists := pathExists(primary)
 	return ToolStatus{
 		Tool:         tool,
 		Installed:    exists,
@@ -80,11 +55,11 @@ func detectOpencode(homeDir string) ToolStatus {
 	dir := filepath.Dir(status.ConfigPath)
 	jsonc := filepath.Join(dir, "oh-my-opencode-slim.jsonc")
 	json := filepath.Join(dir, "oh-my-opencode-slim.json")
-	status.ExtraPaths["omo_slim_config"] = ""
+	status.ExtraPaths["omo_config"] = ""
 	if pathExists(jsonc) {
-		status.ExtraPaths["omo_slim_config"] = jsonc
+		status.ExtraPaths["omo_config"] = jsonc
 	} else if pathExists(json) {
-		status.ExtraPaths["omo_slim_config"] = json
+		status.ExtraPaths["omo_config"] = json
 	}
 	return status
 }

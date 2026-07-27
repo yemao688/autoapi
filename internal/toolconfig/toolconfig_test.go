@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -73,7 +72,7 @@ func TestDetectMissingAndPresent(t *testing.T) {
 	claude := ClaudeAdapter{}
 	codex := CodexAdapter{}
 
-	wantOpenCode := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	wantOpenCode := filepath.Join(home, ".config", "opencode", "opencode.json")
 	wantClaude := filepath.Join(home, ".claude", "settings.json")
 	wantCodex := filepath.Join(home, ".codex", "config.toml")
 	if status := openCode.Detect(home); status.ConfigPath != wantOpenCode || status.ConfigExists || status.Installed {
@@ -86,16 +85,15 @@ func TestDetectMissingAndPresent(t *testing.T) {
 		t.Fatalf("missing Codex status: %+v", status)
 	}
 
-	writeFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`, 0o644)
-	wantOpenCode = filepath.Join(home, ".config", "opencode", "opencode.json")
+	writeFile(t, wantOpenCode, `{}`, 0o644)
 	writeFile(t, wantClaude, `{}`, 0o644)
 	writeFile(t, wantCodex, ``, 0o644)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"), `{}`, 0o600)
-	omoSlimJSON := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.json")
-	omoSlimJSONC := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.jsonc")
-	writeFile(t, omoSlimJSON, `{}`, 0o644)
-	writeFile(t, omoSlimJSONC, `{}`, 0o644)
-	if status := openCode.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantOpenCode || status.ExtraPaths["omo_slim_config"] != omoSlimJSONC {
+	omoJSON := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.json")
+	omoJSONC := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.jsonc")
+	writeFile(t, omoJSON, `{}`, 0o644)
+	writeFile(t, omoJSONC, `{}`, 0o644)
+	if status := openCode.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantOpenCode || status.ExtraPaths["omo_config"] != omoJSONC {
 		t.Fatalf("present opencode status: %+v", status)
 	}
 	if status := claude.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantClaude {
@@ -103,59 +101,6 @@ func TestDetectMissingAndPresent(t *testing.T) {
 	}
 	if status := codex.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantCodex || status.ExtraPaths["auth_json"] != filepath.Join(home, ".codex", "auth.json") {
 		t.Fatalf("present Codex status: %+v", status)
-	}
-}
-
-func TestResolveConfigPathOpenCodePrefersJSONC(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, ".config", "opencode")
-	jsoncPath := filepath.Join(dir, "opencode.jsonc")
-	jsonPath := filepath.Join(dir, "opencode.json")
-
-	// Neither exists: the preferred creation target is JSONC.
-	if path, found := ResolveConfigPath(ToolOpencode, home); found || path != jsoncPath {
-		t.Fatalf("missing both: path=%q found=%v", path, found)
-	}
-	if status := (OpenCodeAdapter{}).Detect(home); status.ConfigPath != jsoncPath || status.ConfigExists {
-		t.Fatalf("missing both detect: %+v", status)
-	}
-
-	// Only JSON: fall back to it.
-	jsonContent := `{"provider": {"legacy": {}}}`
-	writeFile(t, jsonPath, jsonContent, 0o644)
-	if path, found := ResolveConfigPath(ToolOpencode, home); !found || path != jsonPath {
-		t.Fatalf("json only: path=%q found=%v", path, found)
-	}
-
-	// Both: JSONC wins for detect, reads, and the plan/commit write target,
-	// while opencode.json is left byte-identical.
-	writeFile(t, jsoncPath, "{\n  // jsonc comment\n  \"provider\": {}\n}", 0o644)
-	if path, found := ResolveConfigPath(ToolOpencode, home); !found || path != jsoncPath {
-		t.Fatalf("both: path=%q found=%v", path, found)
-	}
-	if status := (OpenCodeAdapter{}).Detect(home); status.ConfigPath != jsoncPath || !status.ConfigExists {
-		t.Fatalf("both detect: %+v", status)
-	}
-	changeSet, err := (OpenCodeAdapter{}).Plan(testPreset(""), home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jsoncResolved, err := filepath.EvalSymlinks(jsoncPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changeSet.Changes[0].Path != jsoncResolved {
-		t.Fatalf("plan path = %q, want %q", changeSet.Changes[0].Path, jsoncResolved)
-	}
-	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
-		t.Fatal(err)
-	}
-	jsoncAfter := readFile(t, jsoncPath)
-	if !strings.Contains(string(jsoncAfter), "jsonc comment") || !strings.Contains(string(jsoncAfter), "acme-model") {
-		t.Fatalf("jsonc lost its comment or the managed write is missing: %s", jsoncAfter)
-	}
-	if after := readFile(t, jsonPath); string(after) != jsonContent {
-		t.Fatalf("opencode.json was modified while opencode.jsonc exists: %s", after)
 	}
 }
 
@@ -277,7 +222,7 @@ base_url = "https://other.example"
 		t.Fatalf("unexpected Codex top-level values: %#v", configValues)
 	}
 	authAfter := readFile(t, authPath)
-	if !strings.Contains(string(authAfter), `"OTHER_KEY"`) || !strings.Contains(string(authAfter), "secret-key") {
+	if !strings.Contains(string(authAfter), `"OTHER_KEY": "keep"`) || !strings.Contains(string(authAfter), "secret-key") {
 		t.Fatalf("Codex auth was not patched safely: %s", authAfter)
 	}
 	if mode := fileMode(t, authPath); mode != 0o600 {
@@ -408,7 +353,7 @@ func TestSymlinkPlanTargetsResolvedFile(t *testing.T) {
 func TestExportSnippets(t *testing.T) {
 	preset := testPreset("")
 	for _, adapter := range []Adapter{OpenCodeAdapter{}, ClaudeAdapter{}, CodexAdapter{}} {
-		snippet, err := adapter.ExportSnippet(preset, t.TempDir())
+		snippet, err := adapter.ExportSnippet(preset)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,7 +364,7 @@ func TestExportSnippets(t *testing.T) {
 			t.Fatalf("%s snippet omitted target metadata: %+v", adapter.Tool(), snippet)
 		}
 	}
-	codexSnippet, err := (CodexAdapter{}).ExportSnippet(preset, t.TempDir())
+	codexSnippet, err := (CodexAdapter{}).ExportSnippet(preset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,130 +461,6 @@ func TestReadManagedRawIsPlaintextButManagedIsMasked(t *testing.T) {
 	}
 }
 
-func TestListOmoSlimPresetsListsSortedNames(t *testing.T) {
-	home, _ := writeOmoSlimFixture(t)
-	presets, err := ListOmoSlimPresets(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(presets) != 2 || presets[0] != "balanced" || presets[1] != "fast" {
-		t.Fatalf("ListOmoSlimPresets = %#v", presets)
-	}
-	if got, err := ListOmoSlimPresets(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing OMO Slim config: got %#v, err=%v; want nil, nil", got, err)
-	}
-}
-
-func TestListProviderVariantsUnionsModelVariants(t *testing.T) {
-	home := t.TempDir()
-	path := DefaultConfigPath(ToolOpencode, home)
-	writeFile(t, path, `{"provider":{
-		"a": {"models": {
-			"m1": {"variants": {"fast": {}, "slow": {}}},
-			"m2": {"variants": {"fast": {}}}
-		}},
-		"b": {"models": {
-			"m3": {"variants": {"deep": {}}},
-			"m4": {}
-		}}
-	}}`, 0o644)
-	variants, err := ListProviderVariants(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(variants) != 3 || variants[0] != "deep" || variants[1] != "fast" || variants[2] != "slow" {
-		t.Fatalf("ListProviderVariants = %#v", variants)
-	}
-	if got, err := ListProviderVariants(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing opencode config: got %#v, err=%v; want nil, nil", got, err)
-	}
-}
-
-func TestListOpenCodeProviderIDsSorted(t *testing.T) {
-	home := t.TempDir()
-	path := DefaultConfigPath(ToolOpencode, home)
-	writeFile(t, path, `{"provider":{
-		"zeta": {"models": {}},
-		"acme-ai": {"options": {"baseURL": "https://x"}},
-		"middle": {}
-	}}`, 0o644)
-	ids, err := ListOpenCodeProviderIDs(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ids) != 3 || ids[0] != "acme-ai" || ids[1] != "middle" || ids[2] != "zeta" {
-		t.Fatalf("ListOpenCodeProviderIDs = %#v", ids)
-	}
-	if got, err := ListOpenCodeProviderIDs(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing opencode config: got %#v, err=%v; want nil, nil", got, err)
-	}
-}
-
-func TestListCodexProviderIDsSorted(t *testing.T) {
-	home := t.TempDir()
-	path := DefaultConfigPath(ToolCodex, home)
-	writeFile(t, path, "[model_providers.zeta]\nbase_url = \"https://z\"\n[model_providers.acme]\nbase_url = \"https://a\"\n", 0o644)
-	ids, err := ListCodexProviderIDs(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ids) != 2 || ids[0] != "acme" || ids[1] != "zeta" {
-		t.Fatalf("ListCodexProviderIDs = %#v", ids)
-	}
-	if got, err := ListCodexProviderIDs(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing codex config: got %#v, err=%v; want nil, nil", got, err)
-	}
-}
-
-func TestReadModelPointerReadsTopLevelModel(t *testing.T) {
-	home := t.TempDir()
-	path := DefaultConfigPath(ToolOpencode, home)
-	writeFile(t, path, `{"provider":{"acme-ai":{}},"model":"acme-ai/acme-model"}`, 0o644)
-	model, err := ReadModelPointer(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if model != "acme-ai/acme-model" {
-		t.Fatalf("ReadModelPointer = %q", model)
-	}
-	writeFile(t, path, `{"provider":{"acme-ai":{}}}`, 0o644)
-	if model, err = ReadModelPointer(home); err != nil || model != "" {
-		t.Fatalf("unset pointer: got %q, err=%v; want \"\", nil", model, err)
-	}
-	if model, err = ReadModelPointer(t.TempDir()); err != nil || model != "" {
-		t.Fatalf("missing config: got %q, err=%v; want \"\", nil", model, err)
-	}
-}
-
-func TestListOmoSlimPresetAgentsProjectsEveryPreset(t *testing.T) {
-	home, _ := writeOmoSlimFixture(t)
-	projection, err := ListOmoSlimPresetAgents(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(projection) != 2 {
-		t.Fatalf("ListOmoSlimPresetAgents = %#v", projection)
-	}
-	if got := projection["balanced"]["orchestrator"]; !reflect.DeepEqual(got, OmoSlimAgent{
-		Model:       "autoapi-compatible/old-model",
-		Variant:     "slow",
-		DisplayName: "chief",
-		Skills:      []string{"keep-skill"},
-		Mcps:        []string{"keep-mcp"},
-	}) {
-		t.Fatalf("balanced orchestrator = %+v", got)
-	}
-	if got := projection["fast"]["oracle"]; !reflect.DeepEqual(got, OmoSlimAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
-		t.Fatalf("fast oracle = %+v", got)
-	}
-	if _, ok := projection["balanced"]["custom"]; ok {
-		t.Fatal("custom agents leaked into preset projection")
-	}
-	if got, err := ListOmoSlimPresetAgents(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing OMO Slim config: got %#v, err=%v; want nil, nil", got, err)
-	}
-}
-
 func TestOpenCodeReadManagedHandlesMissingOptions(t *testing.T) {
 	home := t.TempDir()
 	path := DefaultConfigPath(ToolOpencode, home)
@@ -675,7 +496,7 @@ func TestOpenCodeProviderScopedPointerClearing(t *testing.T) {
 		name string
 		want string
 	}{
-		{name: "other provider survives", want: `"model"`},
+		{name: "other provider survives", want: `"model": "other/keep"`},
 		{name: "same provider clears", want: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -689,131 +510,13 @@ func TestOpenCodeProviderScopedPointerClearing(t *testing.T) {
 			preset.Models = nil
 			commitPlan(t, OpenCodeAdapter{}, preset, home)
 			content := string(readFile(t, DefaultConfigPath(ToolOpencode, home)))
-			if test.want != "" && (!strings.Contains(content, test.want) || !strings.Contains(content, "other/keep")) {
+			if test.want != "" && !strings.Contains(content, `"model":"other/keep"`) {
 				t.Fatalf("pointer was unexpectedly changed: %s", content)
 			}
 			if test.want == "" && strings.Contains(content, `"model"`) {
 				t.Fatalf("provider-scoped pointer was not cleared: %s", content)
 			}
 		})
-	}
-}
-
-func TestOpenCodePlanRemovalPreservesOtherContent(t *testing.T) {
-	home := t.TempDir()
-	path := DefaultConfigPath(ToolOpencode, home)
-	writeFile(t, path, `{
-  // keep root comment
-  "provider": {
-    "remove-me": {"name": "Remove", "options": {"baseURL": "https://remove.example"}},
-    // keep provider comment
-    "keep-me": {"name": "Keep", "options": {"baseURL": "https://keep.example"}}
-  },
-  "model": "remove-me/model",
-  "unmanaged": true
-}`, 0o644)
-	changeSet, err := (OpenCodeAdapter{}).PlanRemoval(home, "remove-me")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
-		t.Fatal(err)
-	}
-	after := string(readFile(t, path))
-	if strings.Contains(after, "remove-me") || strings.Contains(after, `"model"`) {
-		t.Fatalf("removed provider or pointer remains: %s", after)
-	}
-	for _, want := range []string{"keep root comment", "keep provider comment", "keep-me", `"unmanaged": true`} {
-		if !strings.Contains(after, want) {
-			t.Fatalf("removal lost %q: %s", want, after)
-		}
-	}
-	if _, err := (OpenCodeAdapter{}).PlanRemoval(home, "remove-me"); !errors.Is(err, ErrConfigNotFound) {
-		t.Fatalf("absent provider error = %v", err)
-	}
-}
-
-func TestCodexPlanRemovalRemovesConfigAndAuth(t *testing.T) {
-	home := t.TempDir()
-	configPath := DefaultConfigPath(ToolCodex, home)
-	authPath := filepath.Join(home, ".codex", "auth.json")
-	writeFile(t, configPath, `# keep config
-model_provider = "remove-me"
-model = "old-model"
-
-[model_providers.remove-me] # managed
-name = "Remove"
-base_url = "https://remove.example"
-
-[model_providers.keep-me]
-name = "Keep"
-base_url = "https://keep.example"
-`, 0o644)
-	writeFile(t, authPath, `{
-  // keep auth comment
-  "OPENAI_API_KEY": "remove-secret",
-  "OTHER_KEY": "keep"
-}`, 0o644)
-	changeSet, err := (CodexAdapter{}).PlanRemoval(home, "remove-me")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changeSet.Changes) != 2 || changeSet.Changes[1].Resource != ResCodexAuth {
-		t.Fatalf("unexpected removal changes: %+v", changeSet.Changes)
-	}
-	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
-		t.Fatal(err)
-	}
-	configAfter := string(readFile(t, configPath))
-	if strings.Contains(configAfter, "remove-me") || strings.Contains(configAfter, "model_provider =") {
-		t.Fatalf("Codex provider or pointer remains: %s", configAfter)
-	}
-	if !strings.Contains(configAfter, "keep-me") || !strings.Contains(configAfter, "# keep config") {
-		t.Fatalf("Codex unmanaged content was lost: %s", configAfter)
-	}
-	authAfter := string(readFile(t, authPath))
-	if strings.Contains(authAfter, "OPENAI_API_KEY") || !strings.Contains(authAfter, "OTHER_KEY") || !strings.Contains(authAfter, "keep auth comment") {
-		t.Fatalf("Codex auth removal was incorrect: %s", authAfter)
-	}
-	if _, err := (CodexAdapter{}).PlanRemoval(home, "remove-me"); !errors.Is(err, ErrConfigNotFound) {
-		t.Fatalf("absent Codex provider error = %v", err)
-	}
-}
-
-func TestClaudePlanRemovalPreservesUnmanagedSettings(t *testing.T) {
-	home := t.TempDir()
-	path := DefaultConfigPath(ToolClaude, home)
-	writeFile(t, path, `{
-  // keep settings
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://claude.example",
-    "ANTHROPIC_AUTH_TOKEN": "secret",
-    "ANTHROPIC_MODEL": "claude-model",
-    "KEEP_ENV": "yes"
-  },
-  "model": "claude-model",
-  "permissions": {"allow": ["Bash"]}
-}`, 0o644)
-	changeSet, err := (ClaudeAdapter{}).PlanRemoval(home, "anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
-		t.Fatal(err)
-	}
-	after := string(readFile(t, path))
-	for _, removed := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", `"model"`} {
-		if strings.Contains(after, removed) {
-			t.Fatalf("Claude managed key remains %q: %s", removed, after)
-		}
-	}
-	for _, want := range []string{"keep settings", "KEEP_ENV", "permissions"} {
-		if !strings.Contains(after, want) {
-			t.Fatalf("Claude removal lost %q: %s", want, after)
-		}
-	}
-	if _, err := (ClaudeAdapter{}).PlanRemoval(home, "anthropic"); !errors.Is(err, ErrConfigNotFound) {
-		t.Fatalf("absent Claude provider error = %v", err)
 	}
 }
 
@@ -825,7 +528,7 @@ func TestClaudeNoDefaultLeavesGlobalPointers(t *testing.T) {
 	preset.Models = nil
 	commitPlan(t, ClaudeAdapter{}, preset, home)
 	content := string(readFile(t, path))
-	if !strings.Contains(content, `"model"`) || !strings.Contains(content, "global-root") || !strings.Contains(content, `"ANTHROPIC_MODEL"`) || !strings.Contains(content, "global-env") {
+	if !strings.Contains(content, `"model":"global-root"`) || !strings.Contains(content, `"ANTHROPIC_MODEL":"global-env"`) {
 		t.Fatalf("Claude global pointers changed by no-default preset: %s", content)
 	}
 }
@@ -875,7 +578,7 @@ func TestParentDirectorySymlinkCommitTargetsRealDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(realDirResolved, "opencode.jsonc")
+	wantPath := filepath.Join(realDirResolved, "opencode.json")
 	if changeSet.Changes[0].Path != wantPath {
 		t.Fatalf("resolved parent path = %q, want %q", changeSet.Changes[0].Path, wantPath)
 	}

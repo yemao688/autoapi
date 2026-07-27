@@ -45,7 +45,7 @@ func BuildAutoapiPreset(tool Tool, name, relayAddr, apiKeyID string, models []Pr
 
 	vendor := ""
 	if tool == ToolOpencode {
-		vendor = VendorOpenAICompatible
+		vendor = "@ai-sdk/openai-compatible"
 	}
 	return PresetPlaintext{
 		Preset: Preset{

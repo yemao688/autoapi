@@ -39,7 +39,7 @@ func TestBuildAutoapiPresetDefaultsFirstModel(t *testing.T) {
 	if preset.BaseURL != "http://relay:8344/v1" || preset.APIKeyID != "token-id" || preset.APIKey != "token-id" {
 		t.Fatalf("unexpected relay fields: %+v", preset)
 	}
-	if preset.Vendor != VendorOpenAICompatible || !preset.Models[0].Default || preset.Models[1].Default {
+	if preset.Vendor != "@ai-sdk/openai-compatible" || !preset.Models[0].Default || preset.Models[1].Default {
 		t.Fatalf("unexpected model/vendor fields: %+v", preset)
 	}
 	if models[0].Default {
