@@ -38,14 +38,6 @@ import (
 // mid-stream client disconnects from genuine upstream failures in request logs.
 const statusClientClosed = 499
 
-// upstreamResponseHeaderTimeout is the max time the proxy waits for the
-// upstream provider to send response headers. Without this bound an
-// unresponsive upstream (e.g. a hung LLM gateway) would keep a streaming
-// request pending indefinitely because the client's HTTP server is
-// blocked reading the upstream connection. The bound applies per attempt
-// so retries fail fast.
-const upstreamResponseHeaderTimeout = 30 * time.Second
-
 // maxTotalAttempts caps the total number of upstream attempts per inbound
 // request across all candidates and retries. Prevents a misbehaving
 // upstream (fast 500s) from causing N×(M+1) billable calls when many
@@ -216,11 +208,22 @@ func New(store storeProxy, service upstreamKeyProvider, defaultPort int, setting
 	transport.TLSHandshakeTimeout = 20 * time.Second
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 10
+	// Recycle idle connections slightly before typical upstream
+	// keep-alive timeouts (~60-75s) so the pool does not hand out a
+	// connection the server is about to close — a classic source of
+	// "unexpected EOF" on reused connections.
+	transport.IdleConnTimeout = 45 * time.Second
 	transport.DialContext = (&net.Dialer{
 		Timeout:   15 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}).DialContext
-	transport.ResponseHeaderTimeout = upstreamResponseHeaderTimeout
+	// ResponseHeaderTimeout stays 0 on this shared transport: the
+	// first-byte budget is enforced per attempt by withFirstByteTimer
+	// (an httptrace-disarmed window with ResponseHeaderTimeout
+	// semantics). Per-attempt Transport clones were the reason
+	// connection pooling/keep-alive never actually worked — every
+	// clone starts with an empty pool and CloseIdleConnections
+	// discarded it right after.
 	p := &Proxy{
 		store:            store,
 		service:          service,
@@ -1130,10 +1133,10 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// still cancels everything, but it also carries a first-byte
 	// deadline that fires when the rule-level budget is exhausted.
 	// The budgetCtx is used for the backoff select only; the actual
-	// HTTP request uses r.Context() (with transport-level
-	// ResponseHeaderTimeout = remaining) so the body download is
-	// NOT cut off by the first-byte deadline — the budget is
-	// ONLY counted before the first byte is received.
+	// HTTP request carries a withFirstByteTimer context whose window
+	// disarms on the first response header byte, so the body
+	// download is NOT cut off by the first-byte deadline — the
+	// budget is ONLY counted before the first byte is received.
 	budgetCtx, budgetCancel := context.WithDeadline(r.Context(), firstByteDeadline)
 	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
@@ -1445,13 +1448,23 @@ outer:
 				break
 			}
 
-			// Use r.Context() (NOT budgetCtx) so the body download is
-			// NOT cut off by the first-byte deadline — the budget is
-			// ONLY counted before the first byte is received. The
-			// first-byte deadline is enforced via the transport's
-			// ResponseHeaderTimeout (set below to `remaining`).
-			attemptReq := r.Clone(r.Context())
+			// remaining is the time left in the first-byte budget at
+			// the start of this attempt. The timer window starts when
+			// the request is fully written and disarms on the first
+			// response header byte (httptrace), so the body download
+			// stays governed by r.Context() alone — the budget is ONLY
+			// counted before the first byte is received.
+			remaining := time.Until(firstByteDeadline)
+			attemptCtx, attemptCancel := withFirstByteTimer(r.Context(), remaining)
+			attemptReq := r.Clone(attemptCtx)
 			attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
+			// GetBody lets the net/http transport transparently replay
+			// the request onto a fresh connection when a reused idle
+			// connection turns out to be dead — the classic
+			// "unexpected EOF" on pool reuse.
+			attemptReq.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(rewrittenBody)), nil
+			}
 			attemptReq.ContentLength = int64(len(rewrittenBody))
 			attemptReq.Header.Del("Transfer-Encoding")
 			if attemptReq.Header.Get("Content-Type") == "" {
@@ -1459,28 +1472,14 @@ outer:
 			}
 			attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 
-			// remaining is the time left in the first-byte budget at
-			// the start of this attempt. We set it as the per-attempt
-			// ResponseHeaderTimeout so the upstream headers must arrive
-			// within `remaining`; once headers arrive the body download
-			// is unbounded (r.Context() governs it instead).
-			remaining := time.Until(firstByteDeadline)
 			proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
 			proxy.BufferPool = p.bufferPool
 			proxy.ErrorLog = p.errorLog
-			// Per-attempt ResponseHeaderTimeout = remaining (clamped
-			// to the first-byte budget remaining at the start of this
-			// attempt). Non-streaming has no first-byte concept, so
-			// ResponseHeaderTimeout is the right knob. We always clone
-			// p.transport so the per-attempt timeout is honored.
-			if t1, ok := p.transport.(*http.Transport); ok {
-				clone := t1.Clone()
-				clone.ResponseHeaderTimeout = remaining
-				proxy.Transport = clone
-				defer clone.CloseIdleConnections()
-			} else {
-				proxy.Transport = p.transport
-			}
+			// Shared transport: connection pooling/keep-alive now
+			// actually works across attempts (the old per-attempt
+			// clones discarded the pool and forced a full TCP+TLS
+			// handshake every time).
+			proxy.Transport = p.transport
 
 			proxy.Director = func(req *http.Request) {
 				req.URL.Scheme = upstreamURL.Scheme
@@ -1545,6 +1544,8 @@ outer:
 			}
 
 			proxy.ServeHTTP(buf, attemptReq)
+			attemptErr = mapFirstByteTimeout(attemptCtx, attemptErr, remaining)
+			attemptCancel()
 
 			// effectiveStatus is the status code used for chain logging and retry
 			// categorization. If the upstream never wrote a response (ModifyResponse
@@ -2438,21 +2439,18 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		p.emitAttempt(c, r.URL.Path, middleware.GetReqID(r.Context()), outcome, result.StatusCode, result.Committed, int64(result.FirstTokenMs), int64(result.FirstTokenMs))
 	}()
-	// Per-candidate first-byte timeout. We use the TRANSPORT's
-	// ResponseHeaderTimeout (not a context.WithTimeout on the
-	// request) because http.Client monitors req.Context() for the
-	// ENTIRE request lifecycle, including body reads. A context
-	// deadline would therefore kill long LLM streams (o1/o3
-	// reasoning, slow providers, long outputs) as soon as the
-	// deadline expires — even after the first byte had already
-	// arrived. ResponseHeaderTimeout, in contrast, ONLY bounds the
-	// time between sending the request and receiving response
-	// headers; once headers arrive, body reads are unbounded. This
-	// is the correct "first-byte timeout" semantics: if the
-	// upstream does not send response headers within `timeout`,
-	// the attempt fails fast and we failover. Once headers arrive,
-	// SSE providers send the first body chunk almost immediately,
-	// so the first-byte window is effectively covered.
+	// Per-candidate first-byte timeout, enforced by
+	// withFirstByteTimer: the window starts when the request is fully
+	// written (httptrace WroteRequest) and disarms on the first
+	// response header byte (GotFirstResponseByte), so long LLM
+	// streams (o1/o3 reasoning, slow providers, long outputs) are
+	// NOT killed mid-body the way a plain context deadline would —
+	// http.Client enforces req.Context() for the entire request
+	// lifecycle. If the upstream does not send response headers
+	// within `timeout`, the attempt fails fast and we failover. Once
+	// headers arrive, SSE providers send the first body chunk almost
+	// immediately, so the first-byte window is effectively covered
+	// (and readFirstBodyByte still bounds the first body byte).
 	//
 	// The budget is the rule-level firstByteBudget, but a single
 	// attempt should not wait longer than the remaining time until
@@ -2472,16 +2470,24 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		timeout = defaultFirstByteTimeout
 	}
 
-	// Use r.Context() (NOT ctx/budgetCtx) so the body download is
-	// NOT cut off by the first-byte deadline — the budget is
-	// ONLY counted before the first byte is received. The
-	// first-byte deadline is enforced via the transport's
-	// ResponseHeaderTimeout (set below to `timeout`).
-	attemptReq := r.Clone(r.Context())
+	// The first-byte timer (not a plain context deadline) bounds only
+	// the wait for response headers; body reads after the first byte
+	// stay governed by r.Context() (NOT ctx/budgetCtx) so long
+	// streams are not cut off mid-body.
+	attemptCtx, attemptCancel := withFirstByteTimer(r.Context(), timeout)
+	defer attemptCancel()
+	attemptReq := r.Clone(attemptCtx)
 	attemptReq.URL = cloneURL(upstreamURL)
 	attemptReq.Host = upstreamURL.Host
 	attemptReq.RequestURI = "" // outbound requests must have an empty RequestURI
 	attemptReq.Body = io.NopCloser(bytes.NewReader(rewrittenBody))
+	// GetBody lets the net/http transport transparently replay the
+	// request onto a fresh connection when a reused idle connection
+	// turns out to be dead — the classic "unexpected EOF" on pool
+	// reuse.
+	attemptReq.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(rewrittenBody)), nil
+	}
 	attemptReq.ContentLength = int64(len(rewrittenBody))
 	attemptReq.Header = r.Header.Clone()
 	applyUpstreamAuth(attemptReq.Header, prep, upstreamKey)
@@ -2494,16 +2500,10 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	attemptReq.Header.Set("Accept-Encoding", "identity")
 	attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 
-	// Per-attempt transport with the candidate-specific first-byte
-	// timeout. Clone p.transport (not http.DefaultTransport) so
-	// streaming inherits any future tuning on p.transport (TLS,
-	// dialer, etc.) rather than only DefaultTransport's defaults.
-	// The ResponseHeaderTimeout override still applies after the
-	// clone.
-	transport := p.transport.(*http.Transport).Clone()
-	transport.ResponseHeaderTimeout = timeout
-	client := &http.Client{Transport: transport}
-	defer transport.CloseIdleConnections()
+	// Shared transport: connection pooling/keep-alive now works
+	// across attempts (the old per-attempt clones discarded the pool
+	// and forced a full TCP+TLS handshake every time).
+	client := &http.Client{Transport: p.transport}
 
 	attemptStart := time.Now()
 	result.AttemptStarted = true
@@ -2516,6 +2516,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	logEntry.RouteID = c.ruleID
 	logEntry.RouteLabel = c.ruleLabel
 	resp, doErr := client.Do(attemptReq)
+	doErr = mapFirstByteTimeout(attemptCtx, doErr, timeout)
 
 	if doErr != nil {
 		// No upstream connection to release — proceed to classify.

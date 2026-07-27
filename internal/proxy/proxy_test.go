@@ -7566,6 +7566,74 @@ func TestChatToResponsesStreamingPreCommitFailover(t *testing.T) {
 	}
 }
 
+// TestNonStream_ReusesUpstreamConnection is a regression test for the
+// per-attempt Transport.Clone() bug: every attempt used to clone the shared
+// transport, starting with an empty connection pool and discarding it via
+// CloseIdleConnections right after, so HTTP keep-alive never worked — every
+// upstream attempt paid a full TCP+TLS handshake and constantly churned
+// connections (racing server-side idle timeouts → "unexpected EOF"). With
+// the shared transport, sequential requests to the same upstream must reuse
+// a single pooled connection.
+func TestNonStream_ReusesUpstreamConnection(t *testing.T) {
+	var mu sync.Mutex
+	conns := make(map[net.Conn]struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"x",`+
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],`+
+			`"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	srv.Config.ConnState = func(c net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			mu.Lock()
+			conns[c] = struct{}{}
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "x", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	proxySrv := httptest.NewServer(p.router)
+	defer proxySrv.Close()
+
+	doReq := func() {
+		t.Helper()
+		req, _ := http.NewRequest("POST", proxySrv.URL+"/v1/chat/completions",
+			strings.NewReader(`{"model":"x","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Authorization", "Bearer key1")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+	}
+	// Sequential requests: each response body is fully consumed by the
+	// proxy before the next request starts, so a working pool deterministically
+	// serves all of them over ONE connection.
+	doReq()
+	doReq()
+	doReq()
+
+	mu.Lock()
+	n := len(conns)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected 1 upstream connection (keep-alive reuse), got %d", n)
+	}
+}
+
 func TestResponsesToChatStreamingPreCommitFailover(t *testing.T) {
 	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
