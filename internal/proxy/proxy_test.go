@@ -2259,12 +2259,16 @@ func TestFailover_Upstream400RetriesAndFailsOver(t *testing.T) {
 		t.Fatalf("expected P1 hit once, got %d", p1Hits)
 	}
 	targetStatuses := p.TargetBreakerStatuses()
-	if p.breakerFor("p0").ConsecutiveFailures() != 0 || len(targetStatuses) != 1 || targetStatuses[0].FailureCount != 0 {
-		t.Fatalf("upstream 400 incorrectly penalized breaker state: provider=%d targets=%+v", p.breakerFor("p0").ConsecutiveFailures(), targetStatuses)
+	totalTargetFailures := 0
+	for _, ts := range targetStatuses {
+		totalTargetFailures += ts.FailureCount
+	}
+	if p.breakerFor("p0").ConsecutiveFailures() != 1 || totalTargetFailures != 1 {
+		t.Fatalf("upstream 400 should penalize breaker state exactly once: provider=%d targets=%+v", p.breakerFor("p0").ConsecutiveFailures(), targetStatuses)
 	}
 }
 
-func TestFailover_AllTargetsUpstream400Returns400WithoutBreakerPenalty(t *testing.T) {
+func TestFailover_AllTargetsUpstream400Returns400WithBreakerPenalty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, `{"error":{"message":"provider rejected request"}}`)
@@ -2280,12 +2284,12 @@ func TestFailover_AllTargetsUpstream400Returns400WithoutBreakerPenalty(t *testin
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "provider rejected request") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if p.breakerFor("p").ConsecutiveFailures() != 0 {
-		t.Fatal("400 penalized provider breaker")
+	if p.breakerFor("p").ConsecutiveFailures() != 1 {
+		t.Fatal("400 did not penalize provider breaker")
 	}
 	for _, status := range p.TargetBreakerStatuses() {
-		if status.FailureCount != 0 {
-			t.Fatalf("400 penalized target breaker: %+v", status)
+		if status.FailureCount != 1 {
+			t.Fatalf("400 did not penalize target breaker exactly once: %+v", status)
 		}
 	}
 }
@@ -2307,8 +2311,8 @@ func TestFailover_StreamAllTargetsUpstream400Returns400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "stream provider rejected request") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if p.breakerFor("p").ConsecutiveFailures() != 0 || p.TargetBreakerStatuses()[0].FailureCount != 0 {
-		t.Fatal("stream upstream 400 penalized a breaker")
+	if p.breakerFor("p").ConsecutiveFailures() != 1 || p.TargetBreakerStatuses()[0].FailureCount != 1 {
+		t.Fatal("stream upstream 400 did not penalize breakers exactly once")
 	}
 }
 
@@ -5259,8 +5263,10 @@ func TestStreamingFinalStatusOnly429ClearsEarlierNetworkCause(t *testing.T) {
 	if hits != 2 {
 		t.Fatalf("expected network retry followed by 429, hits=%d", hits)
 	}
-	if cb := p.breakerFor("p"); cb.CurrentState() != StateClosed || cb.ConsecutiveFailures() != 0 {
-		t.Fatalf("stale network cause leaked into final status-only 429: state=%v failures=%d", cb.CurrentState(), cb.ConsecutiveFailures())
+	// The final status-only 429 is recorded exactly once; the earlier
+	// network error must not leak in as an extra failure.
+	if cb := p.breakerFor("p"); cb.CurrentState() != StateClosed || cb.ConsecutiveFailures() != 1 {
+		t.Fatalf("final 429 must settle the breaker exactly once (no stale network cause): state=%v failures=%d", cb.CurrentState(), cb.ConsecutiveFailures())
 	}
 }
 
@@ -5570,18 +5576,17 @@ func TestFailover_UnknownStatusFailover(t *testing.T) {
 	if p1Hits != 1 {
 		t.Fatalf("expected P1 hit once after failover, got %d", p1Hits)
 	}
-	// Critically: an unknown 4xx must NOT trip the breaker (only 5xx
-	// and net errors do). 451 is a "client-error-shaped" code from
-	// P0's perspective, not a server failure. We verify this by
-	// checking the breaker's consecutiveFailures directly.
-	if p0Breaker := p.breakerFor("p0"); p0Breaker.consecutiveFailures != 0 {
-		t.Fatalf("expected P0 breaker consecutiveFailures=0 (unknown 4xx should not break the breaker), got %d",
+	// Under the current policy ANY upstream error status (4xx and 5xx)
+	// counts toward the provider breaker, so P0's 451 is recorded as
+	// one consecutive failure once its retries are exhausted.
+	if p0Breaker := p.breakerFor("p0"); p0Breaker.consecutiveFailures != 1 {
+		t.Fatalf("expected P0 breaker consecutiveFailures=1 (unknown 4xx counts toward the breaker), got %d",
 			p0Breaker.consecutiveFailures)
 	}
-	// Provider health must also stay Connected — same reason.
+	// Provider health reflects the same failure.
 	prov, _ := store.GetProvider("p0")
-	if prov.Status == model.ProviderStatusError {
-		t.Fatalf("expected P0 provider status != error, got %q (err=%q)",
+	if prov.Status != model.ProviderStatusError {
+		t.Fatalf("expected P0 provider status=error, got %q (err=%q)",
 			prov.Status, prov.ErrorMessage)
 	}
 	// The target's failure_count is incremented for every failed

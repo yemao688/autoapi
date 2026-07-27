@@ -29,7 +29,7 @@ func TestTargetBreakerRollingWindowAndFailureClasses(t *testing.T) {
 	if !b.allow(now.Add(window+5*time.Second), threshold, window) {
 		t.Fatal("aged failures did not recover")
 	}
-	if !targetFailure(io.ErrUnexpectedEOF, 0) || !targetFailure(nil, 401) || !targetFailure(nil, 403) || !targetFailure(nil, 429) || !targetFailure(nil, 503) {
+	if !targetFailure(io.ErrUnexpectedEOF, 0) || !targetFailure(nil, 400) || !targetFailure(nil, 401) || !targetFailure(nil, 403) || !targetFailure(nil, 429) || !targetFailure(nil, 503) {
 		t.Fatal("required failure classes were not counted")
 	}
 	if targetFailure(context.Canceled, 499) {

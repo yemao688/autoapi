@@ -85,5 +85,5 @@ func targetFailure(err error, status int) bool {
 	if err != nil {
 		return isCircuitBreakerFailure(err, status)
 	}
-	return status == 401 || status == 403 || status == 429 || status >= 500
+	return status >= 400
 }

@@ -81,11 +81,14 @@ func TestIsCircuitBreakerFailure(t *testing.T) {
 	if !isCircuitBreakerFailure(nil, 503) {
 		t.Fatal("expected 503 to be a breaker failure")
 	}
-	if isCircuitBreakerFailure(nil, 429) {
-		t.Fatal("expected 429 not to be a breaker failure")
+	if !isCircuitBreakerFailure(nil, 429) {
+		t.Fatal("expected 429 to be a breaker failure")
 	}
-	if isCircuitBreakerFailure(nil, 400) {
-		t.Fatal("expected 400 not to be a breaker failure")
+	if !isCircuitBreakerFailure(nil, 400) {
+		t.Fatal("expected 400 to be a breaker failure")
+	}
+	if !isCircuitBreakerFailure(nil, 422) {
+		t.Fatal("expected non-retryable 4xx (422) to be a breaker failure")
 	}
 	if !isCircuitBreakerFailure(io.ErrUnexpectedEOF, 400) || !isCircuitBreakerFailure(syscall.ECONNRESET, 200) {
 		t.Fatal("expected premature termination and connection reset to be provider failures")

@@ -36,9 +36,9 @@ const (
 // "client error, do not retry" per RFC 9110 and OpenAI API behavior.
 //
 // Note: this is a categorizer only — it does NOT decide whether to penalize
-// the provider's circuit breaker. See isCircuitBreakerFailure for that: only
-// 5xx and net errors count toward the breaker, so an unknown 4xx that is now
-// retryable will failover WITHOUT tripping the breaker.
+// the provider's circuit breaker. See isCircuitBreakerFailure for that:
+// network errors and any upstream error status (4xx and 5xx) all count, so a
+// retryable 4xx will failover AND penalize the breaker once retries exhaust.
 func CategorizeError(err error, statusCode int) ErrorCategory {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -66,8 +66,11 @@ func CategorizeError(err error, statusCode int) ErrorCategory {
 }
 
 // isCircuitBreakerFailure reports whether a failure should count toward the
-// provider circuit breaker. Only true network/transport failures and 5xx
-// upstream responses open the breaker; 4xx client errors do not.
+// provider circuit breaker. True network/transport failures and ANY upstream
+// error status (4xx and 5xx) open the breaker: a provider that keeps
+// rejecting requests (expired keys, quota/arrearage, suspended accounts) is
+// just as unavailable as one that times out. Client-side cancellations never
+// count.
 func isCircuitBreakerFailure(err error, statusCode int) bool {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -78,7 +81,7 @@ func isCircuitBreakerFailure(err error, statusCode int) bool {
 		}
 		return isNetError(err)
 	}
-	return statusCode >= 500
+	return statusCode >= 400
 }
 
 // isClientDisconnect reports whether err represents the client disconnecting
