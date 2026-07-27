@@ -6,17 +6,13 @@ import { useToast } from '@/composables/useToast'
 import { toolconfig } from '../../wailsjs/go/models'
 import type { model } from '../../wailsjs/go/models'
 
-const props = withDefaults(defineProps<{
+const props = defineProps<{
   open: boolean
   tool: string
   preset: toolconfig.Preset | null
-  enabled?: boolean
   apiKeys: model.ApiKey[]
   modelRules: model.ModelRule[]
-  supportingLoading?: boolean
-}>(), {
-  enabled: false,
-})
+}>()
 
 const emit = defineEmits<{
   close: []
@@ -49,7 +45,6 @@ type ModelRow = {
 
 const modelRows = ref<ModelRow[]>([])
 const editing = computed(() => !!props.preset)
-const editingEnabled = computed(() => editing.value && props.enabled)
 const toolLabel = computed(() => t(`toolAccess.tools.${props.tool}`))
 const storedKeyHint = computed(() => editing.value && !!props.preset?.APIKeyEnc)
 const valid = computed(() => {
@@ -101,7 +96,7 @@ function reset() {
   kind.value = preset?.Kind === 'autoapi' ? 'autoapi' : 'direct'
   name.value = preset?.Name || ''
   providerID.value = preset?.ProviderID || ''
-  vendor.value = preset?.Vendor || 'openai-compatible'
+  vendor.value = preset?.Vendor || ''
   baseURL.value = preset?.BaseURL || ''
   apiKeyID.value = preset?.APIKeyID || ''
   plaintextKey.value = ''
@@ -112,23 +107,12 @@ function reset() {
 
 function onKindChange() {
   if (kind.value === 'autoapi' && !modelRows.value.some((row) => row.name.trim())) {
-    const named = props.modelRules.filter((rule) => rule.enabled)
-    modelRows.value = named.length
-      ? named.map((rule, index) => ({ ...emptyRow(rule.name), isDefault: index === 0 }))
-      : [emptyRow()]
+    modelRows.value = props.modelRules.filter((rule) => rule.enabled).map((rule, index) => ({
+      ...emptyRow(rule.name),
+      isDefault: index === 0,
+    }))
   }
 }
-
-// Model rules can arrive after the modal opens (they load in the
-// background); backfill the autoapi rows once they do, but never overwrite
-// anything the user already typed.
-watch(() => props.modelRules, (rules) => {
-  if (props.preset || kind.value !== 'autoapi') return
-  if (modelRows.value.some((row) => row.name.trim())) return
-  const named = (rules || []).filter((rule) => rule.enabled)
-  if (!named.length) return
-  modelRows.value = named.map((rule, index) => ({ ...emptyRow(rule.name), isDefault: index === 0 }))
-})
 
 function addModel() {
   modelRows.value.push(emptyRow())
@@ -178,9 +162,9 @@ function buildPayload(): toolconfig.Preset {
     Kind: kind.value,
     Name: name.value.trim(),
     ProviderID: providerID.value.trim(),
-    Vendor: props.tool === 'opencode' && kind.value === 'direct' ? vendor.value.trim() : props.preset?.Vendor || '',
+    Vendor: vendor.value.trim(),
     BaseURL: baseURL.value.trim(),
-    APIKeyEnc: props.preset?.APIKeyEnc && props.preset.APIKeyEnc !== '********' ? props.preset.APIKeyEnc : '',
+    APIKeyEnc: props.preset?.APIKeyEnc || '',
     APIKeyID: kind.value === 'autoapi' ? apiKeyID.value : '',
     Models: models,
     Extra: props.preset?.Extra || {},
@@ -196,8 +180,7 @@ async function save() {
   const generation = modalGeneration.value
   try {
     const payload = buildPayload()
-    if (editingEnabled.value) await api.updateEnabledToolPreset(payload, plaintextKey.value)
-    else if (editing.value) await api.updateToolPreset(payload, plaintextKey.value)
+    if (editing.value) await api.updateToolPreset(payload, plaintextKey.value)
     else await api.createToolPreset(payload, plaintextKey.value)
     if (generation !== modalGeneration.value) return
     toast.push(t('toolAccess.toast.presetSaved'), 'success')
@@ -247,8 +230,7 @@ watch(() => props.open, (open) => {
           </div>
           <div class="field">
             <label class="field-label">{{ t('toolAccess.preset.providerID') }}</label>
-            <input v-model="providerID" class="input mono" :disabled="editingEnabled" :placeholder="t('toolAccess.preset.providerIDPlaceholder')">
-            <div v-if="editingEnabled" class="field-help">{{ t('toolAccess.preset.providerIDLocked') }}</div>
+            <input v-model="providerID" class="input mono" :placeholder="t('toolAccess.preset.providerIDPlaceholder')">
           </div>
         </div>
 
@@ -258,16 +240,10 @@ watch(() => props.open, (open) => {
               <label class="field-label">{{ t('toolAccess.preset.baseURL') }}</label>
               <input v-model="baseURL" class="input mono" :placeholder="t('toolAccess.preset.baseURLPlaceholder')">
             </div>
-            <div v-if="tool === 'opencode'" class="field">
+            <div class="field">
               <label class="field-label">{{ t('toolAccess.preset.vendor') }}</label>
-              <select v-model="vendor" class="select">
-                <option value="openai-responses">{{ t('toolAccess.vendors.openai-responses') }}</option>
-                <option value="openai-compatible">{{ t('toolAccess.vendors.openai-compatible') }}</option>
-                <option value="anthropic">{{ t('toolAccess.vendors.anthropic') }}</option>
-                <option value="amazon-bedrock">{{ t('toolAccess.vendors.amazon-bedrock') }}</option>
-                <option value="google-gemini">{{ t('toolAccess.vendors.google-gemini') }}</option>
-              </select>
-              <div class="field-help">{{ t('toolAccess.preset.vendorHelp.' + (vendor || 'openai-compatible')) }}</div>
+              <input v-model="vendor" class="input" :placeholder="t('toolAccess.preset.vendorPlaceholder')">
+              <div class="field-help">{{ t('toolAccess.preset.vendorHelp') }}</div>
             </div>
           </div>
           <div class="field">
@@ -279,11 +255,11 @@ watch(() => props.open, (open) => {
         <template v-else>
           <div class="field">
             <label class="field-label">{{ t('toolAccess.preset.apiKeySelector') }}</label>
-            <select v-model="apiKeyID" class="select" :disabled="supportingLoading">
+            <select v-model="apiKeyID" class="select">
               <option value="" disabled>{{ t('toolAccess.preset.apiKeyPlaceholder') }}</option>
               <option v-for="key in apiKeys" :key="key.id" :value="key.id">{{ key.name }}</option>
             </select>
-            <div class="field-help">{{ supportingLoading ? t('toolAccess.preset.loadingSupporting') : t('toolAccess.preset.apiKeyHelp') }}</div>
+            <div class="field-help">{{ t('toolAccess.preset.apiKeyHelp') }}</div>
           </div>
         </template>
 
