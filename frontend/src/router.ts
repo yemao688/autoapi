@@ -6,12 +6,14 @@ import ApiKeysView from './views/ApiKeysView.vue'
 import UsageStatsView from './views/UsageStatsView.vue'
 import UpstreamMonitoringView from './views/UpstreamMonitoringView.vue'
 import SettingsView from './views/SettingsView.vue'
+import ToolAccessView from './views/ToolAccessView.vue'
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', name: 'dashboard', component: DashboardView },
   { path: '/providers', name: 'providers', component: ProvidersView },
   { path: '/model-rules', name: 'model-rules', component: ModelRulesView },
+  { path: '/tool-access', name: 'tool-access', component: ToolAccessView },
   { path: '/api-keys', name: 'api-keys', component: ApiKeysView },
   { path: '/usage-stats', name: 'usage-stats', component: UsageStatsView },
   { path: '/upstream-monitoring', name: 'upstream-monitoring', component: UpstreamMonitoringView },

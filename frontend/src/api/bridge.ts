@@ -1,5 +1,5 @@
 import * as wails from '../../wailsjs/go/api/App'
-import type { model, proxy, api as apiModels } from '../../wailsjs/go/models'
+import type { model, proxy, api as apiModels, service, toolconfig } from '../../wailsjs/go/models'
 
 export type ExportFormat = Parameters<typeof wails.ExportData>[0]
 
@@ -135,6 +135,60 @@ export const api = {
   setProviderEnabled: (id: string, enabled: boolean): Promise<void> => {
     ensureWails()
     return wails.SetProviderEnabled(id, enabled) as Promise<void>
+  },
+
+  // Tool access
+  listToolStatuses: (): Promise<toolconfig.ToolStatus[]> => {
+    ensureWails()
+    return wails.ListToolStatuses() as Promise<toolconfig.ToolStatus[]>
+  },
+  listToolPresets: (tool: string): Promise<toolconfig.Preset[]> => {
+    ensureWails()
+    return wails.ListToolPresets(tool) as Promise<toolconfig.Preset[]>
+  },
+  createToolPreset: (preset: toolconfig.Preset, plaintextKey: string): Promise<toolconfig.Preset> => {
+    ensureWails()
+    return wails.CreateToolPreset(preset, plaintextKey) as Promise<toolconfig.Preset>
+  },
+  updateToolPreset: (preset: toolconfig.Preset, plaintextKey: string): Promise<toolconfig.Preset> => {
+    ensureWails()
+    return wails.UpdateToolPreset(preset, plaintextKey) as Promise<toolconfig.Preset>
+  },
+  deleteToolPreset: (id: number): Promise<void> => {
+    ensureWails()
+    return wails.DeleteToolPreset(id) as Promise<void>
+  },
+  applyToolPreset: (id: number, allowDrift: boolean): Promise<service.ToolApplyResult> => {
+    ensureWails()
+    return wails.ApplyToolPreset(id, allowDrift) as Promise<service.ToolApplyResult>
+  },
+  checkToolDrift: (tool: string): Promise<service.DriftState[]> => {
+    ensureWails()
+    return wails.CheckToolDrift(tool) as Promise<service.DriftState[]>
+  },
+  importToolPreset: (tool: string, providerID: string, name: string): Promise<toolconfig.Preset> => {
+    ensureWails()
+    return wails.ImportToolPreset(tool, providerID, name) as Promise<toolconfig.Preset>
+  },
+  exportToolSnippet: (id: number): Promise<toolconfig.Snippet> => {
+    ensureWails()
+    return wails.ExportToolSnippet(id) as Promise<toolconfig.Snippet>
+  },
+  getOmoConfig: (): Promise<service.OmoConfigView> => {
+    ensureWails()
+    return wails.GetOmoConfig() as Promise<service.OmoConfigView>
+  },
+  applyOmoConfig: (change: toolconfig.OmoChange, allowDrift: boolean): Promise<void> => {
+    ensureWails()
+    return wails.ApplyOmoConfig(change, allowDrift) as Promise<void>
+  },
+  listToolBackups: (tool: string): Promise<service.ToolBackupInfo[]> => {
+    ensureWails()
+    return wails.ListToolBackups(tool) as Promise<service.ToolBackupInfo[]>
+  },
+  restoreToolBackup: (tool: string, resource: string, backupPath: string): Promise<void> => {
+    ensureWails()
+    return wails.RestoreToolBackup(tool, resource, backupPath) as Promise<void>
   },
   testModelChat: (providerId: string, modelName: string, protocol: string, stream: boolean, testId: string): Promise<model.ModelChatTestResult> => {
     ensureWails()
