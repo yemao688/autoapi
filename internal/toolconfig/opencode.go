@@ -3,6 +3,7 @@ package toolconfig
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -441,5 +442,67 @@ func ListProviderModels(homeDir string) ([]string, error) {
 			result = append(result, memberName(pm)+"/"+memberName(mm))
 		}
 	}
+	return result, nil
+}
+
+// ListProviderVariants returns the sorted union of every variant key declared
+// under provider models in the opencode config (provider.*.models.*.variants).
+// It feeds the OMO agent variant dropdown. A missing config yields an empty
+// list, not an error; non-object shapes are skipped leniently here and still
+// fail closed on the adapter's Plan path.
+func ListProviderVariants(homeDir string) ([]string, error) {
+	doc, err := readJSONDocument(DefaultConfigPath(ToolOpencode, homeDir))
+	if err != nil {
+		return nil, err
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, err
+	}
+	providers := objectMemberValue(root, "provider")
+	if providers == nil {
+		return nil, nil
+	}
+	providersObj, ok := providers.Value.(*hujson.Object)
+	if !ok {
+		return nil, fmt.Errorf("managed JSON key %q is not an object: %w", "provider", ErrUnsafeShape)
+	}
+	seen := make(map[string]struct{})
+	for _, pm := range providersObj.Members {
+		entryObj, ok := pm.Value.Value.(*hujson.Object)
+		if !ok {
+			continue
+		}
+		modelsValue := objectMemberValue(entryObj, "models")
+		if modelsValue == nil {
+			continue
+		}
+		modelsObj, ok := modelsValue.Value.(*hujson.Object)
+		if !ok {
+			continue
+		}
+		for _, mm := range modelsObj.Members {
+			modelObj, ok := mm.Value.Value.(*hujson.Object)
+			if !ok {
+				continue
+			}
+			variantsValue := objectMemberValue(modelObj, "variants")
+			if variantsValue == nil {
+				continue
+			}
+			variantsObj, ok := variantsValue.Value.(*hujson.Object)
+			if !ok {
+				continue
+			}
+			for _, vm := range variantsObj.Members {
+				seen[memberName(vm)] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for name := range seen {
+		result = append(result, name)
+	}
+	sort.Strings(result)
 	return result, nil
 }

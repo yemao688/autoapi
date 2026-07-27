@@ -461,6 +461,45 @@ func TestReadManagedRawIsPlaintextButManagedIsMasked(t *testing.T) {
 	}
 }
 
+func TestListOmoPresetsListsSortedNames(t *testing.T) {
+	home, _ := writeOmoFixture(t)
+	presets, err := ListOmoPresets(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(presets) != 2 || presets[0] != "balanced" || presets[1] != "fast" {
+		t.Fatalf("ListOmoPresets = %#v", presets)
+	}
+	if got, err := ListOmoPresets(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing OMO config: got %#v, err=%v; want nil, nil", got, err)
+	}
+}
+
+func TestListProviderVariantsUnionsModelVariants(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolOpencode, home)
+	writeFile(t, path, `{"provider":{
+		"a": {"models": {
+			"m1": {"variants": {"fast": {}, "slow": {}}},
+			"m2": {"variants": {"fast": {}}}
+		}},
+		"b": {"models": {
+			"m3": {"variants": {"deep": {}}},
+			"m4": {}
+		}}
+	}}`, 0o644)
+	variants, err := ListProviderVariants(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(variants) != 3 || variants[0] != "deep" || variants[1] != "fast" || variants[2] != "slow" {
+		t.Fatalf("ListProviderVariants = %#v", variants)
+	}
+	if got, err := ListProviderVariants(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing opencode config: got %#v, err=%v; want nil, nil", got, err)
+	}
+}
+
 func TestOpenCodeReadManagedHandlesMissingOptions(t *testing.T) {
 	home := t.TempDir()
 	path := DefaultConfigPath(ToolOpencode, home)

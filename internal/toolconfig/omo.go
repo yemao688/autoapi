@@ -1,6 +1,7 @@
 package toolconfig
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -58,6 +59,36 @@ func ReadOmoConfig(homeDir string) (OmoConfig, error) {
 	}
 	config.Path = path
 	return config, nil
+}
+
+// ListOmoPresets returns the sorted names of every preset declared in the OMO
+// config's presets object. It is used by the UI to offer a closed preset
+// switcher (free-form preset names are rejected by PlanOmoChange anyway).
+func ListOmoPresets(homeDir string) ([]string, error) {
+	_, _, _, root, err := readOmoDocument(homeDir)
+	if err != nil {
+		if errors.Is(err, ErrConfigNotFound) {
+			// Match ListProviderModels: a missing config yields no choices,
+			// not an error; the strict read path still fails closed.
+			return nil, nil
+		}
+		return nil, err
+	}
+	presets, present, err := omoObjectMember(root, "presets", true)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		// A config without presets is unusual (ReadOmoConfig fails closed on
+		// it) but the lister stays tolerant and simply offers no choices.
+		return nil, nil
+	}
+	result := make([]string, 0, len(presets.Members))
+	for _, member := range presets.Members {
+		result = append(result, memberName(member))
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 // PlanOmoChange renders a hujson leaf patch for OMO and a read-only check for

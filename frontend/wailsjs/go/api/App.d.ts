@@ -9,9 +9,9 @@ import {context} from '../models';
 
 export function AddProviderModels(arg1:string,arg2:Array<string>):Promise<void>;
 
-export function ApplyOmoSlimConfig(arg1:toolconfig.OmoSlimChange,arg2:boolean):Promise<void>;
+export function ApplyOmoConfig(arg1:toolconfig.OmoChange,arg2:boolean):Promise<void>;
 
-export function ApplyOpencodeConfigChange(arg1:service.OpencodeConfigPlan,arg2:boolean):Promise<void>;
+export function ApplyToolPreset(arg1:number,arg2:boolean):Promise<service.ToolApplyResult>;
 
 export function CancelModelTest(arg1:string):Promise<boolean>;
 
@@ -43,10 +43,6 @@ export function DeleteProviderFeatureCapability(arg1:string,arg2:string,arg3:str
 
 export function DeleteToolPreset(arg1:number):Promise<void>;
 
-export function DisableToolPreset(arg1:string,arg2:string):Promise<service.ToolApplyResult>;
-
-export function EnableToolPreset(arg1:number):Promise<service.ToolApplyResult>;
-
 export function EnterBackground():Promise<void>;
 
 export function EnterForeground():Promise<void>;
@@ -67,11 +63,7 @@ export function GetModelRule(arg1:string):Promise<model.ModelRule>;
 
 export function GetModelRuleShadowComparisons():Promise<Array<model.ModelRuleShadowComparison>>;
 
-export function GetOmoSlimConfig():Promise<service.OmoSlimConfigView>;
-
-export function GetOpencodeGlobalSettings():Promise<toolconfig.OpencodeGlobalSettings>;
-
-export function GetOpencodeLiveState():Promise<service.OpencodeLiveState>;
+export function GetOmoConfig():Promise<service.OmoConfigView>;
 
 export function GetProvider(arg1:string):Promise<model.Provider>;
 
@@ -99,6 +91,8 @@ export function HideApp():Promise<void>;
 
 export function HideWindow():Promise<void>;
 
+export function ImportToolPreset(arg1:string,arg2:string,arg3:string):Promise<toolconfig.Preset>;
+
 export function IsQuitting():Promise<boolean>;
 
 export function ListAPIKeys():Promise<Array<model.ApiKey>>;
@@ -119,8 +113,6 @@ export function ListToolBackups(arg1:string):Promise<Array<service.ToolBackupInf
 
 export function ListToolPresets(arg1:string):Promise<Array<toolconfig.Preset>>;
 
-export function ListToolProviders(arg1:string):Promise<Array<service.ToolProviderView>>;
-
 export function ListToolStatuses():Promise<Array<toolconfig.ToolStatus>>;
 
 export function ListUpstreamMonitorModels():Promise<Array<model.UpstreamMonitorModel>>;
@@ -130,10 +122,6 @@ export function NavigateTo(arg1:string):Promise<void>;
 export function OpenStorageFolder():Promise<void>;
 
 export function PingLogEvent():Promise<void>;
-
-export function PreviewOpencodeConfigChange(arg1:service.OpencodeConfigPlan):Promise<service.OmoSlimPreview>;
-
-export function PreviewToolOmoSlimChange(arg1:toolconfig.OmoSlimChange):Promise<service.OmoSlimPreview>;
 
 export function ProbeUpstreamMonitorModel(arg1:model.UpstreamMonitorSelection):Promise<model.UpstreamMonitorResult>;
 
@@ -160,8 +148,6 @@ export function ResetTargetBreakers():Promise<void>;
 export function RestartProxy():Promise<void>;
 
 export function RestoreToolBackup(arg1:string,arg2:string,arg3:string):Promise<void>;
-
-export function RevealToolProviderKey(arg1:string,arg2:string):Promise<string>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 
@@ -200,8 +186,6 @@ export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTes
 export function TestProvider(arg1:string):Promise<model.ProviderTestResult>;
 
 export function UpdateAPIKey(arg1:string,arg2:model.ApiKeyInput):Promise<model.ApiKey>;
-
-export function UpdateEnabledToolPreset(arg1:toolconfig.Preset,arg2:string):Promise<toolconfig.Preset>;
 
 export function UpdateModelRule(arg1:string,arg2:model.ModelRuleInput):Promise<model.ModelRule>;
 
