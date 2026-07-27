@@ -66,6 +66,35 @@ func directTestPreset() toolconfig.Preset {
 	}
 }
 
+func TestGetOpencodeLiveStateReadsDisk(t *testing.T) {
+	svc, _, homeDir := newToolConfigTestService(t)
+	writeToolConfigFixture(t, homeDir, `{"provider":{"acme-ai":{}},"model":"acme-ai/acme-model"}`)
+
+	state, err := svc.GetOpencodeLiveState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Model != "acme-ai/acme-model" || state.OmoConfigured {
+		t.Fatalf("state without OMO: %+v", state)
+	}
+
+	omoPath := filepath.Join(homeDir, ".config", "opencode", "oh-my-opencode-slim.jsonc")
+	if err := os.MkdirAll(filepath.Dir(omoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	omo := `{"preset":"balanced","presets":{"balanced":{"orchestrator":{"model":"acme-ai/acme-model","variant":"high"}}},"disabled_agents":["oracle"]}`
+	if err := os.WriteFile(omoPath, []byte(omo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state, err = svc.GetOpencodeLiveState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.OmoConfigured || state.OmoActivePreset != "balanced" || state.OmoAgentCount != 1 || state.OmoDisabledCount != 1 {
+		t.Fatalf("state with OMO: %+v", state)
+	}
+}
+
 func TestApplyToolPresetDirectPersistsFileAndState(t *testing.T) {
 	svc, db, homeDir := newToolConfigTestService(t)
 	configPath := writeToolConfigFixture(t, homeDir, "")

@@ -500,6 +500,49 @@ func TestListProviderVariantsUnionsModelVariants(t *testing.T) {
 	}
 }
 
+func TestReadModelPointerReadsTopLevelModel(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolOpencode, home)
+	writeFile(t, path, `{"provider":{"acme-ai":{}},"model":"acme-ai/acme-model"}`, 0o644)
+	model, err := ReadModelPointer(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "acme-ai/acme-model" {
+		t.Fatalf("ReadModelPointer = %q", model)
+	}
+	writeFile(t, path, `{"provider":{"acme-ai":{}}}`, 0o644)
+	if model, err = ReadModelPointer(home); err != nil || model != "" {
+		t.Fatalf("unset pointer: got %q, err=%v; want \"\", nil", model, err)
+	}
+	if model, err = ReadModelPointer(t.TempDir()); err != nil || model != "" {
+		t.Fatalf("missing config: got %q, err=%v; want \"\", nil", model, err)
+	}
+}
+
+func TestListOmoPresetAgentsProjectsEveryPreset(t *testing.T) {
+	home, _ := writeOmoFixture(t)
+	projection, err := ListOmoPresetAgents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection) != 2 {
+		t.Fatalf("ListOmoPresetAgents = %#v", projection)
+	}
+	if got := projection["balanced"]["orchestrator"]; got != (OmoAgent{Model: "autoapi-compatible/old-model", Variant: "slow"}) {
+		t.Fatalf("balanced orchestrator = %+v", got)
+	}
+	if got := projection["fast"]["oracle"]; got != (OmoAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
+		t.Fatalf("fast oracle = %+v", got)
+	}
+	if _, ok := projection["balanced"]["custom"]; ok {
+		t.Fatal("custom agents leaked into preset projection")
+	}
+	if got, err := ListOmoPresetAgents(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing OMO config: got %#v, err=%v; want nil, nil", got, err)
+	}
+}
+
 func TestOpenCodeReadManagedHandlesMissingOptions(t *testing.T) {
 	home := t.TempDir()
 	path := DefaultConfigPath(ToolOpencode, home)

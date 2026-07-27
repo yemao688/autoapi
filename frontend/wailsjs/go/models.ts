@@ -1709,6 +1709,7 @@ export namespace service {
 	    KnownPresets: string[];
 	    ValidModels: string[];
 	    AvailableVariants: string[];
+	    PresetAgents: Record<string, any>;
 	
 	    static createFrom(source: any = {}) {
 	        return new OmoConfigView(source);
@@ -1723,6 +1724,7 @@ export namespace service {
 	        this.KnownPresets = source["KnownPresets"];
 	        this.ValidModels = source["ValidModels"];
 	        this.AvailableVariants = source["AvailableVariants"];
+	        this.PresetAgents = source["PresetAgents"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1742,6 +1744,26 @@ export namespace service {
 		    }
 		    return a;
 		}
+	}
+	export class OpencodeLiveState {
+	    Model: string;
+	    OmoConfigured: boolean;
+	    OmoActivePreset: string;
+	    OmoAgentCount: number;
+	    OmoDisabledCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeLiveState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Model = source["Model"];
+	        this.OmoConfigured = source["OmoConfigured"];
+	        this.OmoActivePreset = source["OmoActivePreset"];
+	        this.OmoAgentCount = source["OmoAgentCount"];
+	        this.OmoDisabledCount = source["OmoDisabledCount"];
+	    }
 	}
 	export class ToolApplyResult {
 	    Tool: string;

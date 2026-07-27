@@ -118,6 +118,10 @@ export function GetOmoConfig() {
   return window['go']['api']['App']['GetOmoConfig']();
 }
 
+export function GetOpencodeLiveState() {
+  return window['go']['api']['App']['GetOpencodeLiveState']();
+}
+
 export function GetProvider(arg1) {
   return window['go']['api']['App']['GetProvider'](arg1);
 }
