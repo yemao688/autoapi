@@ -91,6 +91,41 @@ func ListOmoPresets(homeDir string) ([]string, error) {
 	return result, nil
 }
 
+// ListOmoPresetAgents returns the built-in agent projection of every preset
+// declared in the OMO config, keyed by preset name. It powers the preset
+// switch preview in the UI. Custom agents (the top-level agents object) are
+// not part of the projection because they exist independently of any preset.
+func ListOmoPresetAgents(homeDir string) (map[string]map[string]OmoAgent, error) {
+	_, _, _, root, err := readOmoDocument(homeDir)
+	if err != nil {
+		if errors.Is(err, ErrConfigNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	presets, present, err := omoObjectMember(root, "presets", true)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, nil
+	}
+	result := make(map[string]map[string]OmoAgent, len(presets.Members))
+	for _, member := range presets.Members {
+		name := memberName(member)
+		object, ok := member.Value.Value.(*hujson.Object)
+		if !ok {
+			return nil, omoShape("presets.%s is not an object", name)
+		}
+		agents, err := readOmoAgents(object, "presets."+name)
+		if err != nil {
+			return nil, err
+		}
+		result[name] = agents
+	}
+	return result, nil
+}
+
 // PlanOmoChange renders a hujson leaf patch for OMO and a read-only check for
 // the opencode provider file. It never writes either file.
 func PlanOmoChange(homeDir string, ch OmoChange, validModels []string) (*ChangeSet, error) {

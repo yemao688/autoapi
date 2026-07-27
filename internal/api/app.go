@@ -185,6 +185,7 @@ type toolAccessService interface {
 	ImportToolPreset(string, string, string) (*toolconfig.Preset, error)
 	ExportToolSnippet(int64) (toolconfig.Snippet, error)
 	GetOmoConfig() (service.OmoConfigView, error)
+	GetOpencodeLiveState() (service.OpencodeLiveState, error)
 	ApplyOmoConfig(toolconfig.OmoChange, bool) error
 	ListToolBackups(string) ([]service.ToolBackupInfo, error)
 	RestoreToolBackup(string, string, string) error
@@ -1121,6 +1122,14 @@ func (a *App) GetOmoConfig() (service.OmoConfigView, error) {
 		return service.OmoConfigView{}, err
 	}
 	return svc.GetOmoConfig()
+}
+
+func (a *App) GetOpencodeLiveState() (service.OpencodeLiveState, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return service.OpencodeLiveState{}, err
+	}
+	return svc.GetOpencodeLiveState()
 }
 
 func (a *App) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {

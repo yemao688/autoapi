@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -265,6 +266,7 @@ type OmoConfigView struct {
 	KnownPresets      []string
 	ValidModels       []string
 	AvailableVariants []string
+	PresetAgents      map[string]map[string]toolconfig.OmoAgent
 }
 
 func (s *Service) GetOmoConfig() (OmoConfigView, error) {
@@ -288,6 +290,10 @@ func (s *Service) GetOmoConfig() (OmoConfigView, error) {
 	if err != nil {
 		return OmoConfigView{}, err
 	}
+	presetAgents, err := toolconfig.ListOmoPresetAgents(homeDir)
+	if err != nil {
+		return OmoConfigView{}, err
+	}
 	return OmoConfigView{
 		Path:              config.Path,
 		ActivePreset:      config.ActivePreset,
@@ -296,7 +302,45 @@ func (s *Service) GetOmoConfig() (OmoConfigView, error) {
 		KnownPresets:      knownPresets,
 		ValidModels:       validModels,
 		AvailableVariants: variants,
+		PresetAgents:      presetAgents,
 	}, nil
+}
+
+// OpencodeLiveState is the on-disk snapshot shown on the opencode card: the
+// effective model pointer plus a compact OMO overview. It is read live on
+// every call and intentionally bypasses the DB-tracked state so drift
+// becomes a concrete comparison instead of an abstract badge.
+type OpencodeLiveState struct {
+	Model            string
+	OmoConfigured    bool
+	OmoActivePreset  string
+	OmoAgentCount    int
+	OmoDisabledCount int
+}
+
+func (s *Service) GetOpencodeLiveState() (OpencodeLiveState, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return OpencodeLiveState{}, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	state := OpencodeLiveState{}
+	model, err := toolconfig.ReadModelPointer(homeDir)
+	if err != nil {
+		return OpencodeLiveState{}, err
+	}
+	state.Model = model
+	config, err := toolconfig.ReadOmoConfig(homeDir)
+	if err != nil {
+		if errors.Is(err, toolconfig.ErrConfigNotFound) {
+			return state, nil
+		}
+		return OpencodeLiveState{}, err
+	}
+	state.OmoConfigured = true
+	state.OmoActivePreset = config.ActivePreset
+	state.OmoAgentCount = len(config.Agents)
+	state.OmoDisabledCount = len(config.DisabledAgents)
+	return state, nil
 }
 
 func (s *Service) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {

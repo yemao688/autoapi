@@ -445,6 +445,22 @@ func ListProviderModels(homeDir string) ([]string, error) {
 	return result, nil
 }
 
+// ReadModelPointer returns the current top-level model pointer
+// (providerID/model) from the opencode config, or "" when unset. A missing
+// config yields "", nil — the live-state read is tolerant while Plan stays
+// fail-closed.
+func ReadModelPointer(homeDir string) (string, error) {
+	doc, err := readJSONDocument(DefaultConfigPath(ToolOpencode, homeDir))
+	if err != nil {
+		return "", err
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return "", err
+	}
+	return objectString(root, "model"), nil
+}
+
 // ListProviderVariants returns the sorted union of every variant key declared
 // under provider models in the opencode config (provider.*.models.*.variants).
 // It feeds the OMO agent variant dropdown. A missing config yields an empty

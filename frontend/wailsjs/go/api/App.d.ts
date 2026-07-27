@@ -65,6 +65,8 @@ export function GetModelRuleShadowComparisons():Promise<Array<model.ModelRuleSha
 
 export function GetOmoConfig():Promise<service.OmoConfigView>;
 
+export function GetOpencodeLiveState():Promise<service.OpencodeLiveState>;
+
 export function GetProvider(arg1:string):Promise<model.Provider>;
 
 export function GetProviderKey(arg1:string):Promise<string>;
