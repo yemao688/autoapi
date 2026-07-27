@@ -323,12 +323,10 @@ func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 		if err != nil {
 			return err
 		}
-		relSlash := filepath.ToSlash(rel)
-		prefix := string(toolID) + "/"
-		if !strings.HasPrefix(relSlash, prefix) {
+		resource := toolconfig.Resource(filepath.ToSlash(filepath.Dir(rel)))
+		if !resourceBelongsToTool(toolID, resource) {
 			return nil
 		}
-		resource := toolconfig.Resource(filepath.ToSlash(filepath.Dir(rel)))
 		info, err := entry.Info()
 		if err != nil {
 			return err
@@ -548,7 +546,7 @@ func (s *Service) targetPathForResource(tool toolconfig.Tool, resource toolconfi
 			return "", fmt.Errorf("service: no path for resource %s", resource)
 		}
 		return path, nil
-	case toolconfig.ResOpencodeOMO:
+	case toolconfig.ResOpencodeOMO, toolconfig.ResOmoConfig:
 		if path, ok := toolconfig.DetectOmoConfig(homeDir); ok {
 			return path, nil
 		}
@@ -601,7 +599,10 @@ func toolBackupRoot(homeDir string) string {
 
 func resourceBelongsToTool(tool toolconfig.Tool, resource toolconfig.Resource) bool {
 	prefix := string(tool) + "/"
-	return strings.HasPrefix(string(resource), prefix) && len(resource) > len(prefix)
+	if strings.HasPrefix(string(resource), prefix) && len(resource) > len(prefix) {
+		return true
+	}
+	return tool == toolconfig.ToolOpencode && resource == toolconfig.ResOmoConfig
 }
 
 func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupPath string) error {
