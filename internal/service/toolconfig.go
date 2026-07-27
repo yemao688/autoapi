@@ -254,20 +254,49 @@ func (s *Service) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	return toolconfig.ExportSnippet(plaintext)
 }
 
-func (s *Service) GetOmoConfig() (toolconfig.OmoConfig, []string, error) {
+// OmoConfigView is the UI-facing projection of the OMO config plus the
+// closed-choice lists the editor needs. It is a single return value because
+// the Wails binding only supports at most one data value plus error.
+type OmoConfigView struct {
+	Path              string
+	ActivePreset      string
+	Agents            map[string]toolconfig.OmoAgent
+	DisabledAgents    []string
+	KnownPresets      []string
+	ValidModels       []string
+	AvailableVariants []string
+}
+
+func (s *Service) GetOmoConfig() (OmoConfigView, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return toolconfig.OmoConfig{}, nil, fmt.Errorf("service: resolve home dir: %w", err)
+		return OmoConfigView{}, fmt.Errorf("service: resolve home dir: %w", err)
 	}
 	config, err := toolconfig.ReadOmoConfig(homeDir)
 	if err != nil {
-		return toolconfig.OmoConfig{}, nil, err
+		return OmoConfigView{}, err
 	}
 	validModels, err := toolconfig.ListProviderModels(homeDir)
 	if err != nil {
-		return toolconfig.OmoConfig{}, nil, err
+		return OmoConfigView{}, err
 	}
-	return config, validModels, nil
+	knownPresets, err := toolconfig.ListOmoPresets(homeDir)
+	if err != nil {
+		return OmoConfigView{}, err
+	}
+	variants, err := toolconfig.ListProviderVariants(homeDir)
+	if err != nil {
+		return OmoConfigView{}, err
+	}
+	return OmoConfigView{
+		Path:              config.Path,
+		ActivePreset:      config.ActivePreset,
+		Agents:            config.Agents,
+		DisabledAgents:    config.DisabledAgents,
+		KnownPresets:      knownPresets,
+		ValidModels:       validModels,
+		AvailableVariants: variants,
+	}, nil
 }
 
 func (s *Service) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {

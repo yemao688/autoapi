@@ -1681,3 +1681,344 @@ export namespace proxy {
 
 }
 
+export namespace service {
+	
+	export class DriftState {
+	    Resource: string;
+	    Path: string;
+	    Drifted: boolean;
+	    Missing: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DriftState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Resource = source["Resource"];
+	        this.Path = source["Path"];
+	        this.Drifted = source["Drifted"];
+	        this.Missing = source["Missing"];
+	    }
+	}
+	export class OmoConfigView {
+	    Path: string;
+	    ActivePreset: string;
+	    Agents: Record<string, toolconfig.OmoAgent>;
+	    DisabledAgents: string[];
+	    KnownPresets: string[];
+	    ValidModels: string[];
+	    AvailableVariants: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoConfigView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Path = source["Path"];
+	        this.ActivePreset = source["ActivePreset"];
+	        this.Agents = this.convertValues(source["Agents"], toolconfig.OmoAgent, true);
+	        this.DisabledAgents = source["DisabledAgents"];
+	        this.KnownPresets = source["KnownPresets"];
+	        this.ValidModels = source["ValidModels"];
+	        this.AvailableVariants = source["AvailableVariants"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolApplyResult {
+	    Tool: string;
+	    ConfigPath: string;
+	    BackupPaths: string[];
+	    HotReload: boolean;
+	    RestartHint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolApplyResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Tool = source["Tool"];
+	        this.ConfigPath = source["ConfigPath"];
+	        this.BackupPaths = source["BackupPaths"];
+	        this.HotReload = source["HotReload"];
+	        this.RestartHint = source["RestartHint"];
+	    }
+	}
+	export class ToolBackupInfo {
+	    Resource: string;
+	    Path: string;
+	    // Go type: time
+	    ModTime: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolBackupInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Resource = source["Resource"];
+	        this.Path = source["Path"];
+	        this.ModTime = this.convertValues(source["ModTime"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace toolconfig {
+	
+	export class ModelLimit {
+	    context?: number;
+	    output?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelLimit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.context = source["context"];
+	        this.output = source["output"];
+	    }
+	}
+	export class OmoAgent {
+	    Model: string;
+	    Variant: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoAgent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Model = source["Model"];
+	        this.Variant = source["Variant"];
+	    }
+	}
+	export class OmoChange {
+	    ActivePreset?: string;
+	    Agents: Record<string, OmoAgent>;
+	    DisabledAgents: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoChange(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ActivePreset = source["ActivePreset"];
+	        this.Agents = this.convertValues(source["Agents"], OmoAgent, true);
+	        this.DisabledAgents = source["DisabledAgents"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PresetVariant {
+	    reasoningEffort?: string;
+	    reasoningSummary?: string;
+	    include?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PresetVariant(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reasoningEffort = source["reasoningEffort"];
+	        this.reasoningSummary = source["reasoningSummary"];
+	        this.include = source["include"];
+	    }
+	}
+	export class PresetModel {
+	    name: string;
+	    limit?: ModelLimit;
+	    modalities?: string[];
+	    reasoning?: boolean;
+	    variants?: Record<string, PresetVariant>;
+	    default?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PresetModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.limit = this.convertValues(source["limit"], ModelLimit);
+	        this.modalities = source["modalities"];
+	        this.reasoning = source["reasoning"];
+	        this.variants = this.convertValues(source["variants"], PresetVariant, true);
+	        this.default = source["default"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Preset {
+	    ID: number;
+	    Tool: string;
+	    Kind: string;
+	    Name: string;
+	    ProviderID: string;
+	    Vendor: string;
+	    BaseURL: string;
+	    APIKeyEnc: string;
+	    APIKeyID: string;
+	    Models: PresetModel[];
+	    Extra: Record<string, string>;
+	    CreatedAt: number;
+	    UpdatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Preset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ID = source["ID"];
+	        this.Tool = source["Tool"];
+	        this.Kind = source["Kind"];
+	        this.Name = source["Name"];
+	        this.ProviderID = source["ProviderID"];
+	        this.Vendor = source["Vendor"];
+	        this.BaseURL = source["BaseURL"];
+	        this.APIKeyEnc = source["APIKeyEnc"];
+	        this.APIKeyID = source["APIKeyID"];
+	        this.Models = this.convertValues(source["Models"], PresetModel);
+	        this.Extra = source["Extra"];
+	        this.CreatedAt = source["CreatedAt"];
+	        this.UpdatedAt = source["UpdatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class Snippet {
+	    TargetPath: string;
+	    Format: string;
+	    Content: string;
+	    Notes: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Snippet(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.TargetPath = source["TargetPath"];
+	        this.Format = source["Format"];
+	        this.Content = source["Content"];
+	        this.Notes = source["Notes"];
+	    }
+	}
+	export class ToolStatus {
+	    Tool: string;
+	    Installed: boolean;
+	    ConfigPath: string;
+	    ConfigExists: boolean;
+	    ExtraPaths: Record<string, string>;
+	    ActivePresetID: number;
+	    Drifted: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Tool = source["Tool"];
+	        this.Installed = source["Installed"];
+	        this.ConfigPath = source["ConfigPath"];
+	        this.ConfigExists = source["ConfigExists"];
+	        this.ExtraPaths = source["ExtraPaths"];
+	        this.ActivePresetID = source["ActivePresetID"];
+	        this.Drifted = source["Drifted"];
+	    }
+	}
+
+}
+

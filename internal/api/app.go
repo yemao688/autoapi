@@ -184,7 +184,7 @@ type toolAccessService interface {
 	CheckToolDrift(string) ([]service.DriftState, error)
 	ImportToolPreset(string, string, string) (*toolconfig.Preset, error)
 	ExportToolSnippet(int64) (toolconfig.Snippet, error)
-	GetOmoConfig() (toolconfig.OmoConfig, []string, error)
+	GetOmoConfig() (service.OmoConfigView, error)
 	ApplyOmoConfig(toolconfig.OmoChange, bool) error
 	ListToolBackups(string) ([]service.ToolBackupInfo, error)
 	RestoreToolBackup(string, string, string) error
@@ -1115,10 +1115,10 @@ func (a *App) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	return svc.ExportToolSnippet(id)
 }
 
-func (a *App) GetOmoConfig() (toolconfig.OmoConfig, []string, error) {
+func (a *App) GetOmoConfig() (service.OmoConfigView, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
-		return toolconfig.OmoConfig{}, nil, err
+		return service.OmoConfigView{}, err
 	}
 	return svc.GetOmoConfig()
 }
@@ -1152,7 +1152,9 @@ func redactToolPreset(p *toolconfig.Preset) *toolconfig.Preset {
 		return nil
 	}
 	copy := *p
-	copy.APIKeyEnc = ""
+	// Reveal only whether a key exists so the UI can show a presence hint;
+	// the ciphertext itself never leaves the backend.
+	copy.APIKeyEnc = toolconfig.MaskSecret(p.APIKeyEnc)
 	return &copy
 }
 
