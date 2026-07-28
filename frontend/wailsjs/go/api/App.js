@@ -6,8 +6,12 @@ export function AddProviderModels(arg1, arg2) {
   return window['go']['api']['App']['AddProviderModels'](arg1, arg2);
 }
 
-export function ApplyOmoConfig(arg1, arg2) {
-  return window['go']['api']['App']['ApplyOmoConfig'](arg1, arg2);
+export function ApplyOmoSlimConfig(arg1, arg2) {
+  return window['go']['api']['App']['ApplyOmoSlimConfig'](arg1, arg2);
+}
+
+export function ApplyOpencodeGlobalChange(arg1, arg2) {
+  return window['go']['api']['App']['ApplyOpencodeGlobalChange'](arg1, arg2);
 }
 
 export function CancelModelTest(arg1) {
@@ -118,8 +122,12 @@ export function GetModelRuleShadowComparisons() {
   return window['go']['api']['App']['GetModelRuleShadowComparisons']();
 }
 
-export function GetOmoConfig() {
-  return window['go']['api']['App']['GetOmoConfig']();
+export function GetOmoSlimConfig() {
+  return window['go']['api']['App']['GetOmoSlimConfig']();
+}
+
+export function GetOpencodeGlobalSettings() {
+  return window['go']['api']['App']['GetOpencodeGlobalSettings']();
 }
 
 export function GetOpencodeLiveState() {
@@ -242,8 +250,12 @@ export function PingLogEvent() {
   return window['go']['api']['App']['PingLogEvent']();
 }
 
-export function PreviewToolOmoChange(arg1) {
-  return window['go']['api']['App']['PreviewToolOmoChange'](arg1);
+export function PreviewOpencodeGlobalChange(arg1) {
+  return window['go']['api']['App']['PreviewOpencodeGlobalChange'](arg1);
+}
+
+export function PreviewToolOmoSlimChange(arg1) {
+  return window['go']['api']['App']['PreviewToolOmoSlimChange'](arg1);
 }
 
 export function ProbeUpstreamMonitorModel(arg1) {
@@ -296,6 +308,10 @@ export function RestartProxy() {
 
 export function RestoreToolBackup(arg1, arg2, arg3) {
   return window['go']['api']['App']['RestoreToolBackup'](arg1, arg2, arg3);
+}
+
+export function RevealToolProviderKey(arg1, arg2) {
+  return window['go']['api']['App']['RevealToolProviderKey'](arg1, arg2);
 }
 
 export function SaveSettings(arg1) {

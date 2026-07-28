@@ -80,11 +80,11 @@ func detectOpencode(homeDir string) ToolStatus {
 	dir := filepath.Dir(status.ConfigPath)
 	jsonc := filepath.Join(dir, "oh-my-opencode-slim.jsonc")
 	json := filepath.Join(dir, "oh-my-opencode-slim.json")
-	status.ExtraPaths["omo_config"] = ""
+	status.ExtraPaths["omo_slim_config"] = ""
 	if pathExists(jsonc) {
-		status.ExtraPaths["omo_config"] = jsonc
+		status.ExtraPaths["omo_slim_config"] = jsonc
 	} else if pathExists(json) {
-		status.ExtraPaths["omo_config"] = json
+		status.ExtraPaths["omo_slim_config"] = json
 	}
 	return status
 }

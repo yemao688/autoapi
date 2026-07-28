@@ -37,16 +37,18 @@ const (
 var SupportedTools = []Tool{ToolOpencode, ToolCodex, ToolClaude}
 
 // Resource identifies one managed file of a tool. A tool may manage several
-// files (Codex: config + auth; opencode: config + OMO plugin config).
+// files (Codex: config + auth; opencode: config + OMO Slim plugin config).
 type Resource string
 
 const (
 	ResOpencodeConfig Resource = "opencode/config"
-	ResOpencodeOMO    Resource = "opencode/omo"
-	ResOmoConfig      Resource = "opencode-omo"
-	ResCodexConfig    Resource = "codex/config"
-	ResCodexAuth      Resource = "codex/auth"
-	ResClaudeSettings Resource = "claude/settings"
+	// These string literals are persisted in tool_file_state and backup paths;
+	// keep them unchanged when renaming the Go constants.
+	ResOpencodeOmoSlim Resource = "opencode/omo"
+	ResOmoSlimConfig   Resource = "opencode-omo"
+	ResCodexConfig     Resource = "codex/config"
+	ResCodexAuth       Resource = "codex/auth"
+	ResClaudeSettings  Resource = "claude/settings"
 )
 
 // PresetKind distinguishes third-party direct presets from the Autoapi relay preset.
@@ -113,7 +115,7 @@ type ToolStatus struct {
 	Installed      bool              // primary config file exists
 	ConfigPath     string            // conventional absolute path (always set, even when absent)
 	ConfigExists   bool              // primary config file currently on disk
-	ExtraPaths     map[string]string // secondary managed files, e.g. "auth_json", "omo_config" ("" when absent)
+	ExtraPaths     map[string]string // secondary managed files, e.g. "auth_json", "omo_slim_config" ("" when absent)
 	ActivePresetID int64             // from tool_state; 0 = never applied by us
 	Drifted        bool
 }
@@ -131,7 +133,7 @@ type FileChange struct {
 
 // FileCheck is a read-only hash dependency of a ChangeSet: Commit validates
 // that the current on-disk hash of Path equals ExpectedHash before writing
-// anything (e.g. an OMO apply depending on opencode.json staying unchanged).
+// anything (e.g. an OMO Slim apply depending on opencode.json staying unchanged).
 type FileCheck struct {
 	Resource     Resource
 	Path         string

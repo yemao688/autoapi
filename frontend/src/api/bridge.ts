@@ -170,6 +170,10 @@ export const api = {
     ensureWails()
     return wails.UpdateEnabledToolPreset(preset, plaintextKey) as Promise<toolconfig.Preset>
   },
+  revealToolProviderKey: (tool: string, providerID: string): Promise<string> => {
+    ensureWails()
+    return wails.RevealToolProviderKey(tool, providerID) as Promise<string>
+  },
   checkToolDrift: (tool: string): Promise<service.DriftState[]> => {
     ensureWails()
     return wails.CheckToolDrift(tool) as Promise<service.DriftState[]>
@@ -178,21 +182,33 @@ export const api = {
     ensureWails()
     return wails.ExportToolSnippet(id) as Promise<toolconfig.Snippet>
   },
-  getOmoConfig: (): Promise<service.OmoConfigView> => {
+  getOmoSlimConfig: (): Promise<service.OmoSlimConfigView> => {
     ensureWails()
-    return wails.GetOmoConfig() as Promise<service.OmoConfigView>
+    return wails.GetOmoSlimConfig() as Promise<service.OmoSlimConfigView>
   },
   getOpencodeLiveState: (): Promise<service.OpencodeLiveState> => {
     ensureWails()
     return wails.GetOpencodeLiveState() as Promise<service.OpencodeLiveState>
   },
-  previewToolOmoChange: (change: toolconfig.OmoChange): Promise<service.OmoPreview> => {
+  previewToolOmoSlimChange: (change: toolconfig.OmoSlimChange): Promise<service.OmoSlimPreview> => {
     ensureWails()
-    return wails.PreviewToolOmoChange(change) as Promise<service.OmoPreview>
+    return wails.PreviewToolOmoSlimChange(change) as Promise<service.OmoSlimPreview>
   },
-  applyOmoConfig: (change: toolconfig.OmoChange, allowDrift: boolean): Promise<void> => {
+  applyOmoSlimConfig: (change: toolconfig.OmoSlimChange, allowDrift: boolean): Promise<void> => {
     ensureWails()
-    return wails.ApplyOmoConfig(change, allowDrift) as Promise<void>
+    return wails.ApplyOmoSlimConfig(change, allowDrift) as Promise<void>
+  },
+  getOpencodeGlobalSettings: (): Promise<toolconfig.OpencodeGlobalSettings> => {
+    ensureWails()
+    return wails.GetOpencodeGlobalSettings() as Promise<toolconfig.OpencodeGlobalSettings>
+  },
+  previewOpencodeGlobalChange: (settings: toolconfig.OpencodeGlobalSettings): Promise<service.OmoSlimPreview> => {
+    ensureWails()
+    return wails.PreviewOpencodeGlobalChange(settings) as Promise<service.OmoSlimPreview>
+  },
+  applyOpencodeGlobalChange: (settings: toolconfig.OpencodeGlobalSettings, allowDrift: boolean): Promise<void> => {
+    ensureWails()
+    return wails.ApplyOpencodeGlobalChange(settings, allowDrift) as Promise<void>
   },
   listToolBackups: (tool: string): Promise<service.ToolBackupInfo[]> => {
     ensureWails()

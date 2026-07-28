@@ -181,15 +181,19 @@ type toolAccessService interface {
 	GetToolPresets(string) ([]toolconfig.Preset, error)
 	DeleteToolPreset(int64) error
 	ListToolProviders(string) ([]service.ToolProviderView, error)
+	RevealToolProviderKey(string, string) (string, error)
 	EnableToolPreset(int64) (service.ToolApplyResult, error)
 	DisableToolPreset(string, string) (service.ToolApplyResult, error)
 	UpdateEnabledToolPreset(toolconfig.Preset, string) (*toolconfig.Preset, error)
 	CheckToolDrift(string) ([]service.DriftState, error)
 	ExportToolSnippet(int64) (toolconfig.Snippet, error)
-	GetOmoConfig() (service.OmoConfigView, error)
+	GetOmoSlimConfig() (service.OmoSlimConfigView, error)
 	GetOpencodeLiveState() (service.OpencodeLiveState, error)
-	ApplyOmoConfig(toolconfig.OmoChange, bool) error
-	PreviewToolOmoChange(toolconfig.OmoChange) (service.OmoPreview, error)
+	ApplyOmoSlimConfig(toolconfig.OmoSlimChange, bool) error
+	PreviewToolOmoSlimChange(toolconfig.OmoSlimChange) (service.OmoSlimPreview, error)
+	GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error)
+	PreviewOpencodeGlobalChange(toolconfig.OpencodeGlobalSettings) (service.OmoSlimPreview, error)
+	ApplyOpencodeGlobalChange(toolconfig.OpencodeGlobalSettings, bool) error
 	ListToolBackups(string) ([]service.ToolBackupInfo, error)
 	RestoreToolBackup(string, string, string) error
 }
@@ -1069,6 +1073,16 @@ func (a *App) ListToolProviders(tool string) ([]service.ToolProviderView, error)
 	return redactToolProviderViews(views), err
 }
 
+// RevealToolProviderKey returns plaintext only for an explicit user request
+// such as the provider editor eye-toggle; it is never returned by list views.
+func (a *App) RevealToolProviderKey(tool, providerID string) (string, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return "", err
+	}
+	return svc.RevealToolProviderKey(tool, providerID)
+}
+
 func (a *App) CreateToolPreset(preset toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
@@ -1136,12 +1150,12 @@ func (a *App) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	return svc.ExportToolSnippet(id)
 }
 
-func (a *App) GetOmoConfig() (service.OmoConfigView, error) {
+func (a *App) GetOmoSlimConfig() (service.OmoSlimConfigView, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
-		return service.OmoConfigView{}, err
+		return service.OmoSlimConfigView{}, err
 	}
-	return svc.GetOmoConfig()
+	return svc.GetOmoSlimConfig()
 }
 
 func (a *App) GetOpencodeLiveState() (service.OpencodeLiveState, error) {
@@ -1152,22 +1166,46 @@ func (a *App) GetOpencodeLiveState() (service.OpencodeLiveState, error) {
 	return svc.GetOpencodeLiveState()
 }
 
-func (a *App) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {
+func (a *App) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift bool) error {
 	svc, err := a.toolAccess()
 	if err != nil {
 		return err
 	}
-	return svc.ApplyOmoConfig(change, allowDrift)
+	return svc.ApplyOmoSlimConfig(change, allowDrift)
 }
 
-// PreviewToolOmoChange renders the OMO file content a change would produce
+// PreviewToolOmoSlimChange renders the OMO Slim file content a change would produce
 // without writing anything, powering the confirm-before-write preview modal.
-func (a *App) PreviewToolOmoChange(change toolconfig.OmoChange) (service.OmoPreview, error) {
+func (a *App) PreviewToolOmoSlimChange(change toolconfig.OmoSlimChange) (service.OmoSlimPreview, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
-		return service.OmoPreview{}, err
+		return service.OmoSlimPreview{}, err
 	}
-	return svc.PreviewToolOmoChange(change)
+	return svc.PreviewToolOmoSlimChange(change)
+}
+
+func (a *App) GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return toolconfig.OpencodeGlobalSettings{}, err
+	}
+	return svc.GetOpencodeGlobalSettings()
+}
+
+func (a *App) PreviewOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings) (service.OmoSlimPreview, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return service.OmoSlimPreview{}, err
+	}
+	return svc.PreviewOpencodeGlobalChange(settings)
+}
+
+func (a *App) ApplyOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings, allowDrift bool) error {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return err
+	}
+	return svc.ApplyOpencodeGlobalChange(settings, allowDrift)
 }
 
 func (a *App) ListToolBackups(tool string) ([]service.ToolBackupInfo, error) {

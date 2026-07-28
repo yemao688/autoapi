@@ -49,28 +49,28 @@ function removeTag(value: string) {
     <div class="row-between tri-state-heading">
       <label class="field-label">{{ label }}</label>
       <select :value="mode" class="select tri-state-select" @change="setMode(($event.target as HTMLSelectElement).value as Mode)">
-        <option value="inherit">{{ t('toolAccess.omo.triState.inherit') }}</option>
-        <option value="all">{{ t('toolAccess.omo.triState.all') }}</option>
-        <option value="custom">{{ t('toolAccess.omo.triState.custom') }}</option>
+        <option value="inherit">{{ t('toolAccess.omoSlim.triState.inherit') }}</option>
+        <option value="all">{{ t('toolAccess.omoSlim.triState.all') }}</option>
+        <option value="custom">{{ t('toolAccess.omoSlim.triState.custom') }}</option>
       </select>
     </div>
-    <div v-if="mode === 'inherit'" class="field-help">{{ t('toolAccess.omo.triState.inheritHelp') }}</div>
+    <div v-if="mode === 'inherit'" class="field-help">{{ t('toolAccess.omoSlim.triState.inheritHelp') }}</div>
     <template v-else>
       <div class="row tri-state-input-row">
-        <AutoComplete v-model="input" :options="options" :placeholder="mode === 'all' ? t('toolAccess.omo.triState.excludePlaceholder') : t('toolAccess.omo.triState.addPlaceholder')" @keydown.enter.prevent="addTag" />
-        <button class="btn btn-secondary tri-state-add" type="button" :title="t('toolAccess.omo.triState.add')" :aria-label="t('toolAccess.omo.triState.add')" @click="addTag">
+        <AutoComplete v-model="input" :options="options" :placeholder="mode === 'all' ? t('toolAccess.omoSlim.triState.excludePlaceholder') : t('toolAccess.omoSlim.triState.addPlaceholder')" @keydown.enter.prevent="addTag" />
+        <button class="btn btn-secondary tri-state-add" type="button" :title="t('toolAccess.omoSlim.triState.add')" :aria-label="t('toolAccess.omoSlim.triState.add')" @click="addTag">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
       </div>
-      <div v-if="mode === 'all'" class="field-help">{{ t('toolAccess.omo.triState.allHelp') }}</div>
+      <div v-if="mode === 'all'" class="field-help">{{ t('toolAccess.omoSlim.triState.allHelp') }}</div>
       <div v-if="mode === 'all' || items.length" class="tri-state-tags">
         <span v-if="mode === 'all'" class="badge info tri-state-tag">*</span>
-        <button v-for="item in items" :key="item" type="button" class="badge mono tri-state-tag" :title="t('toolAccess.omo.triState.remove')" @click="removeTag(item)">
+        <button v-for="item in items" :key="item" type="button" class="badge mono tri-state-tag" :title="t('toolAccess.omoSlim.triState.remove')" @click="removeTag(item)">
           <span>{{ mode === 'all' ? `!${item}` : item }}</span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
-      <div v-else class="field-help">{{ t('toolAccess.omo.triState.emptyCustom') }}</div>
+      <div v-else class="field-help">{{ t('toolAccess.omoSlim.triState.emptyCustom') }}</div>
     </template>
   </div>
 </template>

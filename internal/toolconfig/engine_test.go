@@ -16,7 +16,7 @@ func TestCommitMultiFileHappyPathAndPruning(t *testing.T) {
 	writeTestFile(t, secondPath, []byte("second-before"), 0o644)
 
 	first := testFileChange(t, ResOpencodeConfig, firstPath, []byte("first-after"), false)
-	second := testFileChange(t, ResOpencodeOMO, secondPath, []byte("second-after"), false)
+	second := testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second-after"), false)
 	result, err := Commit(&ChangeSet{Tool: ToolOpencode, Changes: []FileChange{first, second}}, CommitOpts{
 		BackupRoot:  backupRoot,
 		KeepBackups: 1,
@@ -38,7 +38,7 @@ func TestCommitMultiFileHappyPathAndPruning(t *testing.T) {
 	}
 
 	first = testFileChange(t, ResOpencodeConfig, firstPath, []byte("first-final"), false)
-	second = testFileChange(t, ResOpencodeOMO, secondPath, []byte("second-final"), false)
+	second = testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second-final"), false)
 	if _, err := Commit(&ChangeSet{Tool: ToolOpencode, Changes: []FileChange{first, second}}, CommitOpts{
 		BackupRoot:  backupRoot,
 		KeepBackups: 1,
@@ -46,7 +46,7 @@ func TestCommitMultiFileHappyPathAndPruning(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertBackupCount(t, backupRoot, ResOpencodeConfig, 1)
-	assertBackupCount(t, backupRoot, ResOpencodeOMO, 1)
+	assertBackupCount(t, backupRoot, ResOpencodeOmoSlim, 1)
 }
 
 func TestCommitExpectedDriftAbortsWithoutSideEffects(t *testing.T) {
@@ -94,7 +94,7 @@ func TestCommitRollbackRestoresEarlierFile(t *testing.T) {
 	before := []byte("first-before")
 	writeTestFile(t, firstPath, before, 0o644)
 	first := testFileChange(t, ResOpencodeConfig, firstPath, []byte("first-after"), false)
-	second := testFileChange(t, ResOpencodeOMO, secondPath, []byte("second-after"), false)
+	second := testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second-after"), false)
 	setCommitTestHook(t, func(phase string, _ int) {
 		if phase != "after-backups" {
 			return
@@ -127,7 +127,7 @@ func TestCommitRollbackRemovesEarlierCreatedFile(t *testing.T) {
 	firstPath := filepath.Join(dir, "created.json")
 	secondPath := filepath.Join(blocked, "second.json")
 	first := testFileChange(t, ResOpencodeConfig, firstPath, []byte("created"), false)
-	second := testFileChange(t, ResOpencodeOMO, secondPath, []byte("second"), false)
+	second := testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second"), false)
 	setCommitTestHook(t, func(phase string, _ int) {
 		if phase != "after-backups" {
 			return
@@ -284,7 +284,7 @@ func TestCommitChecksPassAndFailBeforeWrites(t *testing.T) {
 	change := testFileChange(t, ResOpencodeConfig, targetPath, []byte("target-after"), false)
 	if _, err := Commit(&ChangeSet{
 		Changes: []FileChange{change},
-		Checks:  []FileCheck{{Resource: ResOpencodeOMO, Path: checkPath, ExpectedHash: checkHash}},
+		Checks:  []FileCheck{{Resource: ResOpencodeOmoSlim, Path: checkPath, ExpectedHash: checkHash}},
 	}, CommitOpts{BackupRoot: filepath.Join(dir, "backups")}); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestCommitChecksPassAndFailBeforeWrites(t *testing.T) {
 	failedChange := testFileChange(t, ResOpencodeConfig, targetPath, []byte("must-not-write"), false)
 	_, err = Commit(&ChangeSet{
 		Changes: []FileChange{failedChange},
-		Checks:  []FileCheck{{Resource: ResOpencodeOMO, Path: checkPath, ExpectedHash: "wrong-hash"}},
+		Checks:  []FileCheck{{Resource: ResOpencodeOmoSlim, Path: checkPath, ExpectedHash: "wrong-hash"}},
 	}, CommitOpts{BackupRoot: filepath.Join(dir, "failed-backups")})
 	if !errors.Is(err, ErrDrifted) {
 		t.Fatalf("expected check drift, got %v", err)

@@ -5,7 +5,8 @@ import { api } from '@/api/bridge'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import ToolPresetModal from '@/components/ToolPresetModal.vue'
-import OmoModal from '@/components/OmoModal.vue'
+import OmoSlimModal from '@/components/OmoSlimModal.vue'
+import OpencodeWorkbenchModal from '@/components/OpencodeWorkbenchModal.vue'
 import type { model, service, toolconfig } from '../../wailsjs/go/models'
 
 type ToolName = 'opencode' | 'codex' | 'claude'
@@ -29,7 +30,9 @@ const presetModalOpen = ref(false)
 const presetModalTool = ref<ToolName>('opencode')
 const editingPreset = ref<toolconfig.Preset | null>(null)
 const editingEnabled = ref(false)
-const omoOpen = ref(false)
+const omoSlimOpen = ref(false)
+const opencodeWorkbenchOpen = ref(false)
+const opencodeWorkbenchProviderID = ref('')
 
 const exportOpen = ref(false)
 const exportLoading = ref(false)
@@ -57,7 +60,7 @@ function presetsFor(tool: ToolName) {
 
 function extraPathLabel(key: string) {
   if (key === 'auth_json') return t('toolAccess.status.authPath')
-  if (key === 'omo_config') return t('toolAccess.status.omoPath')
+  if (key === 'omo_slim_config') return t('toolAccess.status.omoSlimPath')
   return key
 }
 
@@ -116,6 +119,16 @@ function closePresetModal() {
   presetModalOpen.value = false
   editingPreset.value = null
   editingEnabled.value = false
+}
+
+function openOpencodeWorkbench(view: service.ToolProviderView | null = null) {
+  opencodeWorkbenchProviderID.value = view?.Preset.ProviderID || ''
+  opencodeWorkbenchOpen.value = true
+}
+
+function closeOpencodeWorkbench() {
+  opencodeWorkbenchOpen.value = false
+  opencodeWorkbenchProviderID.value = ''
 }
 
 async function enableProvider(view: service.ToolProviderView) {
@@ -296,7 +309,7 @@ onMounted(() => {
           <div class="h-divider tool-divider"></div>
           <div class="row-between tool-section-heading">
             <div><div class="section-title" style="font-size: 15px;">{{ t('toolAccess.presets.title') }}</div><div class="section-sub">{{ t('toolAccess.presets.count', { count: presetsFor(card.tool).length }) }}</div></div>
-            <button class="btn btn-secondary" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button>
+            <div class="row tool-heading-actions"><button v-if="card.tool === 'opencode'" class="btn btn-primary" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.manage') }}</button><button class="btn btn-secondary" style="padding: 5px 9px; font-size: 11.5px;" @click="card.tool === 'opencode' ? openOpencodeWorkbench() : openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
           </div>
 
           <div v-if="!presetsFor(card.tool).length" class="tool-empty">{{ t('toolAccess.presets.empty') }}</div>
@@ -309,21 +322,21 @@ onMounted(() => {
               <div class="row tool-preset-actions">
                 <button v-if="view.Enabled" class="btn btn-secondary" style="padding: 4px 9px; font-size: 11px;" @click="disableProvider(card.tool, view)">{{ t('toolAccess.presets.disable') }}</button>
                 <button v-else class="btn btn-primary" style="padding: 4px 9px; font-size: 11px;" :disabled="mutationBusy || !statusFor(card.tool)?.Installed" :title="!statusFor(card.tool)?.Installed ? t('toolAccess.presets.installHint') : ''" @click="enableProvider(view)">{{ t('toolAccess.presets.enable') }}</button>
-                <button class="btn btn-icon" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+                <button class="btn btn-icon" :title="t('common.edit')" :aria-label="t('common.edit')" @click="card.tool === 'opencode' ? openOpencodeWorkbench(view) : openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
                 <button v-if="view.InDB" class="btn btn-icon" :title="t('toolAccess.presets.export')" :aria-label="t('toolAccess.presets.export')" @click="openExport(view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg></button>
                 <button v-if="!view.Enabled" class="btn btn-icon danger-icon" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deletePreset(view.Preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
               </div>
             </div>
           </div>
 
-          <div v-if="card.tool === 'opencode'" class="omo-card-block">
-            <div class="row-between omo-card-heading">
+          <div v-if="card.tool === 'opencode'" class="omo-slim-card-block">
+            <div class="row-between omo-slim-card-heading">
               <div>
-                <div class="omo-card-label">OMO</div>
-                <div v-if="opencodeLive?.OmoConfigured" class="omo-card-summary">{{ t('toolAccess.omo.activeSummary', { preset: opencodeLive.OmoActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoAgentCount, disabled: opencodeLive.OmoDisabledCount }) }}</div>
-                <div v-else class="omo-card-summary muted">{{ t('toolAccess.omo.notConfigured') }}</div>
+                <div class="omo-slim-card-label">OMO Slim</div>
+                <div v-if="opencodeLive?.OmoSlimConfigured" class="omo-slim-card-summary">{{ t('toolAccess.omoSlim.activeSummary', { preset: opencodeLive.OmoSlimActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoSlimAgentCount, disabled: opencodeLive.OmoSlimDisabledCount }) }}</div>
+                <div v-else class="omo-slim-card-summary muted">{{ t('toolAccess.omoSlim.notConfigured') }}</div>
               </div>
-              <button v-if="opencodeLive?.OmoConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omo.edit') }}</button>
+              <button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button>
             </div>
           </div>
 
@@ -336,7 +349,8 @@ onMounted(() => {
   </div>
 
   <ToolPresetModal :open="presetModalOpen" :tool="presetModalTool" :preset="editingPreset" :enabled="editingEnabled" :api-keys="apiKeys" :model-rules="modelRules" :supporting-loading="supportingLoading" @close="closePresetModal" @saved="closePresetModal(); refresh()" />
-  <OmoModal :open="omoOpen" @close="omoOpen = false" @applied="refresh" />
+  <OpencodeWorkbenchModal :open="opencodeWorkbenchOpen" :initial-provider-i-d="opencodeWorkbenchProviderID" @close="closeOpencodeWorkbench" @changed="refresh" @export="openExport" />
+  <OmoSlimModal :open="omoSlimOpen" @close="omoSlimOpen = false" @applied="refresh" />
 
   <Teleport to="body">
     <div v-if="exportOpen" class="modal-overlay" @click.self="exportOpen = false">
@@ -369,6 +383,7 @@ onMounted(() => {
 .tool-live-line { min-height: 24px; font-size: 12px; }
 .tool-divider { margin: 12px 0; }
 .tool-section-heading { align-items: flex-start; margin-bottom: 9px; }
+.tool-heading-actions { gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
 .tool-empty, .tool-page-state { padding: 18px 8px; text-align: center; color: var(--muted); font-size: 12px; }
 .tool-preset-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .tool-preset-row { display: flex; gap: 8px; align-items: center; padding: 9px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
@@ -384,11 +399,11 @@ onMounted(() => {
 .danger-icon:hover { color: var(--negative); }
 .tool-card-actions { flex-wrap: wrap; gap: 2px 10px; margin-top: 10px; }
 .tool-card-actions .btn-ghost { font-size: 11.5px; }
-.omo-card-block { margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
-.omo-card-heading { align-items: center; gap: 12px; }
-.omo-card-label { font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
-.omo-card-summary { margin-top: 3px; color: var(--muted); font-size: 11px; }
-.omo-card-summary.muted { color: var(--muted); }
+.omo-slim-card-block { margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
+.omo-slim-card-heading { align-items: center; gap: 12px; }
+.omo-slim-card-label { font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.omo-slim-card-summary { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.omo-slim-card-summary.muted { color: var(--muted); }
 .tool-page-error { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 40px 0; color: var(--negative); font-size: 13px; }
 .export-meta { display: grid; gap: 8px; margin: 16px 0; padding: 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg) 82%, transparent); font-size: 12px; }
 .export-meta > div { display: flex; gap: 10px; }

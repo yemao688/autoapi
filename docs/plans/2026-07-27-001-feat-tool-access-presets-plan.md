@@ -110,7 +110,7 @@ flowchart TB
 - F1. 应用预设
   - **Trigger:** 用户在工具卡片点击"应用"。
   - **Actors:** A1, A2, A3
-  - **Steps:** 前置校验（工具已安装；OMO 跨文件一致性）→ 漂移检查（有漂移走 F2）→ 备份 → 托管分区写入 → 原子落盘 → 记录哈希与生效预设 → 按工具提示生效方式（重启 / 热重载）。
+  - **Steps:** 前置校验（工具已安装；OMO Slim 跨文件一致性）→ 漂移检查（有漂移走 F2）→ 备份 → 托管分区写入 → 原子落盘 → 记录哈希与生效预设 → 按工具提示生效方式（重启 / 热重载）。
   - **Covers R3, R5, R6, R7, R10, R11, R12, R13, R14**
 - F2. 漂移处理
   - **Trigger:** 检测到文件哈希与上次应用记录不一致。
@@ -135,8 +135,8 @@ flowchart TB
   CardOC --> OC2[预设列表: 应用 / 编辑 / 导出 / 删除]
   CardOC --> OC3[OMO Slim 区块: 预设切换 + agent 模型/档位]
   CardOC --> OC4[漂移标记 + 备份恢复]
-  CardCX --> CX1[同上结构，无 OMO 区块]
-  CardCC --> CC1[同上结构，无 OMO 区块 + 热重载提示]
+  CardCX --> CX1[同上结构，无 OMO Slim 区块]
+  CardCC --> CC1[同上结构，无 OMO Slim 区块 + 热重载提示]
 ```
 
 ### Acceptance Examples
@@ -145,7 +145,7 @@ flowchart TB
 - AE2. **Covers R8, R9.** 应用时发现漂移 → 弹出覆盖/导入/取消三选；选取消则文件完全不动。
 - AE3. **Covers R13.** Claude Code 应用成功 → 提示"配置已热重载，运行中的会话即刻生效"。
 - AE4. **Covers R14.** 存在 `.jsonc` 变体 → 写回 `.jsonc` 且注释与格式风格保留。
-- AE5. **Covers R14.** OMO agent 的 model 不在 opencode provider 清单 → 应用被阻止并指出缺失的模型引用。
+- AE5. **Covers R14.** OMO Slim agent 的 model 不在 opencode provider 清单 → 应用被阻止并指出缺失的模型引用。
 - AE6. **Covers R10.** 写入中途失败（如权限错误）→ 文件回滚至写入前内容，错误对用户可见。
 - AE7. **Covers R2.** 预设密钥在 Autoapi 数据库中落盘为密文；仅在写入工具文件或导出时解密。
 

@@ -1747,6 +1747,11 @@ html[data-theme="dark"] .dropdown-item:focus-visible {
   overflow: auto;
 }
 
+/* Keep dialogs opened from another modal above their parent surface. */
+.modal-overlay-stacked {
+  z-index: 200;
+}
+
 .modal-card {
   background: var(--surface);
   border: 1px solid var(--border);

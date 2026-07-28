@@ -255,6 +255,43 @@ func (s *Service) ListToolProviders(tool string) ([]ToolProviderView, error) {
 	return views, nil
 }
 
+// RevealToolProviderKey returns a provider key only after an explicit user
+// request from the provider editor. The plaintext value is never logged or
+// included in a redacted provider view.
+func (s *Service) RevealToolProviderKey(tool, providerID string) (string, error) {
+	toolID := toolconfig.Tool(tool)
+	adapter, err := adapterFor(toolID)
+	if err != nil {
+		return "", err
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	raw, err := adapter.ReadManagedRaw(homeDir, providerID)
+	if err != nil && !errors.Is(err, toolconfig.ErrConfigNotFound) {
+		return "", err
+	}
+	if err == nil && raw.Present {
+		return raw.APIKey, nil
+	}
+
+	presets, err := s.store.ListToolPresets(string(toolID))
+	if err != nil {
+		return "", err
+	}
+	for _, preset := range presets {
+		if toolconfig.ProviderKey(preset) != providerID {
+			continue
+		}
+		if preset.Kind == toolconfig.PresetAutoapi || preset.APIKeyEnc == "" {
+			return "", nil
+		}
+		return s.decryptToolKey(preset.APIKeyEnc)
+	}
+	return "", nil
+}
+
 // EnableToolPreset writes a parked DB preset into the live tool config.
 func (s *Service) EnableToolPreset(id int64) (ToolApplyResult, error) {
 	preset, err := s.store.GetToolPreset(id)
@@ -508,59 +545,59 @@ func (s *Service) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	return toolconfig.ExportSnippet(plaintext, homeDir)
 }
 
-// OmoConfigView is the UI-facing projection of the OMO config plus the
+// OmoSlimConfigView is the UI-facing projection of the OMO Slim config plus the
 // closed-choice lists the editor needs. It is a single return value because
 // the Wails binding only supports at most one data value plus error.
-type OmoConfigView struct {
+type OmoSlimConfigView struct {
 	Path              string
 	ActivePreset      string
-	Agents            map[string]toolconfig.OmoAgent
-	CustomAgents      map[string]toolconfig.OmoCustomAgent
+	Agents            map[string]toolconfig.OmoSlimAgent
+	CustomAgents      map[string]toolconfig.OmoSlimCustomAgent
 	DisabledAgents    []string
 	DisabledSkills    []string
 	DisabledMcps      []string
 	KnownPresets      []string
 	ValidModels       []string
 	AvailableVariants []string
-	PresetAgents      map[string]map[string]toolconfig.OmoAgent
+	PresetAgents      map[string]map[string]toolconfig.OmoSlimAgent
 	KnownSkills       []string
 	KnownMcps         []string
 }
 
-func (s *Service) GetOmoConfig() (OmoConfigView, error) {
+func (s *Service) GetOmoSlimConfig() (OmoSlimConfigView, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return OmoConfigView{}, fmt.Errorf("service: resolve home dir: %w", err)
+		return OmoSlimConfigView{}, fmt.Errorf("service: resolve home dir: %w", err)
 	}
-	config, err := toolconfig.ReadOmoConfig(homeDir)
+	config, err := toolconfig.ReadOmoSlimConfig(homeDir)
 	if err != nil {
-		return OmoConfigView{}, err
+		return OmoSlimConfigView{}, err
 	}
 	validModels, err := toolconfig.ListProviderModels(homeDir)
 	if err != nil {
-		return OmoConfigView{}, err
+		return OmoSlimConfigView{}, err
 	}
-	knownPresets, err := toolconfig.ListOmoPresets(homeDir)
+	knownPresets, err := toolconfig.ListOmoSlimPresets(homeDir)
 	if err != nil {
-		return OmoConfigView{}, err
+		return OmoSlimConfigView{}, err
 	}
 	variants, err := toolconfig.ListProviderVariants(homeDir)
 	if err != nil {
-		return OmoConfigView{}, err
+		return OmoSlimConfigView{}, err
 	}
-	presetAgents, err := toolconfig.ListOmoPresetAgents(homeDir)
+	presetAgents, err := toolconfig.ListOmoSlimPresetAgents(homeDir)
 	if err != nil {
-		return OmoConfigView{}, err
+		return OmoSlimConfigView{}, err
 	}
 	knownSkills, err := toolconfig.ListKnownSkills(homeDir)
 	if err != nil {
-		return OmoConfigView{}, err
+		return OmoSlimConfigView{}, err
 	}
 	knownMcps, err := toolconfig.ListMcpNames(homeDir)
 	if err != nil {
-		return OmoConfigView{}, err
+		return OmoSlimConfigView{}, err
 	}
-	return OmoConfigView{
+	return OmoSlimConfigView{
 		Path:              config.Path,
 		ActivePreset:      config.ActivePreset,
 		Agents:            config.Agents,
@@ -577,51 +614,101 @@ func (s *Service) GetOmoConfig() (OmoConfigView, error) {
 	}, nil
 }
 
-// OmoPreview renders the result of an OMO change without writing anything, so
+// OmoSlimPreview renders the result of an OMO Slim change without writing anything, so
 // the UI can show the exact file content before the user confirms a write.
-type OmoPreview struct {
+type OmoSlimPreview struct {
 	Path   string
 	Before string
 	After  string
 }
 
-// PreviewToolOmoChange plans an OMO change and returns the resulting file
+// PreviewToolOmoSlimChange plans an OMO Slim change and returns the resulting file
 // content. Nothing is written and no drift state is touched.
-func (s *Service) PreviewToolOmoChange(ch toolconfig.OmoChange) (OmoPreview, error) {
+func (s *Service) PreviewToolOmoSlimChange(ch toolconfig.OmoSlimChange) (OmoSlimPreview, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return OmoPreview{}, fmt.Errorf("service: resolve home dir: %w", err)
+		return OmoSlimPreview{}, fmt.Errorf("service: resolve home dir: %w", err)
 	}
 	validModels, err := toolconfig.ListProviderModels(homeDir)
 	if err != nil {
-		return OmoPreview{}, err
+		return OmoSlimPreview{}, err
 	}
-	changeSet, err := toolconfig.PlanOmoChange(homeDir, ch, validModels)
+	changeSet, err := toolconfig.PlanOmoSlimChange(homeDir, ch, validModels)
 	if err != nil {
-		return OmoPreview{}, err
+		return OmoSlimPreview{}, err
 	}
 	if len(changeSet.Changes) == 0 {
-		return OmoPreview{}, fmt.Errorf("service: OMO plan produced no changes")
+		return OmoSlimPreview{}, fmt.Errorf("service: OMO Slim plan produced no changes")
 	}
 	change := changeSet.Changes[0]
 	before, _ := os.ReadFile(change.Path)
-	return OmoPreview{
+	return OmoSlimPreview{
 		Path:   change.Path,
 		Before: string(before),
 		After:  string(change.After),
 	}, nil
 }
 
+// GetOpencodeGlobalSettings reads the curated top-level opencode settings.
+func (s *Service) GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return toolconfig.OpencodeGlobalSettings{}, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	return toolconfig.ReadOpencodeGlobalSettings(homeDir)
+}
+
+// PreviewOpencodeGlobalChange renders a global opencode change without writing
+// anything, using the same before/after confirmation payload as OMO Slim.
+func (s *Service) PreviewOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings) (OmoSlimPreview, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return OmoSlimPreview{}, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	changeSet, err := toolconfig.PlanOpencodeGlobalChange(homeDir, settings)
+	if err != nil {
+		return OmoSlimPreview{}, err
+	}
+	if len(changeSet.Changes) == 0 {
+		return OmoSlimPreview{}, fmt.Errorf("service: opencode global plan produced no changes")
+	}
+	change := changeSet.Changes[0]
+	return OmoSlimPreview{
+		Path:   change.Path,
+		Before: string(change.Before),
+		After:  string(change.After),
+	}, nil
+}
+
+// ApplyOpencodeGlobalChange commits a confirmed global opencode change and
+// records it as an opencode config apply with no active provider preset.
+func (s *Service) ApplyOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings, allowDrift bool) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	changeSet, err := toolconfig.PlanOpencodeGlobalChange(homeDir, settings)
+	if err != nil {
+		return err
+	}
+	if len(changeSet.Changes) == 0 {
+		return fmt.Errorf("service: opencode global plan produced no changes")
+	}
+	configPath := changeSet.Changes[0].Path
+	_, err = s.commitToolChangeSet(toolconfig.ToolOpencode, changeSet, allowDrift, 0, configPath)
+	return err
+}
+
 // OpencodeLiveState is the on-disk snapshot shown on the opencode card: the
-// effective model pointer plus a compact OMO overview. It is read live on
+// effective model pointer plus a compact OMO Slim overview. It is read live on
 // every call and intentionally bypasses the DB-tracked state so drift
 // becomes a concrete comparison instead of an abstract badge.
 type OpencodeLiveState struct {
-	Model            string
-	OmoConfigured    bool
-	OmoActivePreset  string
-	OmoAgentCount    int
-	OmoDisabledCount int
+	Model                string
+	OmoSlimConfigured    bool
+	OmoSlimActivePreset  string
+	OmoSlimAgentCount    int
+	OmoSlimDisabledCount int
 }
 
 func (s *Service) GetOpencodeLiveState() (OpencodeLiveState, error) {
@@ -635,21 +722,21 @@ func (s *Service) GetOpencodeLiveState() (OpencodeLiveState, error) {
 		return OpencodeLiveState{}, err
 	}
 	state.Model = model
-	config, err := toolconfig.ReadOmoConfig(homeDir)
+	config, err := toolconfig.ReadOmoSlimConfig(homeDir)
 	if err != nil {
 		if errors.Is(err, toolconfig.ErrConfigNotFound) {
 			return state, nil
 		}
 		return OpencodeLiveState{}, err
 	}
-	state.OmoConfigured = true
-	state.OmoActivePreset = config.ActivePreset
-	state.OmoAgentCount = len(config.Agents)
-	state.OmoDisabledCount = len(config.DisabledAgents)
+	state.OmoSlimConfigured = true
+	state.OmoSlimActivePreset = config.ActivePreset
+	state.OmoSlimAgentCount = len(config.Agents)
+	state.OmoSlimDisabledCount = len(config.DisabledAgents)
 	return state, nil
 }
 
-func (s *Service) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error {
+func (s *Service) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift bool) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("service: resolve home dir: %w", err)
@@ -658,7 +745,7 @@ func (s *Service) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) e
 	if err != nil {
 		return err
 	}
-	changeSet, err := toolconfig.PlanOmoChange(homeDir, change, validModels)
+	changeSet, err := toolconfig.PlanOmoSlimChange(homeDir, change, validModels)
 	if err != nil {
 		return err
 	}
@@ -925,8 +1012,8 @@ func (s *Service) targetPathForResource(tool toolconfig.Tool, resource toolconfi
 			return "", fmt.Errorf("service: no path for resource %s", resource)
 		}
 		return path, nil
-	case toolconfig.ResOpencodeOMO, toolconfig.ResOmoConfig:
-		if path, ok := toolconfig.DetectOmoConfig(homeDir); ok {
+	case toolconfig.ResOpencodeOmoSlim, toolconfig.ResOmoSlimConfig:
+		if path, ok := toolconfig.DetectOmoSlimConfig(homeDir); ok {
 			return path, nil
 		}
 	case toolconfig.ResCodexAuth:
@@ -981,7 +1068,7 @@ func resourceBelongsToTool(tool toolconfig.Tool, resource toolconfig.Resource) b
 	if strings.HasPrefix(string(resource), prefix) && len(resource) > len(prefix) {
 		return true
 	}
-	return tool == toolconfig.ToolOpencode && resource == toolconfig.ResOmoConfig
+	return tool == toolconfig.ToolOpencode && resource == toolconfig.ResOmoSlimConfig
 }
 
 func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupPath string) error {

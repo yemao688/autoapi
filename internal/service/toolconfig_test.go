@@ -65,6 +65,10 @@ func directTestPreset() toolconfig.Preset {
 	}
 }
 
+func boolPtrTest(value bool) *bool {
+	return &value
+}
+
 func TestGetOpencodeLiveStateReadsDisk(t *testing.T) {
 	svc, _, homeDir := newToolConfigTestService(t)
 	writeToolConfigFixture(t, homeDir, `{"provider":{"acme-ai":{}},"model":"acme-ai/acme-model"}`)
@@ -73,24 +77,24 @@ func TestGetOpencodeLiveStateReadsDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Model != "acme-ai/acme-model" || state.OmoConfigured {
-		t.Fatalf("state without OMO: %+v", state)
+	if state.Model != "acme-ai/acme-model" || state.OmoSlimConfigured {
+		t.Fatalf("state without OMO Slim: %+v", state)
 	}
 
-	omoPath := filepath.Join(homeDir, ".config", "opencode", "oh-my-opencode-slim.jsonc")
-	if err := os.MkdirAll(filepath.Dir(omoPath), 0o755); err != nil {
+	omoSlimPath := filepath.Join(homeDir, ".config", "opencode", "oh-my-opencode-slim.jsonc")
+	if err := os.MkdirAll(filepath.Dir(omoSlimPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	omo := `{"preset":"balanced","presets":{"balanced":{"orchestrator":{"model":"acme-ai/acme-model","variant":"high"}}},"disabled_agents":["oracle"]}`
-	if err := os.WriteFile(omoPath, []byte(omo), 0o644); err != nil {
+	omoSlim := `{"preset":"balanced","presets":{"balanced":{"orchestrator":{"model":"acme-ai/acme-model","variant":"high"}}},"disabled_agents":["oracle"]}`
+	if err := os.WriteFile(omoSlimPath, []byte(omoSlim), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	state, err = svc.GetOpencodeLiveState()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.OmoConfigured || state.OmoActivePreset != "balanced" || state.OmoAgentCount != 1 || state.OmoDisabledCount != 1 {
-		t.Fatalf("state with OMO: %+v", state)
+	if !state.OmoSlimConfigured || state.OmoSlimActivePreset != "balanced" || state.OmoSlimAgentCount != 1 || state.OmoSlimDisabledCount != 1 {
+		t.Fatalf("state with OMO Slim: %+v", state)
 	}
 }
 
@@ -133,6 +137,69 @@ func TestListToolProvidersMirrorsDatabaseAndFile(t *testing.T) {
 	}
 	if views[3].Preset.ProviderID != "parked" || views[3].Enabled || !views[3].InDB {
 		t.Fatalf("parked view: %+v", views[3])
+	}
+}
+
+func TestRevealToolProviderKeyUsesFileThenDatabase(t *testing.T) {
+	svc, _, homeDir := newToolConfigTestService(t)
+	writeToolConfigFixture(t, homeDir, `{"provider":{"live":{"options":{"apiKey":"file-secret"}}}}`)
+	key, err := svc.RevealToolProviderKey("opencode", "live")
+	if err != nil || key != "file-secret" {
+		t.Fatalf("file key = %q, err=%v", key, err)
+	}
+
+	parked := directTestPreset()
+	parked.ProviderID = "parked-key"
+	parked.Name = "Parked Key"
+	if _, err := svc.CreateToolPreset(parked, "db-secret"); err != nil {
+		t.Fatal(err)
+	}
+	key, err = svc.RevealToolProviderKey("opencode", "parked-key")
+	if err != nil || key != "db-secret" {
+		t.Fatalf("database key = %q, err=%v", key, err)
+	}
+
+	autoapi := directTestPreset()
+	autoapi.Kind = toolconfig.PresetAutoapi
+	autoapi.ProviderID = "relay"
+	autoapi.Name = "Relay"
+	if _, err := svc.CreateToolPreset(autoapi, "relay-secret"); err != nil {
+		t.Fatal(err)
+	}
+	key, err = svc.RevealToolProviderKey("opencode", "relay")
+	if err != nil || key != "" {
+		t.Fatalf("autoapi key = %q, err=%v", key, err)
+	}
+}
+
+func TestOpencodeGlobalSettingsPreviewAndApply(t *testing.T) {
+	svc, _, homeDir := newToolConfigTestService(t)
+	path := writeToolConfigFixture(t, homeDir, `{
+  // keep this comment
+  "model": "old/model",
+  "other": true
+}`)
+	settings := toolconfig.OpencodeGlobalSettings{Model: "new/model", Theme: "system", Autoupdate: boolPtrTest(true)}
+	preview, err := svc.PreviewOpencodeGlobalChange(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Path != resolvedPath || !strings.Contains(preview.Before, "keep this comment") || !strings.Contains(preview.After, "new/model") {
+		t.Fatalf("preview = %+v", preview)
+	}
+	if err := svc.ApplyOpencodeGlobalChange(settings, true); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "new/model") || !strings.Contains(string(content), "keep this comment") || !strings.Contains(string(content), `"other": true`) {
+		t.Fatalf("applied global settings lost content: %s", content)
 	}
 }
 

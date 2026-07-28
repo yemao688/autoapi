@@ -9,7 +9,9 @@ import {context} from '../models';
 
 export function AddProviderModels(arg1:string,arg2:Array<string>):Promise<void>;
 
-export function ApplyOmoConfig(arg1:toolconfig.OmoChange,arg2:boolean):Promise<void>;
+export function ApplyOmoSlimConfig(arg1:toolconfig.OmoSlimChange,arg2:boolean):Promise<void>;
+
+export function ApplyOpencodeGlobalChange(arg1:toolconfig.OpencodeGlobalSettings,arg2:boolean):Promise<void>;
 
 export function CancelModelTest(arg1:string):Promise<boolean>;
 
@@ -65,7 +67,9 @@ export function GetModelRule(arg1:string):Promise<model.ModelRule>;
 
 export function GetModelRuleShadowComparisons():Promise<Array<model.ModelRuleShadowComparison>>;
 
-export function GetOmoConfig():Promise<service.OmoConfigView>;
+export function GetOmoSlimConfig():Promise<service.OmoSlimConfigView>;
+
+export function GetOpencodeGlobalSettings():Promise<toolconfig.OpencodeGlobalSettings>;
 
 export function GetOpencodeLiveState():Promise<service.OpencodeLiveState>;
 
@@ -127,7 +131,9 @@ export function OpenStorageFolder():Promise<void>;
 
 export function PingLogEvent():Promise<void>;
 
-export function PreviewToolOmoChange(arg1:toolconfig.OmoChange):Promise<service.OmoPreview>;
+export function PreviewOpencodeGlobalChange(arg1:toolconfig.OpencodeGlobalSettings):Promise<service.OmoSlimPreview>;
+
+export function PreviewToolOmoSlimChange(arg1:toolconfig.OmoSlimChange):Promise<service.OmoSlimPreview>;
 
 export function ProbeUpstreamMonitorModel(arg1:model.UpstreamMonitorSelection):Promise<model.UpstreamMonitorResult>;
 
@@ -154,6 +160,8 @@ export function ResetTargetBreakers():Promise<void>;
 export function RestartProxy():Promise<void>;
 
 export function RestoreToolBackup(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function RevealToolProviderKey(arg1:string,arg2:string):Promise<string>;
 
 export function SaveSettings(arg1:model.Settings):Promise<void>;
 

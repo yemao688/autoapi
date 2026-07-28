@@ -486,11 +486,11 @@ func parseJSONBytes(data []byte) (hujson.Value, error) {
 
 // ListProviderModels returns every "<providerID>/<model>" reference declared in
 // the opencode config's provider section, across all providers. It is used for
-// OMO cross-file validation (agent model references must exist somewhere in
+// OMO Slim cross-file validation (agent model references must exist somewhere in
 // opencode.json). A missing config yields an empty list, not an error; the
 // adapter's Plan path still fails closed on non-object shapes when applying.
 // ListMcpNames returns the sorted names of MCP servers declared under the
-// top-level "mcp" object of the opencode config, plus the MCP servers OMO
+// top-level "mcp" object of the opencode config, plus the MCP servers OMO Slim
 // bundles itself (websearch, context7, gh_grep). It powers closed-list
 // candidates for agent mcps arrays. A missing config yields the bundled set.
 func ListMcpNames(homeDir string) ([]string, error) {
@@ -608,7 +608,7 @@ func ReadModelPointer(homeDir string) (string, error) {
 
 // ListProviderVariants returns the sorted union of every variant key declared
 // under provider models in the opencode config (provider.*.models.*.variants).
-// It feeds the OMO agent variant dropdown. A missing config yields an empty
+// It feeds the OMO Slim agent variant dropdown. A missing config yields an empty
 // list, not an error; non-object shapes are skipped leniently here and still
 // fail closed on the adapter's Plan path.
 func ListProviderVariants(homeDir string) ([]string, error) {

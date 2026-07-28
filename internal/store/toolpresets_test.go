@@ -230,7 +230,7 @@ func TestDeleteToolPresetClearsActiveState(t *testing.T) {
 func TestToolFileStateUpsertAndList(t *testing.T) {
 	s := newTestStore(t)
 	cases := []toolconfig.ToolFileState{
-		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeOMO, Path: "/tmp/omo.json", AppliedFileHash: "hash-omo", AppliedAt: 20},
+		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeOmoSlim, Path: "/tmp/omo-slim.json", AppliedFileHash: "hash-omo-slim", AppliedAt: 20},
 		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeConfig, Path: "/tmp/opencode.json", AppliedFileHash: "hash-config", AppliedAt: 10},
 		{Tool: toolconfig.ToolClaude, Resource: toolconfig.ResClaudeSettings, Path: "/tmp/settings.json", AppliedFileHash: "hash-claude", AppliedAt: 30},
 	}
@@ -245,7 +245,7 @@ func TestToolFileStateUpsertAndList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetToolFileStates: %v", err)
 	}
-	if len(opencode) != 2 || opencode[0].Resource != toolconfig.ResOpencodeConfig || opencode[1].Resource != toolconfig.ResOpencodeOMO {
+	if len(opencode) != 2 || opencode[0].Resource != toolconfig.ResOpencodeConfig || opencode[1].Resource != toolconfig.ResOpencodeOmoSlim {
 		t.Fatalf("expected resource ordering, got %+v", opencode)
 	}
 
@@ -277,7 +277,7 @@ func TestSaveToolApplyState(t *testing.T) {
 		AppliedAt:      100,
 	}
 	files := []toolconfig.ToolFileState{
-		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeOMO, Path: "/tmp/omo.json", AppliedFileHash: "omo-1", AppliedAt: 100},
+		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeOmoSlim, Path: "/tmp/omo-slim.json", AppliedFileHash: "omo-slim-1", AppliedAt: 100},
 		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.Resource("opencode/extra"), Path: "/tmp/extra.json", AppliedFileHash: "extra-1", AppliedAt: 100},
 		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeConfig, Path: "/tmp/opencode.json", AppliedFileHash: "config-1", AppliedAt: 100},
 	}
@@ -308,7 +308,7 @@ func TestSaveToolApplyState(t *testing.T) {
 		AppliedAt:      200,
 	}
 	updatedFiles := []toolconfig.ToolFileState{
-		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeOMO, Path: "/tmp/omo-updated.json", AppliedFileHash: "omo-2", AppliedAt: 200},
+		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeOmoSlim, Path: "/tmp/omo-slim-updated.json", AppliedFileHash: "omo-slim-2", AppliedAt: 200},
 		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.Resource("opencode/extra"), Path: "/tmp/extra-updated.json", AppliedFileHash: "extra-2", AppliedAt: 200},
 		{Tool: toolconfig.ToolOpencode, Resource: toolconfig.ResOpencodeConfig, Path: "/tmp/opencode-updated.json", AppliedFileHash: "config-2", AppliedAt: 200},
 	}

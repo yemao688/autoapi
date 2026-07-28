@@ -91,11 +91,11 @@ func TestDetectMissingAndPresent(t *testing.T) {
 	writeFile(t, wantClaude, `{}`, 0o644)
 	writeFile(t, wantCodex, ``, 0o644)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"), `{}`, 0o600)
-	omoJSON := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.json")
-	omoJSONC := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.jsonc")
-	writeFile(t, omoJSON, `{}`, 0o644)
-	writeFile(t, omoJSONC, `{}`, 0o644)
-	if status := openCode.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantOpenCode || status.ExtraPaths["omo_config"] != omoJSONC {
+	omoSlimJSON := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.json")
+	omoSlimJSONC := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.jsonc")
+	writeFile(t, omoSlimJSON, `{}`, 0o644)
+	writeFile(t, omoSlimJSONC, `{}`, 0o644)
+	if status := openCode.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantOpenCode || status.ExtraPaths["omo_slim_config"] != omoSlimJSONC {
 		t.Fatalf("present opencode status: %+v", status)
 	}
 	if status := claude.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantClaude {
@@ -516,17 +516,17 @@ func TestReadManagedRawIsPlaintextButManagedIsMasked(t *testing.T) {
 	}
 }
 
-func TestListOmoPresetsListsSortedNames(t *testing.T) {
-	home, _ := writeOmoFixture(t)
-	presets, err := ListOmoPresets(home)
+func TestListOmoSlimPresetsListsSortedNames(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	presets, err := ListOmoSlimPresets(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(presets) != 2 || presets[0] != "balanced" || presets[1] != "fast" {
-		t.Fatalf("ListOmoPresets = %#v", presets)
+		t.Fatalf("ListOmoSlimPresets = %#v", presets)
 	}
-	if got, err := ListOmoPresets(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing OMO config: got %#v, err=%v; want nil, nil", got, err)
+	if got, err := ListOmoSlimPresets(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing OMO Slim config: got %#v, err=%v; want nil, nil", got, err)
 	}
 }
 
@@ -611,16 +611,16 @@ func TestReadModelPointerReadsTopLevelModel(t *testing.T) {
 	}
 }
 
-func TestListOmoPresetAgentsProjectsEveryPreset(t *testing.T) {
-	home, _ := writeOmoFixture(t)
-	projection, err := ListOmoPresetAgents(home)
+func TestListOmoSlimPresetAgentsProjectsEveryPreset(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	projection, err := ListOmoSlimPresetAgents(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(projection) != 2 {
-		t.Fatalf("ListOmoPresetAgents = %#v", projection)
+		t.Fatalf("ListOmoSlimPresetAgents = %#v", projection)
 	}
-	if got := projection["balanced"]["orchestrator"]; !reflect.DeepEqual(got, OmoAgent{
+	if got := projection["balanced"]["orchestrator"]; !reflect.DeepEqual(got, OmoSlimAgent{
 		Model:       "autoapi-compatible/old-model",
 		Variant:     "slow",
 		DisplayName: "chief",
@@ -629,14 +629,14 @@ func TestListOmoPresetAgentsProjectsEveryPreset(t *testing.T) {
 	}) {
 		t.Fatalf("balanced orchestrator = %+v", got)
 	}
-	if got := projection["fast"]["oracle"]; !reflect.DeepEqual(got, OmoAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
+	if got := projection["fast"]["oracle"]; !reflect.DeepEqual(got, OmoSlimAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
 		t.Fatalf("fast oracle = %+v", got)
 	}
 	if _, ok := projection["balanced"]["custom"]; ok {
 		t.Fatal("custom agents leaked into preset projection")
 	}
-	if got, err := ListOmoPresetAgents(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing OMO config: got %#v, err=%v; want nil, nil", got, err)
+	if got, err := ListOmoSlimPresetAgents(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing OMO Slim config: got %#v, err=%v; want nil, nil", got, err)
 	}
 }
 

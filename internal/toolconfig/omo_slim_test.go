@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const omoFixture = `{
+const omoSlimFixture = `{
   // keep me
   "preset": "balanced",
   "presets": {
@@ -55,36 +55,36 @@ const omoFixture = `{
 }
 `
 
-func writeOmoFixture(t *testing.T) (string, string) {
+func writeOmoSlimFixture(t *testing.T) (string, string) {
 	t.Helper()
 	home := t.TempDir()
 	path := filepath.Join(home, ".config", "opencode", "oh-my-opencode-slim.jsonc")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(omoFixture), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(omoSlimFixture), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return home, path
 }
 
-func TestDetectOmoConfigPrefersJSONC(t *testing.T) {
-	home, jsonc := writeOmoFixture(t)
+func TestDetectOmoSlimConfigPrefersJSONC(t *testing.T) {
+	home, jsonc := writeOmoSlimFixture(t)
 	json := filepath.Join(filepath.Dir(jsonc), "oh-my-opencode-slim.json")
 	if err := os.WriteFile(json, []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := DetectOmoConfig(home); !ok || got != jsonc {
-		t.Fatalf("DetectOmoConfig = %q, %v; want %q, true", got, ok, jsonc)
+	if got, ok := DetectOmoSlimConfig(home); !ok || got != jsonc {
+		t.Fatalf("DetectOmoSlimConfig = %q, %v; want %q, true", got, ok, jsonc)
 	}
-	if _, ok := DetectOmoConfig(t.TempDir()); ok {
-		t.Fatal("missing OMO config was detected")
+	if _, ok := DetectOmoSlimConfig(t.TempDir()); ok {
+		t.Fatal("missing OMO Slim config was detected")
 	}
 }
 
-func TestReadOmoConfigRoundTripProjection(t *testing.T) {
-	home, path := writeOmoFixture(t)
-	config, err := ReadOmoConfig(home)
+func TestReadOmoSlimConfigRoundTripProjection(t *testing.T) {
+	home, path := writeOmoSlimFixture(t)
+	config, err := ReadOmoSlimConfig(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestReadOmoConfigRoundTripProjection(t *testing.T) {
 	if config.Path != resolvedPath || config.ActivePreset != "balanced" {
 		t.Fatalf("unexpected config identity: %+v", config)
 	}
-	wantOrchestrator := OmoAgent{
+	wantOrchestrator := OmoSlimAgent{
 		Model:       "autoapi-compatible/old-model",
 		Variant:     "slow",
 		DisplayName: "chief",
@@ -105,7 +105,7 @@ func TestReadOmoConfigRoundTripProjection(t *testing.T) {
 	if !reflect.DeepEqual(config.Agents["orchestrator"], wantOrchestrator) {
 		t.Fatalf("built-in agent not read: %+v", config.Agents["orchestrator"])
 	}
-	wantCustom := OmoAgent{
+	wantCustom := OmoSlimAgent{
 		Model:       "autoapi-compatible/custom-model",
 		Variant:     "custom",
 		DisplayName: "helper",
@@ -115,7 +115,7 @@ func TestReadOmoConfigRoundTripProjection(t *testing.T) {
 	if !reflect.DeepEqual(config.Agents["custom"], wantCustom) {
 		t.Fatalf("custom agent not read: %+v", config.Agents["custom"])
 	}
-	wantCustomFull := OmoCustomAgent{
+	wantCustomFull := OmoSlimCustomAgent{
 		Model:              "autoapi-compatible/custom-model",
 		Variant:            "custom",
 		DisplayName:        "helper",
@@ -138,8 +138,8 @@ func TestReadOmoConfigRoundTripProjection(t *testing.T) {
 	}
 }
 
-func TestPlanOmoChangePreservesJSONCAndChecksOpencode(t *testing.T) {
-	home, omoPath := writeOmoFixture(t)
+func TestPlanOmoSlimChangePreservesJSONCAndChecksOpencode(t *testing.T) {
+	home, omoSlimPath := writeOmoSlimFixture(t)
 	openCodePath := DefaultConfigPath(ToolOpencode, home)
 	if err := os.MkdirAll(filepath.Dir(openCodePath), 0o755); err != nil {
 		t.Fatal(err)
@@ -150,15 +150,15 @@ func TestPlanOmoChangePreservesJSONCAndChecksOpencode(t *testing.T) {
 }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(omoPath)
+	before, err := os.ReadFile(omoSlimPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	changeSet, err := PlanOmoChange(home, OmoChange{
-		Agents: map[string]OmoAgent{
+	changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{
+		Agents: map[string]OmoSlimAgent{
 			"orchestrator": {Model: "autoapi-compatible/kimi-k3", Variant: "balanced"},
 		},
-		CustomAgents: map[string]OmoCustomAgent{
+		CustomAgents: map[string]OmoSlimCustomAgent{
 			"custom": {
 				Model:              "autoapi-compatible/kimi-k3",
 				Variant:            "fast",
@@ -174,27 +174,27 @@ func TestPlanOmoChangePreservesJSONCAndChecksOpencode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(omoPath); string(got) != string(before) {
-		t.Fatal("PlanOmoChange modified the live file")
+	if got, _ := os.ReadFile(omoSlimPath); string(got) != string(before) {
+		t.Fatal("PlanOmoSlimChange modified the live file")
 	}
-	if len(changeSet.Changes) != 1 || changeSet.Changes[0].Resource != ResOmoConfig {
+	if len(changeSet.Changes) != 1 || changeSet.Changes[0].Resource != ResOmoSlimConfig {
 		t.Fatalf("unexpected changes: %+v", changeSet.Changes)
 	}
 	if len(changeSet.Checks) != 1 || changeSet.Checks[0].Resource != ResOpencodeConfig || changeSet.Checks[0].Path != openCodePath {
 		t.Fatalf("unexpected checks: %+v", changeSet.Checks)
 	}
 	if !strings.Contains(string(changeSet.Changes[0].After), "// keep me") || !strings.Contains(string(changeSet.Changes[0].After), "keep prompt") || !strings.Contains(string(changeSet.Changes[0].After), "keep-skill") {
-		t.Fatal("unmanaged OMO content was not retained in rendered output")
+		t.Fatal("unmanaged OMO Slim content was not retained in rendered output")
 	}
 
 	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
 		t.Fatal(err)
 	}
-	config, err := ReadOmoConfig(home)
+	config, err := ReadOmoSlimConfig(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantOrchestrator := OmoAgent{
+	wantOrchestrator := OmoSlimAgent{
 		Model:   "autoapi-compatible/kimi-k3",
 		Variant: "balanced",
 		// DisplayName was not included in the change payload: empty string
@@ -218,7 +218,7 @@ func TestPlanOmoChangePreservesJSONCAndChecksOpencode(t *testing.T) {
 	if len(config.DisabledAgents) != 2 || config.DisabledAgents[1] != "council" {
 		t.Fatalf("disabled agent patch not committed: %#v", config.DisabledAgents)
 	}
-	committed, err := os.ReadFile(omoPath)
+	committed, err := os.ReadFile(omoSlimPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,11 +227,11 @@ func TestPlanOmoChangePreservesJSONCAndChecksOpencode(t *testing.T) {
 	}
 }
 
-func TestPlanOmoChangeSwitchesPreset(t *testing.T) {
-	home, _ := writeOmoFixture(t)
-	changeSet, err := PlanOmoChange(home, OmoChange{
+func TestPlanOmoSlimChangeSwitchesPreset(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{
 		ActivePreset: stringPtr("fast"),
-		Agents: map[string]OmoAgent{
+		Agents: map[string]OmoSlimAgent{
 			"oracle": {Model: "autoapi-compatible/kimi-k3", Variant: "fast"},
 		},
 	}, []string{"autoapi-compatible/kimi-k3"})
@@ -241,7 +241,7 @@ func TestPlanOmoChangeSwitchesPreset(t *testing.T) {
 	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
 		t.Fatal(err)
 	}
-	config, err := ReadOmoConfig(home)
+	config, err := ReadOmoSlimConfig(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,9 +250,147 @@ func TestPlanOmoChangeSwitchesPreset(t *testing.T) {
 	}
 }
 
-func TestPlanOmoChangeReportsAllMissingModels(t *testing.T) {
-	home, _ := writeOmoFixture(t)
-	_, err := PlanOmoChange(home, OmoChange{Agents: map[string]OmoAgent{
+func TestPlanOmoSlimPresetUpsertNewAndDuplicate(t *testing.T) {
+	t.Run("new empty preset", func(t *testing.T) {
+		home, path := writeOmoSlimFixture(t)
+		changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{PresetOps: []OmoSlimPresetOp{{
+			Operation: OmoSlimPresetUpsert,
+			Name:      "empty",
+		}}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+			t.Fatal(err)
+		}
+		presets, err := ListOmoSlimPresets(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(presets, []string{"balanced", "empty", "fast"}) {
+			t.Fatalf("presets = %#v", presets)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), "// keep me") {
+			t.Fatal("unmanaged comment was not preserved")
+		}
+	})
+
+	t.Run("duplicate agents", func(t *testing.T) {
+		home, _ := writeOmoSlimFixture(t)
+		agents := map[string]OmoSlimAgent{
+			"orchestrator": {Model: "autoapi-compatible/fast-model", Variant: "quick"},
+			"oracle":       {Model: "autoapi-compatible/oracle-fast", Variant: "quick"},
+		}
+		changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{PresetOps: []OmoSlimPresetOp{{
+			Operation: OmoSlimPresetUpsert,
+			Name:      "copy",
+			Agents:    agents,
+		}}}, []string{"autoapi-compatible/fast-model", "autoapi-compatible/oracle-fast"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+			t.Fatal(err)
+		}
+		presetAgents, err := ListOmoSlimPresetAgents(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(presetAgents["copy"], agents) {
+			t.Fatalf("copied agents = %#v, want %#v", presetAgents["copy"], agents)
+		}
+	})
+}
+
+func TestPlanOmoSlimPresetRenameUpdatesActiveAndRejectsConflicts(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{PresetOps: []OmoSlimPresetOp{{
+		Operation: OmoSlimPresetRename,
+		Name:      "balanced",
+		NewName:   "renamed",
+	}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ReadOmoSlimConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ActivePreset != "renamed" || config.Agents["orchestrator"].Variant != "slow" {
+		t.Fatalf("renamed active preset = %+v", config)
+	}
+	if _, err := PlanOmoSlimChange(home, OmoSlimChange{PresetOps: []OmoSlimPresetOp{{
+		Operation: OmoSlimPresetRename,
+		Name:      "renamed",
+		NewName:   "fast",
+	}}}, nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("rename conflict error = %v", err)
+	}
+}
+
+func TestPlanOmoSlimPresetDeleteClearsActiveAndRejectsInvalidNames(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{PresetOps: []OmoSlimPresetOp{{
+		Operation: OmoSlimPresetDelete,
+		Name:      "balanced",
+	}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ReadOmoSlimConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ActivePreset != "" || config.Agents == nil {
+		t.Fatalf("active preset was not cleared: %+v", config)
+	}
+
+	cases := []OmoSlimPresetOp{
+		{Operation: OmoSlimPresetDelete, Name: "missing"},
+		{Operation: OmoSlimPresetRename, Name: "missing", NewName: "new"},
+		{Operation: OmoSlimPresetUpsert, Name: "   "},
+		{Operation: OmoSlimPresetUpsert, Name: "bad\nname"},
+	}
+	for _, op := range cases {
+		freshHome, _ := writeOmoSlimFixture(t)
+		if _, err := PlanOmoSlimChange(freshHome, OmoSlimChange{PresetOps: []OmoSlimPresetOp{op}}, nil); err == nil {
+			t.Fatalf("operation %+v unexpectedly succeeded", op)
+		}
+	}
+}
+
+func TestPlanOmoSlimPresetRejectsDuplicateJSONKeys(t *testing.T) {
+	home, path := writeOmoSlimFixture(t)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(content), `"fast": {`, `"fast": {}, "fast": {`, 1)
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = PlanOmoSlimChange(home, OmoSlimChange{PresetOps: []OmoSlimPresetOp{{
+		Operation: OmoSlimPresetUpsert,
+		Name:      "new",
+	}}}, nil)
+	if err == nil || !errors.Is(err, ErrUnsafeShape) {
+		t.Fatalf("duplicate key error = %v", err)
+	}
+}
+
+func TestPlanOmoSlimChangeReportsAllMissingModels(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	_, err := PlanOmoSlimChange(home, OmoSlimChange{Agents: map[string]OmoSlimAgent{
 		"oracle": {Model: "missing-oracle"},
 		"fixer":  {Model: "missing-fixer"},
 	}}, []string{"autoapi-compatible/kimi-k3"})
@@ -266,10 +404,10 @@ func TestPlanOmoChangeReportsAllMissingModels(t *testing.T) {
 	}
 }
 
-func TestPlanOmoChangeWritesAgentArraysAndClearsLeaves(t *testing.T) {
-	home, omoPath := writeOmoFixture(t)
-	changeSet, err := PlanOmoChange(home, OmoChange{
-		Agents: map[string]OmoAgent{
+func TestPlanOmoSlimChangeWritesAgentArraysAndClearsLeaves(t *testing.T) {
+	home, omoSlimPath := writeOmoSlimFixture(t)
+	changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{
+		Agents: map[string]OmoSlimAgent{
 			"orchestrator": {
 				Model:       "autoapi-compatible/kimi-k3",
 				Variant:     "", // clear the variant leaf
@@ -285,11 +423,11 @@ func TestPlanOmoChangeWritesAgentArraysAndClearsLeaves(t *testing.T) {
 	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
 		t.Fatal(err)
 	}
-	config, err := ReadOmoConfig(home)
+	config, err := ReadOmoSlimConfig(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := OmoAgent{
+	want := OmoSlimAgent{
 		Model:  "autoapi-compatible/kimi-k3",
 		Skills: []string{"*", "!codemap"},
 		Mcps:   []string{},
@@ -297,7 +435,7 @@ func TestPlanOmoChangeWritesAgentArraysAndClearsLeaves(t *testing.T) {
 	if !reflect.DeepEqual(config.Agents["orchestrator"], want) {
 		t.Fatalf("agent leaves not written as expected: %+v", config.Agents["orchestrator"])
 	}
-	committed, err := os.ReadFile(omoPath)
+	committed, err := os.ReadFile(omoSlimPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,19 +447,19 @@ func TestPlanOmoChangeWritesAgentArraysAndClearsLeaves(t *testing.T) {
 	}
 }
 
-func TestPlanOmoChangeCustomAgentsReplaceDropsStaleAndPreservesBuiltIn(t *testing.T) {
-	home, omoPath := writeOmoFixture(t)
+func TestPlanOmoSlimChangeCustomAgentsReplaceDropsStaleAndPreservesBuiltIn(t *testing.T) {
+	home, omoSlimPath := writeOmoSlimFixture(t)
 	// Add a built-in override under agents; the replace must preserve it.
-	raw, err := os.ReadFile(omoPath)
+	raw, err := os.ReadFile(omoSlimPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	updated := strings.Replace(string(raw), `"agents": {`, "\"agents\": {\n    \"oracle\": {\"displayName\": \"advisor\"},", 1)
-	if err := os.WriteFile(omoPath, []byte(updated), 0o644); err != nil {
+	if err := os.WriteFile(omoSlimPath, []byte(updated), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	changeSet, err := PlanOmoChange(home, OmoChange{
-		CustomAgents: map[string]OmoCustomAgent{
+	changeSet, err := PlanOmoSlimChange(home, OmoSlimChange{
+		CustomAgents: map[string]OmoSlimCustomAgent{
 			"database": {
 				Model:              "autoapi-compatible/kimi-k3",
 				DisplayName:        "db",
@@ -336,7 +474,7 @@ func TestPlanOmoChangeCustomAgentsReplaceDropsStaleAndPreservesBuiltIn(t *testin
 	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
 		t.Fatal(err)
 	}
-	config, err := ReadOmoConfig(home)
+	config, err := ReadOmoSlimConfig(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +484,7 @@ func TestPlanOmoChangeCustomAgentsReplaceDropsStaleAndPreservesBuiltIn(t *testin
 	if got := config.CustomAgents["database"]; got.Model != "autoapi-compatible/kimi-k3" || got.DisplayName != "db" || got.Prompt == "" {
 		t.Fatalf("new custom agent not written: %+v", got)
 	}
-	committed, err := os.ReadFile(omoPath)
+	committed, err := os.ReadFile(omoSlimPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,31 +493,31 @@ func TestPlanOmoChangeCustomAgentsReplaceDropsStaleAndPreservesBuiltIn(t *testin
 	}
 }
 
-func TestValidateOmoCustomAgentsRules(t *testing.T) {
+func TestValidateOmoSlimCustomAgentsRules(t *testing.T) {
 	valid := []string{"autoapi-compatible/kimi-k3"}
 	cases := []struct {
 		name   string
-		agents map[string]OmoCustomAgent
+		agents map[string]OmoSlimCustomAgent
 		want   string
 	}{
 		{
 			name:   "built-in name rejected",
-			agents: map[string]OmoCustomAgent{"oracle": {Model: "autoapi-compatible/kimi-k3"}},
+			agents: map[string]OmoSlimCustomAgent{"oracle": {Model: "autoapi-compatible/kimi-k3"}},
 			want:   "built-in",
 		},
 		{
 			name:   "unknown model rejected",
-			agents: map[string]OmoCustomAgent{"custom": {Model: "nope"}},
+			agents: map[string]OmoSlimCustomAgent{"custom": {Model: "nope"}},
 			want:   "custom=nope",
 		},
 		{
 			name:   "display name collides with built-in",
-			agents: map[string]OmoCustomAgent{"custom": {DisplayName: "oracle"}},
+			agents: map[string]OmoSlimCustomAgent{"custom": {DisplayName: "oracle"}},
 			want:   "collides with a built-in",
 		},
 		{
 			name: "display name duplicated",
-			agents: map[string]OmoCustomAgent{
+			agents: map[string]OmoSlimCustomAgent{
 				"a": {DisplayName: "helper"},
 				"b": {DisplayName: "helper"},
 			},
@@ -387,14 +525,14 @@ func TestValidateOmoCustomAgentsRules(t *testing.T) {
 		},
 		{
 			name:   "orchestratorPrompt must self-mention",
-			agents: map[string]OmoCustomAgent{"custom": {OrchestratorPrompt: "do things"}},
+			agents: map[string]OmoSlimCustomAgent{"custom": {OrchestratorPrompt: "do things"}},
 			want:   "must start with @custom",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			home, _ := writeOmoFixture(t)
-			_, err := PlanOmoChange(home, OmoChange{CustomAgents: tc.agents}, valid)
+			home, _ := writeOmoSlimFixture(t)
+			_, err := PlanOmoSlimChange(home, OmoSlimChange{CustomAgents: tc.agents}, valid)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want substring %q", err, tc.want)
 			}
