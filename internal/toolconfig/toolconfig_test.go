@@ -72,7 +72,7 @@ func TestDetectMissingAndPresent(t *testing.T) {
 	claude := ClaudeAdapter{}
 	codex := CodexAdapter{}
 
-	wantOpenCode := filepath.Join(home, ".config", "opencode", "opencode.json")
+	wantOpenCode := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
 	wantClaude := filepath.Join(home, ".claude", "settings.json")
 	wantCodex := filepath.Join(home, ".codex", "config.toml")
 	if status := openCode.Detect(home); status.ConfigPath != wantOpenCode || status.ConfigExists || status.Installed {
@@ -85,7 +85,8 @@ func TestDetectMissingAndPresent(t *testing.T) {
 		t.Fatalf("missing Codex status: %+v", status)
 	}
 
-	writeFile(t, wantOpenCode, `{}`, 0o644)
+	writeFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`, 0o644)
+	wantOpenCode = filepath.Join(home, ".config", "opencode", "opencode.json")
 	writeFile(t, wantClaude, `{}`, 0o644)
 	writeFile(t, wantCodex, ``, 0o644)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"), `{}`, 0o600)
@@ -101,6 +102,59 @@ func TestDetectMissingAndPresent(t *testing.T) {
 	}
 	if status := codex.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantCodex || status.ExtraPaths["auth_json"] != filepath.Join(home, ".codex", "auth.json") {
 		t.Fatalf("present Codex status: %+v", status)
+	}
+}
+
+func TestResolveConfigPathOpenCodePrefersJSONC(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "opencode")
+	jsoncPath := filepath.Join(dir, "opencode.jsonc")
+	jsonPath := filepath.Join(dir, "opencode.json")
+
+	// Neither exists: the preferred creation target is JSONC.
+	if path, found := ResolveConfigPath(ToolOpencode, home); found || path != jsoncPath {
+		t.Fatalf("missing both: path=%q found=%v", path, found)
+	}
+	if status := (OpenCodeAdapter{}).Detect(home); status.ConfigPath != jsoncPath || status.ConfigExists {
+		t.Fatalf("missing both detect: %+v", status)
+	}
+
+	// Only JSON: fall back to it.
+	jsonContent := `{"provider": {"legacy": {}}}`
+	writeFile(t, jsonPath, jsonContent, 0o644)
+	if path, found := ResolveConfigPath(ToolOpencode, home); !found || path != jsonPath {
+		t.Fatalf("json only: path=%q found=%v", path, found)
+	}
+
+	// Both: JSONC wins for detect, reads, and the plan/commit write target,
+	// while opencode.json is left byte-identical.
+	writeFile(t, jsoncPath, "{\n  // jsonc comment\n  \"provider\": {}\n}", 0o644)
+	if path, found := ResolveConfigPath(ToolOpencode, home); !found || path != jsoncPath {
+		t.Fatalf("both: path=%q found=%v", path, found)
+	}
+	if status := (OpenCodeAdapter{}).Detect(home); status.ConfigPath != jsoncPath || !status.ConfigExists {
+		t.Fatalf("both detect: %+v", status)
+	}
+	changeSet, err := (OpenCodeAdapter{}).Plan(testPreset(""), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsoncResolved, err := filepath.EvalSymlinks(jsoncPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changeSet.Changes[0].Path != jsoncResolved {
+		t.Fatalf("plan path = %q, want %q", changeSet.Changes[0].Path, jsoncResolved)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	jsoncAfter := readFile(t, jsoncPath)
+	if !strings.Contains(string(jsoncAfter), "jsonc comment") || !strings.Contains(string(jsoncAfter), "acme-model") {
+		t.Fatalf("jsonc lost its comment or the managed write is missing: %s", jsoncAfter)
+	}
+	if after := readFile(t, jsonPath); string(after) != jsonContent {
+		t.Fatalf("opencode.json was modified while opencode.jsonc exists: %s", after)
 	}
 }
 
@@ -353,7 +407,7 @@ func TestSymlinkPlanTargetsResolvedFile(t *testing.T) {
 func TestExportSnippets(t *testing.T) {
 	preset := testPreset("")
 	for _, adapter := range []Adapter{OpenCodeAdapter{}, ClaudeAdapter{}, CodexAdapter{}} {
-		snippet, err := adapter.ExportSnippet(preset)
+		snippet, err := adapter.ExportSnippet(preset, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -364,7 +418,7 @@ func TestExportSnippets(t *testing.T) {
 			t.Fatalf("%s snippet omitted target metadata: %+v", adapter.Tool(), snippet)
 		}
 	}
-	codexSnippet, err := (CodexAdapter{}).ExportSnippet(preset)
+	codexSnippet, err := (CodexAdapter{}).ExportSnippet(preset, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +750,7 @@ func TestParentDirectorySymlinkCommitTargetsRealDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(realDirResolved, "opencode.json")
+	wantPath := filepath.Join(realDirResolved, "opencode.jsonc")
 	if changeSet.Changes[0].Path != wantPath {
 		t.Fatalf("resolved parent path = %q, want %q", changeSet.Changes[0].Path, wantPath)
 	}
