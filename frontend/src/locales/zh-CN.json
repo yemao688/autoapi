@@ -685,13 +685,20 @@
     },
     "import": {
       "title": "导入 {tool} 配置",
-      "subtitle": "读取该工具当前的 provider 配置，创建为新的直连预设。",
-      "providerID": "Provider 标识",
-      "providerPlaceholder": "例如 openai",
-      "name": "预设名称",
+      "subtitle": "扫描当前配置中的供应商条目，批量创建直连预设。",
+      "loading": "正在扫描工具配置…",
+      "empty": "该工具配置中没有发现可导入的供应商条目",
+      "hasKey": "含密钥",
+      "noKey": "无密钥",
+      "models": "{count} 个模型",
+      "alreadyImported": "已导入",
+      "nameLabel": "预设名称",
       "namePlaceholder": "例如 当前工作配置",
+      "nameRequired": "请为 {provider} 填写预设名称",
+      "selectedCount": "已选择 {count} 项",
+      "partialFailure": "批量导入完成，但有 {count} 项失败。首个失败：{provider}：{error}",
       "suggestedName": "{tool} 漂移回填",
-      "confirm": "导入"
+      "confirm": "导入（{count}）"
     },
     "export": {
       "title": "导出配置片段",

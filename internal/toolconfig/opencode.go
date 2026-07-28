@@ -445,6 +445,34 @@ func ListProviderModels(homeDir string) ([]string, error) {
 	return result, nil
 }
 
+// ListOpenCodeProviderIDs returns the sorted provider entry keys declared in
+// the opencode config's provider section. A missing config yields an empty
+// list, not an error; a non-object provider section fails closed.
+func ListOpenCodeProviderIDs(homeDir string) ([]string, error) {
+	doc, err := readJSONDocument(DefaultConfigPath(ToolOpencode, homeDir))
+	if err != nil {
+		return nil, err
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, err
+	}
+	providers := objectMemberValue(root, "provider")
+	if providers == nil {
+		return nil, nil
+	}
+	providersObj, ok := providers.Value.(*hujson.Object)
+	if !ok {
+		return nil, fmt.Errorf("managed JSON key %q is not an object: %w", "provider", ErrUnsafeShape)
+	}
+	ids := make([]string, 0, len(providersObj.Members))
+	for _, pm := range providersObj.Members {
+		ids = append(ids, memberName(pm))
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
 // ReadModelPointer returns the current top-level model pointer
 // (providerID/model) from the opencode config, or "" when unset. A missing
 // config yields "", nil — the live-state read is tolerant while Plan stays

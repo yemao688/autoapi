@@ -170,6 +170,10 @@ export const api = {
     ensureWails()
     return wails.ImportToolPreset(tool, providerID, name) as Promise<toolconfig.Preset>
   },
+  listImportCandidates: (tool: string): Promise<service.ImportCandidate[]> => {
+    ensureWails()
+    return wails.ListImportCandidates(tool) as Promise<service.ImportCandidate[]>
+  },
   exportToolSnippet: (id: number): Promise<toolconfig.Snippet> => {
     ensureWails()
     return wails.ExportToolSnippet(id) as Promise<toolconfig.Snippet>

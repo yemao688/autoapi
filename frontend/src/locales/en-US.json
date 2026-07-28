@@ -685,13 +685,20 @@
     },
     "import": {
       "title": "Import {tool} config",
-      "subtitle": "Read the tool’s managed config section into a new direct preset.",
-      "providerID": "Provider ID",
-      "providerPlaceholder": "e.g. openai",
-      "name": "Preset name",
+      "subtitle": "Scan provider entries in the current config and create direct presets in a batch.",
+      "loading": "Scanning tool config…",
+      "empty": "No importable provider entries were found in this tool config",
+      "hasKey": "Key present",
+      "noKey": "No key",
+      "models": "{count} models",
+      "alreadyImported": "Already imported",
+      "nameLabel": "Preset name",
       "namePlaceholder": "e.g. Current work config",
+      "nameRequired": "Enter a preset name for {provider}",
+      "selectedCount": "{count} selected",
+      "partialFailure": "Batch import finished with {count} failure(s). First failure: {provider}: {error}",
       "suggestedName": "{tool} drift backfill",
-      "confirm": "Import"
+      "confirm": "Import ({count})"
     },
     "export": {
       "title": "Export config snippet",

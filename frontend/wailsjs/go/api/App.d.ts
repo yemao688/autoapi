@@ -101,6 +101,8 @@ export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
 export function ListEndpoints():Promise<Array<model.Endpoint>>;
 
+export function ListImportCandidates(arg1:string):Promise<Array<service.ImportCandidate>>;
+
 export function ListModelCapabilities(arg1:string,arg2:string):Promise<Array<model.ModelCapability>>;
 
 export function ListModelRules():Promise<Array<model.ModelRule>>;

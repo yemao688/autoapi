@@ -190,6 +190,10 @@ export function ListEndpoints() {
   return window['go']['api']['App']['ListEndpoints']();
 }
 
+export function ListImportCandidates(arg1) {
+  return window['go']['api']['App']['ListImportCandidates'](arg1);
+}
+
 export function ListModelCapabilities(arg1, arg2) {
   return window['go']['api']['App']['ListModelCapabilities'](arg1, arg2);
 }
