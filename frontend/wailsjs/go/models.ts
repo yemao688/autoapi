@@ -1701,6 +1701,28 @@ export namespace service {
 	        this.Missing = source["Missing"];
 	    }
 	}
+	export class ImportCandidate {
+	    ProviderID: string;
+	    BaseURL: string;
+	    HasKey: boolean;
+	    Models: string[];
+	    AlreadyImported: boolean;
+	    SuggestedName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ProviderID = source["ProviderID"];
+	        this.BaseURL = source["BaseURL"];
+	        this.HasKey = source["HasKey"];
+	        this.Models = source["Models"];
+	        this.AlreadyImported = source["AlreadyImported"];
+	        this.SuggestedName = source["SuggestedName"];
+	    }
+	}
 	export class OmoConfigView {
 	    Path: string;
 	    ActivePreset: string;

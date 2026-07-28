@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -166,6 +167,43 @@ func (CodexAdapter) ReadManaged(homeDir, providerID string) (ManagedSection, err
 		}
 	}
 	return section, nil
+}
+
+// ListCodexProviderIDs returns the sorted provider keys declared under
+// model_providers in the codex config. A missing config yields an empty
+// list; a non-table model_providers fails closed.
+func ListCodexProviderIDs(homeDir string) ([]string, error) {
+	homeDir = absoluteHomeDir(homeDir)
+	_, configData, err := snapshotFile(DefaultConfigPath(ToolCodex, homeDir), homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if configData == nil {
+		return nil, nil
+	}
+	doc, err := readTOMLBytes(configData)
+	if err != nil {
+		return nil, err
+	}
+	providers, exists := doc["model_providers"]
+	if !exists {
+		return nil, nil
+	}
+	providerTable, ok := tomlMap(providers)
+	if !ok {
+		return nil, fmt.Errorf("model_providers is not a table: %w", ErrUnsafeShape)
+	}
+	ids := make([]string, 0, len(providerTable))
+	for id := range providerTable {
+		// Skip keys we could never manage (non-bare TOML keys, reserved
+		// names) — the write path rejects them, so do not offer them.
+		if err := validateCodexProviderID(id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 // ReadManagedRaw returns plaintext credentials for backend reconciliation.

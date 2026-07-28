@@ -500,6 +500,42 @@ func TestListProviderVariantsUnionsModelVariants(t *testing.T) {
 	}
 }
 
+func TestListOpenCodeProviderIDsSorted(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolOpencode, home)
+	writeFile(t, path, `{"provider":{
+		"zeta": {"models": {}},
+		"acme-ai": {"options": {"baseURL": "https://x"}},
+		"middle": {}
+	}}`, 0o644)
+	ids, err := ListOpenCodeProviderIDs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 || ids[0] != "acme-ai" || ids[1] != "middle" || ids[2] != "zeta" {
+		t.Fatalf("ListOpenCodeProviderIDs = %#v", ids)
+	}
+	if got, err := ListOpenCodeProviderIDs(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing opencode config: got %#v, err=%v; want nil, nil", got, err)
+	}
+}
+
+func TestListCodexProviderIDsSorted(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolCodex, home)
+	writeFile(t, path, "[model_providers.zeta]\nbase_url = \"https://z\"\n[model_providers.acme]\nbase_url = \"https://a\"\n", 0o644)
+	ids, err := ListCodexProviderIDs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != "acme" || ids[1] != "zeta" {
+		t.Fatalf("ListCodexProviderIDs = %#v", ids)
+	}
+	if got, err := ListCodexProviderIDs(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing codex config: got %#v, err=%v; want nil, nil", got, err)
+	}
+}
+
 func TestReadModelPointerReadsTopLevelModel(t *testing.T) {
 	home := t.TempDir()
 	path := DefaultConfigPath(ToolOpencode, home)

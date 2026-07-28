@@ -95,6 +95,62 @@ func TestGetOpencodeLiveStateReadsDisk(t *testing.T) {
 	}
 }
 
+func TestListImportCandidatesMarksExisting(t *testing.T) {
+	svc, _, homeDir := newToolConfigTestService(t)
+	writeToolConfigFixture(t, homeDir, `{"provider":{
+		"acme-ai": {"options": {"baseURL": "https://acme.example/v1", "apiKey": "sk-acme"}, "models": {"m1": {}, "m2": {}}},
+		"zeta": {"options": {"baseURL": "https://zeta.example"}}
+	}}`)
+
+	// Occupy the acme-ai provider ID, and a preset name colliding with the
+	// zeta suggestion base to exercise the suffixing.
+	existing := directTestPreset()
+	existing.ProviderID = "acme-ai"
+	existing.Name = "zeta"
+	if _, err := svc.CreateToolPreset(existing, ""); err != nil {
+		t.Fatalf("CreateToolPreset: %v", err)
+	}
+
+	candidates, err := svc.ListImportCandidates("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+	acme := candidates[0]
+	if acme.ProviderID != "acme-ai" || !acme.AlreadyImported || !acme.HasKey ||
+		acme.BaseURL != "https://acme.example/v1" || len(acme.Models) != 2 || acme.SuggestedName != "acme-ai" {
+		t.Fatalf("acme candidate: %+v", acme)
+	}
+	zeta := candidates[1]
+	if zeta.ProviderID != "zeta" || zeta.AlreadyImported || zeta.HasKey || zeta.SuggestedName != "zeta-2" {
+		t.Fatalf("zeta candidate: %+v", zeta)
+	}
+
+	// Claude exposes at most one candidate under the conventional ID.
+	claudePath := toolconfig.DefaultConfigPath(toolconfig.ToolClaude, homeDir)
+	if err := os.MkdirAll(filepath.Dir(claudePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudePath, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://c.example","ANTHROPIC_AUTH_TOKEN":"sk-c"},"model":"m"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	claudeCandidates, err := svc.ListImportCandidates("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claudeCandidates) != 1 || claudeCandidates[0].ProviderID != "anthropic" || !claudeCandidates[0].HasKey {
+		t.Fatalf("claude candidates = %#v", claudeCandidates)
+	}
+
+	// A tool with no config yields an empty list, not an error.
+	codexCandidates, err := svc.ListImportCandidates("codex")
+	if err != nil || len(codexCandidates) != 0 {
+		t.Fatalf("codex candidates = %#v, err=%v", codexCandidates, err)
+	}
+}
+
 func TestApplyToolPresetDirectPersistsFileAndState(t *testing.T) {
 	svc, db, homeDir := newToolConfigTestService(t)
 	configPath := writeToolConfigFixture(t, homeDir, "")

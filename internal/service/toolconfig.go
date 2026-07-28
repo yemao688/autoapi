@@ -239,6 +239,100 @@ func (s *Service) ImportToolPreset(tool, providerID, name string) (*toolconfig.P
 	return &preset, nil
 }
 
+// ImportCandidate describes one provider entry discovered in a tool's
+// existing on-disk config, for batch import. It is secret-free: HasKey is a
+// presence boolean and plaintext keys never leave the backend.
+type ImportCandidate struct {
+	ProviderID      string
+	BaseURL         string
+	HasKey          bool
+	Models          []string
+	AlreadyImported bool
+	SuggestedName   string
+}
+
+// ListImportCandidates enumerates the provider entries present in a tool's
+// existing config so the UI can offer batch import. opencode/codex list
+// every provider entry; claude exposes at most one candidate (its single
+// env block) under the conventional provider ID "anthropic". Entries whose
+// provider ID already belongs to a stored preset are marked AlreadyImported.
+func (s *Service) ListImportCandidates(tool string) ([]ImportCandidate, error) {
+	toolID := toolconfig.Tool(tool)
+	adapter, err := adapterFor(toolID)
+	if err != nil {
+		return nil, err
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+
+	var providerIDs []string
+	switch toolID {
+	case toolconfig.ToolOpencode:
+		providerIDs, err = toolconfig.ListOpenCodeProviderIDs(homeDir)
+	case toolconfig.ToolCodex:
+		providerIDs, err = toolconfig.ListCodexProviderIDs(homeDir)
+	case toolconfig.ToolClaude:
+		// Claude manages a single env block with no provider key; probe the
+		// conventional ID and surface at most one candidate.
+		raw, rerr := adapter.ReadManagedRaw(homeDir, "anthropic")
+		if rerr != nil {
+			return nil, rerr
+		}
+		if raw.Present {
+			providerIDs = []string{"anthropic"}
+		}
+	default:
+		return nil, fmt.Errorf("service: unsupported tool %q", tool)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(providerIDs) == 0 {
+		return []ImportCandidate{}, nil
+	}
+
+	existing, err := s.store.ListToolPresets(string(toolID))
+	if err != nil {
+		return nil, err
+	}
+	usedProviderIDs := make(map[string]bool, len(existing))
+	usedNames := make(map[string]bool, len(existing))
+	for _, p := range existing {
+		usedProviderIDs[p.ProviderID] = true
+		usedNames[p.Name] = true
+	}
+
+	candidates := make([]ImportCandidate, 0, len(providerIDs))
+	for _, providerID := range providerIDs {
+		raw, rerr := adapter.ReadManagedRaw(homeDir, providerID)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if !raw.Present {
+			continue
+		}
+		models := make([]string, 0, len(raw.Models))
+		for _, m := range raw.Models {
+			models = append(models, m.Name)
+		}
+		suggested := providerID
+		for i := 2; usedNames[suggested]; i++ {
+			suggested = fmt.Sprintf("%s-%d", providerID, i)
+		}
+		candidates = append(candidates, ImportCandidate{
+			ProviderID:      providerID,
+			BaseURL:         raw.BaseURL,
+			HasKey:          raw.APIKey != "",
+			Models:          models,
+			AlreadyImported: usedProviderIDs[providerID],
+			SuggestedName:   suggested,
+		})
+	}
+	return candidates, nil
+}
+
 // ExportToolSnippet decrypts a preset only for the pure export renderer.
 func (s *Service) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	preset, err := s.store.GetToolPreset(id)

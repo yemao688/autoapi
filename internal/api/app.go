@@ -183,6 +183,7 @@ type toolAccessService interface {
 	ApplyToolPreset(int64, bool) (service.ToolApplyResult, error)
 	CheckToolDrift(string) ([]service.DriftState, error)
 	ImportToolPreset(string, string, string) (*toolconfig.Preset, error)
+	ListImportCandidates(string) ([]service.ImportCandidate, error)
 	ExportToolSnippet(int64) (toolconfig.Snippet, error)
 	GetOmoConfig() (service.OmoConfigView, error)
 	GetOpencodeLiveState() (service.OpencodeLiveState, error)
@@ -1106,6 +1107,16 @@ func (a *App) ImportToolPreset(tool, providerID, name string) (*toolconfig.Prese
 	}
 	p, err := svc.ImportToolPreset(tool, providerID, name)
 	return redactToolPreset(p), err
+}
+
+// ListImportCandidates enumerates provider entries in a tool's existing
+// config for batch import. The DTO is secret-free by construction.
+func (a *App) ListImportCandidates(tool string) ([]service.ImportCandidate, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	return svc.ListImportCandidates(tool)
 }
 
 func (a *App) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {

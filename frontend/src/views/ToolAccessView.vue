@@ -41,9 +41,19 @@ const applyDriftLoading = ref(false)
 
 const importOpen = ref(false)
 const importTool = ref<ToolName>('opencode')
-const importProviderID = ref('')
-const importName = ref('')
+type ImportRow = {
+  candidate: service.ImportCandidate
+  name: string
+  selected: boolean
+}
+const importRows = ref<ImportRow[]>([])
+const importLoading = ref(false)
+const importError = ref('')
+const importGeneration = ref(0)
+const importPreselectProviderID = ref('')
+const importPrefillName = ref('')
 const importing = ref(false)
+const selectedImportCount = computed(() => importRows.value.filter((row) => row.selected && !row.candidate.AlreadyImported).length)
 
 const exportOpen = ref(false)
 const exportLoading = ref(false)
@@ -202,11 +212,50 @@ async function deletePreset(preset: toolconfig.Preset) {
   }
 }
 
-function openImport(tool: ToolName, providerID = '', name = '') {
+async function loadImportCandidates(preserveDrafts: boolean) {
+  const generation = importGeneration.value
+  const previous = preserveDrafts
+    ? new Map(importRows.value.map((row) => [row.candidate.ProviderID, { name: row.name, selected: row.selected }]))
+    : new Map<string, { name: string; selected: boolean }>()
+  importLoading.value = true
+  importError.value = ''
+  try {
+    const candidates = await api.listImportCandidates(importTool.value)
+    if (generation !== importGeneration.value) return
+    importRows.value = candidates.map((candidate) => {
+      const draft = previous.get(candidate.ProviderID)
+      const preselected = candidate.ProviderID === importPreselectProviderID.value
+      return {
+        candidate,
+        name: draft ? draft.name : (preselected && importPrefillName.value ? importPrefillName.value : candidate.SuggestedName),
+        selected: !candidate.AlreadyImported && (draft ? draft.selected : preselected),
+      }
+    })
+  } catch (e: any) {
+    if (generation !== importGeneration.value) return
+    importError.value = e?.message || String(e)
+    toast.push(importError.value, 'error')
+    if (!preserveDrafts) importOpen.value = false
+  } finally {
+    if (generation === importGeneration.value) importLoading.value = false
+  }
+}
+
+async function openImport(tool: ToolName, providerID = '', name = '') {
   importTool.value = tool
-  importProviderID.value = providerID
-  importName.value = name
+  importPreselectProviderID.value = providerID
+  importPrefillName.value = name
+  importRows.value = []
+  importError.value = ''
   importOpen.value = true
+  await loadImportCandidates(false)
+}
+
+function closeImport() {
+  importGeneration.value++
+  importOpen.value = false
+  importRows.value = []
+  importError.value = ''
 }
 
 async function continueApplyAfterDrift() {
@@ -228,15 +277,32 @@ function importDriftedConfig() {
 }
 
 async function importPreset() {
-  if (importing.value || !importProviderID.value.trim() || !importName.value.trim()) return
+  if (importing.value || selectedImportCount.value === 0) return
+  const selectedRows = importRows.value.filter((row) => row.selected && !row.candidate.AlreadyImported)
+  const invalidRow = selectedRows.find((row) => !row.name.trim())
+  if (invalidRow) {
+    toast.push(t('toolAccess.import.nameRequired', { provider: invalidRow.candidate.ProviderID }), 'error')
+    return
+  }
   importing.value = true
+  const failures: Array<{ providerID: string; error: string }> = []
   try {
-    await api.importToolPreset(importTool.value, importProviderID.value.trim(), importName.value.trim())
-    importOpen.value = false
-    toast.push(t('toolAccess.toast.presetImported'), 'success')
-    await refresh()
-  } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
+    for (const row of selectedRows) {
+      try {
+        await api.importToolPreset(importTool.value, row.candidate.ProviderID, row.name.trim())
+      } catch (e: any) {
+        failures.push({ providerID: row.candidate.ProviderID, error: e?.message || String(e) })
+      }
+    }
+    if (!failures.length) {
+      closeImport()
+      toast.push(t('toolAccess.toast.presetImported'), 'success')
+      await refresh()
+    } else {
+      const first = failures[0]
+      toast.push(t('toolAccess.import.partialFailure', { count: failures.length, provider: first.providerID, error: first.error }), 'error')
+      await loadImportCandidates(true)
+    }
   } finally {
     importing.value = false
   }
@@ -434,8 +500,49 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="importOpen" class="modal-overlay" @click.self="importOpen = false">
-      <div class="modal-card"><div class="modal-title">{{ t('toolAccess.import.title', { tool: toolLabel(importTool) }) }}</div><div class="section-sub" style="margin-bottom: 16px;">{{ t('toolAccess.import.subtitle') }}</div><div class="field"><label class="field-label">{{ t('toolAccess.import.providerID') }}</label><input v-model="importProviderID" class="input mono" :placeholder="t('toolAccess.import.providerPlaceholder')"></div><div class="field"><label class="field-label">{{ t('toolAccess.import.name') }}</label><input v-model="importName" class="input" :placeholder="t('toolAccess.import.namePlaceholder')"></div><div class="row" style="justify-content: flex-end; gap: 8px;"><button class="btn btn-secondary" @click="importOpen = false">{{ t('common.cancel') }}</button><button class="btn btn-primary" :disabled="importing || !importProviderID.trim() || !importName.trim()" @click="importPreset">{{ importing ? t('common.processing') : t('toolAccess.import.confirm') }}</button></div></div>
+    <div v-if="importOpen" class="modal-overlay" @click.self="closeImport">
+      <div class="modal-card wide modal-card-scroll import-modal">
+        <div class="row-between import-modal-heading">
+          <div>
+            <div class="modal-title">{{ t('toolAccess.import.title', { tool: toolLabel(importTool) }) }}</div>
+            <div class="section-sub">{{ t('toolAccess.import.subtitle') }}</div>
+          </div>
+          <button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="closeImport">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+
+        <div v-if="importLoading" class="tool-page-state import-state">{{ t('toolAccess.import.loading') }}</div>
+        <div v-if="!importLoading && importError" class="tool-inline-error import-inline-error" role="alert"><span>{{ importError }}</span><button class="btn btn-secondary" @click="loadImportCandidates(true)">{{ t('toolAccess.retry') }}</button></div>
+        <div v-if="!importLoading && !importError && !importRows.length" class="tool-page-state import-state">{{ t('toolAccess.import.empty') }}</div>
+        <div v-if="!importLoading && importRows.length" class="import-candidate-list">
+          <div v-for="row in importRows" :key="row.candidate.ProviderID" class="list-row import-candidate-row" :class="{ 'import-candidate-disabled': row.candidate.AlreadyImported }">
+            <input v-model="row.selected" type="checkbox" :disabled="row.candidate.AlreadyImported || importing" :aria-label="row.candidate.ProviderID">
+            <div class="import-candidate-main">
+              <div class="row import-candidate-title">
+                <span class="text-mono import-provider-id">{{ row.candidate.ProviderID }}</span>
+                <span class="text-mono import-base-url" :title="row.candidate.BaseURL">{{ row.candidate.BaseURL || t('toolAccess.status.notFound') }}</span>
+              </div>
+              <div class="row import-candidate-badges">
+                <span class="badge" :class="row.candidate.HasKey ? 'success' : ''">{{ row.candidate.HasKey ? t('toolAccess.import.hasKey') : t('toolAccess.import.noKey') }}</span>
+                <span class="badge info">{{ t('toolAccess.import.models', { count: row.candidate.Models?.length || 0 }) }}</span>
+                <span v-if="row.candidate.AlreadyImported" class="badge">{{ t('toolAccess.import.alreadyImported') }}</span>
+              </div>
+            </div>
+            <div class="import-name-field">
+              <label class="field-label">{{ t('toolAccess.import.nameLabel') }}</label>
+              <input v-model="row.name" class="input" :disabled="row.candidate.AlreadyImported || importing" :placeholder="t('toolAccess.import.namePlaceholder')">
+            </div>
+          </div>
+        </div>
+
+        <div class="row import-modal-footer">
+          <span class="text-muted import-selected-count">{{ t('toolAccess.import.selectedCount', { count: selectedImportCount }) }}</span>
+          <span class="spacer"></span>
+          <button class="btn btn-secondary" :disabled="importing" @click="closeImport">{{ t('common.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="importing || selectedImportCount === 0" @click="importPreset">{{ importing ? t('common.processing') : t('toolAccess.import.confirm', { count: selectedImportCount }) }}</button>
+        </div>
+      </div>
     </div>
 
     <div v-if="exportOpen" class="modal-overlay" @click.self="exportOpen = false">
@@ -505,7 +612,28 @@ onMounted(() => {
 .export-code { max-height: 400px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #1d1d1f; color: #f5f5f7; font: 11.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .backups-table { min-width: 640px; }
 .backup-path { max-width: 300px; overflow-wrap: anywhere; font-size: 11px; }
- .drift-choice-actions { justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.import-modal { max-width: 860px; }
+.import-modal-heading { align-items: flex-start; margin-bottom: 16px; }
+.import-state { min-height: 170px; display: flex; align-items: center; justify-content: center; }
+.import-candidate-list { max-height: 470px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.import-candidate-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(190px, .62fr); align-items: start; gap: 10px; padding: 12px; }
+.import-candidate-row > input { margin-top: 7px; accent-color: var(--accent); }
+.import-candidate-row:last-child { border-bottom: none; }
+.import-candidate-disabled { opacity: .52; background: color-mix(in srgb, var(--bg) 45%, transparent); }
+.import-candidate-main { min-width: 0; }
+.import-candidate-title { min-width: 0; gap: 8px; }
+.import-provider-id { flex: 0 0 auto; font-size: 12px; font-weight: 600; }
+.import-base-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10.5px; }
+.import-candidate-badges { flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.import-name-field { min-width: 0; }
+.import-name-field .field-label { margin-bottom: 5px; }
+.import-name-field .input { min-height: 32px; font-size: 12px; }
+.import-modal-footer { gap: 8px; margin-top: 16px; }
+.import-selected-count { font-size: 12px; }
+.import-inline-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; padding: 9px 10px; border-radius: var(--radius-sm); background: rgba(217, 48, 37, 0.08); color: var(--negative); font-size: 12px; }
+.import-inline-error .btn { flex: 0 0 auto; color: var(--fg); }
+.drift-choice-actions { justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 @media (max-width: 1050px) { .tool-grid { grid-template-columns: 1fr 1fr; } .tool-card-opencode { grid-column: span 1; } }
 @media (max-width: 700px) { .tool-grid { grid-template-columns: 1fr; } .tool-page-error { flex-direction: column; } }
+@media (max-width: 680px) { .import-candidate-row { grid-template-columns: 20px minmax(0, 1fr); } .import-name-field { grid-column: 2; } }
 </style>
