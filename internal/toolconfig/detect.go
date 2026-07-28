@@ -21,6 +21,32 @@ func DefaultConfigPath(tool Tool, homeDir string) string {
 	}
 }
 
+// ResolveConfigPath returns the effective primary config path for tool — the
+// file the tool itself would load. opencode supports and prefers JSONC:
+// opencode.jsonc wins when both files exist; opencode.json is used when only
+// it exists; when neither exists the preferred creation target
+// (opencode.jsonc) is returned with found=false. Other tools resolve to their
+// conventional path.
+func ResolveConfigPath(tool Tool, homeDir string) (path string, found bool) {
+	if tool == ToolOpencode {
+		dir := filepath.Join(absoluteHomeDir(homeDir), ".config", "opencode")
+		jsonc := filepath.Join(dir, "opencode.jsonc")
+		if pathExists(jsonc) {
+			return jsonc, true
+		}
+		jsonPath := filepath.Join(dir, "opencode.json")
+		if pathExists(jsonPath) {
+			return jsonPath, true
+		}
+		return jsonc, false
+	}
+	path = DefaultConfigPath(tool, homeDir)
+	if path == "" {
+		return "", false
+	}
+	return path, pathExists(path)
+}
+
 func pathExists(path string) bool {
 	if path == "" {
 		return false
@@ -39,8 +65,7 @@ func pathExists(path string) bool {
 }
 
 func detectPrimary(tool Tool, homeDir string) ToolStatus {
-	primary := DefaultConfigPath(tool, homeDir)
-	exists := pathExists(primary)
+	primary, exists := ResolveConfigPath(tool, homeDir)
 	return ToolStatus{
 		Tool:         tool,
 		Installed:    exists,

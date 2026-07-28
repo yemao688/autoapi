@@ -346,7 +346,11 @@ func (s *Service) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
 	if err != nil {
 		return toolconfig.Snippet{}, err
 	}
-	return toolconfig.ExportSnippet(plaintext)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return toolconfig.Snippet{}, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	return toolconfig.ExportSnippet(plaintext, homeDir)
 }
 
 // OmoConfigView is the UI-facing projection of the OMO config plus the
@@ -458,7 +462,7 @@ func (s *Service) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) e
 		state.Tool = toolconfig.ToolOpencode
 	}
 	if state.ConfigPath == "" {
-		state.ConfigPath = toolconfig.DefaultConfigPath(toolconfig.ToolOpencode, homeDir)
+		state.ConfigPath, _ = toolconfig.ResolveConfigPath(toolconfig.ToolOpencode, homeDir)
 	}
 	_, err = s.commitToolChangeSet(toolconfig.ToolOpencode, changeSet, allowDrift, state.ActivePresetID, state.ConfigPath)
 	return err
@@ -672,7 +676,7 @@ func (s *Service) commitToolChangeSet(tool toolconfig.Tool, changeSet *toolconfi
 		}
 	}
 	if configPath == "" {
-		configPath = toolconfig.DefaultConfigPath(tool, homeDir)
+		configPath, _ = toolconfig.ResolveConfigPath(tool, homeDir)
 	}
 	if err := s.store.SaveToolApplyState(&toolconfig.ToolState{
 		Tool:           tool,
@@ -708,7 +712,7 @@ func (s *Service) targetPathForResource(tool toolconfig.Tool, resource toolconfi
 	}
 	switch resource {
 	case toolconfig.ResOpencodeConfig, toolconfig.ResCodexConfig, toolconfig.ResClaudeSettings:
-		path := toolconfig.DefaultConfigPath(tool, homeDir)
+		path, _ := toolconfig.ResolveConfigPath(tool, homeDir)
 		if path == "" {
 			return "", fmt.Errorf("service: no path for resource %s", resource)
 		}

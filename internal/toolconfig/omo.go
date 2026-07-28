@@ -447,7 +447,7 @@ func setOmoAgent(parent *hujson.Object, name string, agent OmoAgent) error {
 }
 
 func omoOpenCodeChecks(homeDir string) ([]FileCheck, error) {
-	path := DefaultConfigPath(ToolOpencode, absoluteHomeDir(homeDir))
+	path, _ := ResolveConfigPath(ToolOpencode, homeDir)
 	hash, err := HashFile(path)
 	if err != nil {
 		return nil, err

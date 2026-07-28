@@ -242,8 +242,10 @@ type Adapter interface {
 	// exposed through Wails bindings or logs.
 	ReadManagedRaw(homeDir, providerID string) (RawManagedSection, error)
 	// ExportSnippet renders config text + guidance for manual paste elsewhere.
-	// Pure function — no file access, no decryption (input is already plaintext).
-	ExportSnippet(p PresetPlaintext) (Snippet, error)
+	// No writes, no decryption (input is already plaintext); homeDir is only
+	// used to point TargetPath at the config file actually in effect (e.g.
+	// opencode.jsonc vs opencode.json).
+	ExportSnippet(p PresetPlaintext, homeDir string) (Snippet, error)
 }
 
 // ToolState is the persisted per-tool apply bookkeeping (table tool_state).
@@ -276,7 +278,7 @@ var (
 
 // DefaultConfigPath returns the conventional config path for a tool under homeDir.
 // Implemented in detect.go:
-//   - opencode: ~/.config/opencode/opencode.json
+//   - opencode: ~/.config/opencode/opencode.jsonc (preferred) or opencode.json
 //   - codex:    ~/.codex/config.toml   (+ extra auth_json: ~/.codex/auth.json)
 //   - claude:   ~/.claude/settings.json
 //

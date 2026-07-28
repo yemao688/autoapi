@@ -3,6 +3,7 @@ package toolconfig
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,8 +12,9 @@ import (
 )
 
 // OpenCodeAdapter manages the provider entry and default model pointer in
-// opencode.json. It patches owned leaves and leaves the rest of the provider
-// entry, including comments, untouched.
+// opencode.jsonc (preferred) or opencode.json (see ResolveConfigPath). It
+// patches owned leaves and leaves the rest of the provider entry, including
+// comments, untouched.
 type OpenCodeAdapter struct{}
 
 type OpencodeAdapter = OpenCodeAdapter
@@ -82,13 +84,21 @@ func openCodeVendor(vendor string) string {
 	return "@ai-sdk/openai-compatible"
 }
 
+// resolvedOpenCodePath returns the effective opencode config path
+// (opencode.jsonc preferred, see ResolveConfigPath) for read helpers that
+// only need the path.
+func resolvedOpenCodePath(homeDir string) string {
+	path, _ := ResolveConfigPath(ToolOpencode, homeDir)
+	return path
+}
+
 func (OpenCodeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error) {
 	if err := validatePreset(p); err != nil {
 		return nil, err
 	}
 	providerID := providerKey(p.Preset)
 	homeDir = absoluteHomeDir(homeDir)
-	configPath := DefaultConfigPath(ToolOpencode, homeDir)
+	configPath, _ := ResolveConfigPath(ToolOpencode, homeDir)
 	resolvedPath, before, err := snapshotFile(configPath, homeDir)
 	if err != nil {
 		return nil, err
@@ -277,7 +287,7 @@ func loadOpenCodeManaged(homeDir, providerID string) (*hujson.Object, *hujson.Ob
 		return nil, nil, nil, nil, fmt.Errorf("%w: provider ID is required", ErrInvalidPreset)
 	}
 	homeDir = absoluteHomeDir(homeDir)
-	path := DefaultConfigPath(ToolOpencode, homeDir)
+	path, _ := ResolveConfigPath(ToolOpencode, homeDir)
 	_, data, err := snapshotFile(path, homeDir)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -362,7 +372,7 @@ func decodeOpenCodeModels(models *hujson.Object) []PresetModel {
 	return result
 }
 
-func (OpenCodeAdapter) ExportSnippet(p PresetPlaintext) (Snippet, error) {
+func (OpenCodeAdapter) ExportSnippet(p PresetPlaintext, homeDir string) (Snippet, error) {
 	if err := validatePreset(p); err != nil {
 		return Snippet{}, err
 	}
@@ -387,11 +397,12 @@ func (OpenCodeAdapter) ExportSnippet(p PresetPlaintext) (Snippet, error) {
 	if err != nil {
 		return Snippet{}, err
 	}
+	displayPath := "~/.config/opencode/" + filepath.Base(resolvedOpenCodePath(homeDir))
 	return Snippet{
-		TargetPath: "~/.config/opencode/opencode.json",
+		TargetPath: displayPath,
 		Format:     "json",
 		Content:    string(data) + "\n",
-		Notes:      "Paste this fragment into ~/.config/opencode/opencode.json under the top-level object.",
+		Notes:      fmt.Sprintf("Paste this fragment into %s under the top-level object.", displayPath),
 	}, nil
 }
 
@@ -408,7 +419,7 @@ func parseJSONBytes(data []byte) (hujson.Value, error) {
 // opencode.json). A missing config yields an empty list, not an error; the
 // adapter's Plan path still fails closed on non-object shapes when applying.
 func ListProviderModels(homeDir string) ([]string, error) {
-	doc, err := readJSONDocument(DefaultConfigPath(ToolOpencode, homeDir))
+	doc, err := readJSONDocument(resolvedOpenCodePath(homeDir))
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +460,7 @@ func ListProviderModels(homeDir string) ([]string, error) {
 // the opencode config's provider section. A missing config yields an empty
 // list, not an error; a non-object provider section fails closed.
 func ListOpenCodeProviderIDs(homeDir string) ([]string, error) {
-	doc, err := readJSONDocument(DefaultConfigPath(ToolOpencode, homeDir))
+	doc, err := readJSONDocument(resolvedOpenCodePath(homeDir))
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +489,7 @@ func ListOpenCodeProviderIDs(homeDir string) ([]string, error) {
 // config yields "", nil — the live-state read is tolerant while Plan stays
 // fail-closed.
 func ReadModelPointer(homeDir string) (string, error) {
-	doc, err := readJSONDocument(DefaultConfigPath(ToolOpencode, homeDir))
+	doc, err := readJSONDocument(resolvedOpenCodePath(homeDir))
 	if err != nil {
 		return "", err
 	}
@@ -495,7 +506,7 @@ func ReadModelPointer(homeDir string) (string, error) {
 // list, not an error; non-object shapes are skipped leniently here and still
 // fail closed on the adapter's Plan path.
 func ListProviderVariants(homeDir string) ([]string, error) {
-	doc, err := readJSONDocument(DefaultConfigPath(ToolOpencode, homeDir))
+	doc, err := readJSONDocument(resolvedOpenCodePath(homeDir))
 	if err != nil {
 		return nil, err
 	}

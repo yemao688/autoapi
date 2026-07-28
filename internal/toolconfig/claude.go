@@ -187,7 +187,7 @@ func loadClaudeManaged(homeDir, providerID string) (*hujson.Object, *hujson.Obje
 	return root, env, true, nil
 }
 
-func (ClaudeAdapter) ExportSnippet(p PresetPlaintext) (Snippet, error) {
+func (ClaudeAdapter) ExportSnippet(p PresetPlaintext, _ string) (Snippet, error) {
 	if err := validatePreset(p); err != nil {
 		return Snippet{}, err
 	}

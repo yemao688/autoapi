@@ -275,7 +275,7 @@ func (CodexAdapter) ReadManagedRaw(homeDir, providerID string) (RawManagedSectio
 	return section, nil
 }
 
-func (CodexAdapter) ExportSnippet(p PresetPlaintext) (Snippet, error) {
+func (CodexAdapter) ExportSnippet(p PresetPlaintext, _ string) (Snippet, error) {
 	if err := validatePreset(p); err != nil {
 		return Snippet{}, err
 	}
