@@ -39,7 +39,7 @@ func TestToolPresetCRUDRoundTrip(t *testing.T) {
 				Kind:       toolconfig.PresetAutoapi,
 				Name:       "alpha",
 				ProviderID: "autoapi",
-				Vendor:     "@ai-sdk/openai-compatible",
+				Vendor:     toolconfig.VendorOpenAICompatible,
 				BaseURL:    "http://127.0.0.1:8344/v1",
 				APIKeyEnc:  "enc-a",
 				APIKeyID:   "key-a",

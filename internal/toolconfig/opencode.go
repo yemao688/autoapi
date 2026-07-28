@@ -78,10 +78,7 @@ func buildOpenCodeModels(models []PresetModel) (map[string]openCodeModel, string
 }
 
 func openCodeVendor(vendor string) string {
-	if vendor == "@ai-sdk/openai" || vendor == "@ai-sdk/openai-compatible" {
-		return vendor
-	}
-	return "@ai-sdk/openai-compatible"
+	return OpenCodeNpmPackage(vendor)
 }
 
 // resolvedOpenCodePath returns the effective opencode config path
@@ -220,6 +217,78 @@ func (OpenCodeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, erro
 	return &ChangeSet{Tool: ToolOpencode, Changes: []FileChange{change}}, nil
 }
 
+func (OpenCodeAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) {
+	if providerID == "" {
+		return nil, fmt.Errorf("%w: provider ID is required", ErrInvalidPreset)
+	}
+	homeDir = absoluteHomeDir(homeDir)
+	configPath, _ := ResolveConfigPath(ToolOpencode, homeDir)
+	resolvedPath, before, err := snapshotFile(configPath, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if before == nil {
+		return nil, fmt.Errorf("opencode provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	doc, err := parseJSONBytes(before)
+	if err != nil {
+		return nil, fmt.Errorf("parse opencode config: %w", err)
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("parse opencode config: %w", err)
+	}
+	if err := requireUniqueKeys(root, "provider", "model"); err != nil {
+		return nil, err
+	}
+	providers, present, err := requireObjectMember(root, "provider")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, fmt.Errorf("opencode provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	if err := requireUniqueKeys(providers, providerID); err != nil {
+		return nil, err
+	}
+	entry, present, err := requireObjectMember(providers, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("provider %q: %w", providerID, err)
+	}
+	if !present {
+		return nil, fmt.Errorf("opencode provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	if err := requireUniqueKeys(entry, "npm", "name", "options", "models"); err != nil {
+		return nil, err
+	}
+	if options, optionsPresent, err := requireObjectMember(entry, "options"); err != nil {
+		return nil, err
+	} else if optionsPresent {
+		if err := requireUniqueKeys(options, "baseURL", "apiKey"); err != nil {
+			return nil, err
+		}
+	}
+	if models, modelsPresent, err := requireObjectMember(entry, "models"); err != nil {
+		return nil, err
+	} else if modelsPresent {
+		if err := requireUniqueObjectMembers(models); err != nil {
+			return nil, err
+		}
+	}
+	if err := removeObjectMember(providers, providerID); err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(objectString(root, "model"), providerID+"/") {
+		if err := removeObjectMember(root, "model"); err != nil {
+			return nil, err
+		}
+	}
+
+	change := changeForSnapshot(ResOpencodeConfig, resolvedPath, false, before)
+	change.After = doc.Pack()
+	return &ChangeSet{Tool: ToolOpencode, Changes: []FileChange{change}}, nil
+}
+
 func (OpenCodeAdapter) ReadManaged(homeDir, providerID string) (ManagedSection, error) {
 	root, entry, options, models, err := loadOpenCodeManaged(homeDir, providerID)
 	if err != nil {
@@ -266,6 +335,8 @@ func (OpenCodeAdapter) ReadManagedRaw(homeDir, providerID string) (RawManagedSec
 	section := RawManagedSection{
 		Present:    true,
 		ProviderID: providerID,
+		Name:       objectString(entry, "name"),
+		Vendor:     objectString(entry, "npm"),
 		BaseURL:    objectString(options, "baseURL"),
 		APIKey:     objectString(options, "apiKey"),
 		Model:      objectString(root, "model"),

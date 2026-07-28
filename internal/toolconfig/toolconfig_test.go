@@ -699,6 +699,124 @@ func TestOpenCodeProviderScopedPointerClearing(t *testing.T) {
 	}
 }
 
+func TestOpenCodePlanRemovalPreservesOtherContent(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolOpencode, home)
+	writeFile(t, path, `{
+  // keep root comment
+  "provider": {
+    "remove-me": {"name": "Remove", "options": {"baseURL": "https://remove.example"}},
+    // keep provider comment
+    "keep-me": {"name": "Keep", "options": {"baseURL": "https://keep.example"}}
+  },
+  "model": "remove-me/model",
+  "unmanaged": true
+}`, 0o644)
+	changeSet, err := (OpenCodeAdapter{}).PlanRemoval(home, "remove-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	after := string(readFile(t, path))
+	if strings.Contains(after, "remove-me") || strings.Contains(after, `"model"`) {
+		t.Fatalf("removed provider or pointer remains: %s", after)
+	}
+	for _, want := range []string{"keep root comment", "keep provider comment", "keep-me", `"unmanaged": true`} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("removal lost %q: %s", want, after)
+		}
+	}
+	if _, err := (OpenCodeAdapter{}).PlanRemoval(home, "remove-me"); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("absent provider error = %v", err)
+	}
+}
+
+func TestCodexPlanRemovalRemovesConfigAndAuth(t *testing.T) {
+	home := t.TempDir()
+	configPath := DefaultConfigPath(ToolCodex, home)
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	writeFile(t, configPath, `# keep config
+model_provider = "remove-me"
+model = "old-model"
+
+[model_providers.remove-me] # managed
+name = "Remove"
+base_url = "https://remove.example"
+
+[model_providers.keep-me]
+name = "Keep"
+base_url = "https://keep.example"
+`, 0o644)
+	writeFile(t, authPath, `{
+  // keep auth comment
+  "OPENAI_API_KEY": "remove-secret",
+  "OTHER_KEY": "keep"
+}`, 0o644)
+	changeSet, err := (CodexAdapter{}).PlanRemoval(home, "remove-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changeSet.Changes) != 2 || changeSet.Changes[1].Resource != ResCodexAuth {
+		t.Fatalf("unexpected removal changes: %+v", changeSet.Changes)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	configAfter := string(readFile(t, configPath))
+	if strings.Contains(configAfter, "remove-me") || strings.Contains(configAfter, "model_provider =") {
+		t.Fatalf("Codex provider or pointer remains: %s", configAfter)
+	}
+	if !strings.Contains(configAfter, "keep-me") || !strings.Contains(configAfter, "# keep config") {
+		t.Fatalf("Codex unmanaged content was lost: %s", configAfter)
+	}
+	authAfter := string(readFile(t, authPath))
+	if strings.Contains(authAfter, "OPENAI_API_KEY") || !strings.Contains(authAfter, "OTHER_KEY") || !strings.Contains(authAfter, "keep auth comment") {
+		t.Fatalf("Codex auth removal was incorrect: %s", authAfter)
+	}
+	if _, err := (CodexAdapter{}).PlanRemoval(home, "remove-me"); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("absent Codex provider error = %v", err)
+	}
+}
+
+func TestClaudePlanRemovalPreservesUnmanagedSettings(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolClaude, home)
+	writeFile(t, path, `{
+  // keep settings
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://claude.example",
+    "ANTHROPIC_AUTH_TOKEN": "secret",
+    "ANTHROPIC_MODEL": "claude-model",
+    "KEEP_ENV": "yes"
+  },
+  "model": "claude-model",
+  "permissions": {"allow": ["Bash"]}
+}`, 0o644)
+	changeSet, err := (ClaudeAdapter{}).PlanRemoval(home, "anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	after := string(readFile(t, path))
+	for _, removed := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", `"model"`} {
+		if strings.Contains(after, removed) {
+			t.Fatalf("Claude managed key remains %q: %s", removed, after)
+		}
+	}
+	for _, want := range []string{"keep settings", "KEEP_ENV", "permissions"} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("Claude removal lost %q: %s", want, after)
+		}
+	}
+	if _, err := (ClaudeAdapter{}).PlanRemoval(home, "anthropic"); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("absent Claude provider error = %v", err)
+	}
+}
+
 func TestClaudeNoDefaultLeavesGlobalPointers(t *testing.T) {
 	home := t.TempDir()
 	path := DefaultConfigPath(ToolClaude, home)

@@ -68,7 +68,7 @@ type Preset struct {
 	Kind       PresetKind
 	Name       string
 	ProviderID string // config-file provider key; empty => derived from slugified Name
-	Vendor     string // opencode npm package ("@ai-sdk/openai-compatible" | "@ai-sdk/openai"); informational for other tools
+	Vendor     string // canonical interface-format key; mapped to an OpenCode npm package when rendered
 	BaseURL    string // for PresetAutoapi this is resolved at apply time from current relay settings
 	APIKeyEnc  string // encrypted; empty when the preset has no key
 	APIKeyID   string // PresetAutoapi only: api_keys.id (UUID string; the id IS the relay token)
@@ -209,6 +209,8 @@ type ManagedSection struct {
 type RawManagedSection struct {
 	Present    bool
 	ProviderID string
+	Name       string
+	Vendor     string
 	BaseURL    string
 	APIKey     string        // plaintext ("" when none)
 	Model      string        // default model pointer
@@ -233,6 +235,10 @@ type Adapter interface {
 	// Plan snapshots current state and renders the ChangeSet for applying p.
 	// Fails closed on unexpected shapes or unowned provider-ID collisions.
 	Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error)
+	// PlanRemoval snapshots current state and renders the ChangeSet that removes
+	// providerID's managed section. Fails closed on unexpected shapes. Returns
+	// an ErrConfigNotFound-classified error when the provider is absent.
+	PlanRemoval(homeDir, providerID string) (*ChangeSet, error)
 	// ReadManaged extracts the managed section for providerID (required —
 	// callers derive it from persisted state, never "any provider").
 	// Secrets in the result are masked. Zero value + nil error when absent.

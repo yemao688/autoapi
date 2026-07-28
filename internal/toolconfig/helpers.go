@@ -44,6 +44,11 @@ func providerKey(p Preset) string {
 	return key
 }
 
+// ProviderKey returns the config-file provider key for a preset.
+func ProviderKey(p Preset) string {
+	return providerKey(p)
+}
+
 func validatePreset(p PresetPlaintext) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("%w: name is empty", ErrInvalidPreset)
@@ -448,6 +453,17 @@ func removeObjectMember(object *hujson.Object, name string) error {
 		return err
 	}
 	if index >= 0 {
+		// A member's Name.BeforeExtra carries comments written immediately
+		// before its key. Move that trivia to the next surviving member (or
+		// the object's trailing trivia) so removal never drops unmanaged text.
+		before := append([]byte(nil), object.Members[index].Name.BeforeExtra...)
+		if index+1 < len(object.Members) {
+			next := append([]byte(nil), before...)
+			next = append(next, object.Members[index+1].Name.BeforeExtra...)
+			object.Members[index+1].Name.BeforeExtra = next
+		} else {
+			object.AfterExtra = append(before, object.AfterExtra...)
+		}
 		object.Members = append(object.Members[:index], object.Members[index+1:]...)
 	}
 	return nil

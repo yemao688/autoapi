@@ -10,10 +10,6 @@ export function ApplyOmoConfig(arg1, arg2) {
   return window['go']['api']['App']['ApplyOmoConfig'](arg1, arg2);
 }
 
-export function ApplyToolPreset(arg1, arg2) {
-  return window['go']['api']['App']['ApplyToolPreset'](arg1, arg2);
-}
-
 export function CancelModelTest(arg1) {
   return window['go']['api']['App']['CancelModelTest'](arg1);
 }
@@ -72,6 +68,14 @@ export function DeleteProviderFeatureCapability(arg1, arg2, arg3) {
 
 export function DeleteToolPreset(arg1) {
   return window['go']['api']['App']['DeleteToolPreset'](arg1);
+}
+
+export function DisableToolPreset(arg1, arg2) {
+  return window['go']['api']['App']['DisableToolPreset'](arg1, arg2);
+}
+
+export function EnableToolPreset(arg1) {
+  return window['go']['api']['App']['EnableToolPreset'](arg1);
 }
 
 export function EnterBackground() {
@@ -174,10 +178,6 @@ export function HideWindow() {
   return window['go']['api']['App']['HideWindow']();
 }
 
-export function ImportToolPreset(arg1, arg2, arg3) {
-  return window['go']['api']['App']['ImportToolPreset'](arg1, arg2, arg3);
-}
-
 export function IsQuitting() {
   return window['go']['api']['App']['IsQuitting']();
 }
@@ -188,10 +188,6 @@ export function ListAPIKeys() {
 
 export function ListEndpoints() {
   return window['go']['api']['App']['ListEndpoints']();
-}
-
-export function ListImportCandidates(arg1) {
-  return window['go']['api']['App']['ListImportCandidates'](arg1);
 }
 
 export function ListModelCapabilities(arg1, arg2) {
@@ -220,6 +216,10 @@ export function ListToolBackups(arg1) {
 
 export function ListToolPresets(arg1) {
   return window['go']['api']['App']['ListToolPresets'](arg1);
+}
+
+export function ListToolProviders(arg1) {
+  return window['go']['api']['App']['ListToolProviders'](arg1);
 }
 
 export function ListToolStatuses() {
@@ -372,6 +372,10 @@ export function TestProvider(arg1) {
 
 export function UpdateAPIKey(arg1, arg2) {
   return window['go']['api']['App']['UpdateAPIKey'](arg1, arg2);
+}
+
+export function UpdateEnabledToolPreset(arg1, arg2) {
+  return window['go']['api']['App']['UpdateEnabledToolPreset'](arg1, arg2);
 }
 
 export function UpdateModelRule(arg1, arg2) {

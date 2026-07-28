@@ -178,9 +178,9 @@ function removeGlobalTag(kind: GlobalKind, value: string) {
 
 function driftMessage(states: service.DriftState[]) {
   const details = states.length
-    ? states.map((state) => `${state.Resource}: ${state.Missing ? t('toolAccess.drift.missing') : state.Drifted ? t('toolAccess.drift.changed') : t('toolAccess.drift.unchanged')}\n${state.Path}`).join('\n\n')
-    : t('toolAccess.drift.none')
-  return `${t('toolAccess.drift.confirmMessage')}\n\n${details}`
+    ? states.map((state) => `${state.Resource}: ${state.Missing ? t('toolAccess.omo.driftMissing') : state.Drifted ? t('toolAccess.omo.driftChanged') : t('toolAccess.omo.driftUnchanged')}\n${state.Path}`).join('\n\n')
+    : t('toolAccess.omo.driftNone')
+  return `${t('toolAccess.omo.configChangedMessage')}\n\n${details}`
 }
 
 async function load() {
@@ -329,9 +329,9 @@ async function confirmWrite(allowDrift = false) {
       try {
         const states = await api.checkToolDrift('opencode')
         const ok = await confirm.open({
-          title: t('toolAccess.drift.confirmTitle'),
+          title: t('toolAccess.omo.configChangedTitle'),
           message: driftMessage(states),
-          confirmText: t('toolAccess.drift.confirm'),
+          confirmText: t('toolAccess.omo.configChangedConfirm'),
           danger: true,
         })
         if (ok) {

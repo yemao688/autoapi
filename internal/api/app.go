@@ -180,10 +180,11 @@ type toolAccessService interface {
 	UpdateToolPreset(toolconfig.Preset, string) (*toolconfig.Preset, error)
 	GetToolPresets(string) ([]toolconfig.Preset, error)
 	DeleteToolPreset(int64) error
-	ApplyToolPreset(int64, bool) (service.ToolApplyResult, error)
+	ListToolProviders(string) ([]service.ToolProviderView, error)
+	EnableToolPreset(int64) (service.ToolApplyResult, error)
+	DisableToolPreset(string, string) (service.ToolApplyResult, error)
+	UpdateEnabledToolPreset(toolconfig.Preset, string) (*toolconfig.Preset, error)
 	CheckToolDrift(string) ([]service.DriftState, error)
-	ImportToolPreset(string, string, string) (*toolconfig.Preset, error)
-	ListImportCandidates(string) ([]service.ImportCandidate, error)
 	ExportToolSnippet(int64) (toolconfig.Snippet, error)
 	GetOmoConfig() (service.OmoConfigView, error)
 	GetOpencodeLiveState() (service.OpencodeLiveState, error)
@@ -1059,6 +1060,15 @@ func (a *App) ListToolPresets(tool string) ([]toolconfig.Preset, error) {
 	return redactToolPresets(presets), err
 }
 
+func (a *App) ListToolProviders(tool string) ([]service.ToolProviderView, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	views, err := svc.ListToolProviders(tool)
+	return redactToolProviderViews(views), err
+}
+
 func (a *App) CreateToolPreset(preset toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
@@ -1085,12 +1095,29 @@ func (a *App) DeleteToolPreset(id int64) error {
 	return svc.DeleteToolPreset(id)
 }
 
-func (a *App) ApplyToolPreset(id int64, allowDrift bool) (service.ToolApplyResult, error) {
+func (a *App) EnableToolPreset(id int64) (service.ToolApplyResult, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
 		return service.ToolApplyResult{}, err
 	}
-	return svc.ApplyToolPreset(id, allowDrift)
+	return svc.EnableToolPreset(id)
+}
+
+func (a *App) DisableToolPreset(tool, providerID string) (service.ToolApplyResult, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return service.ToolApplyResult{}, err
+	}
+	return svc.DisableToolPreset(tool, providerID)
+}
+
+func (a *App) UpdateEnabledToolPreset(preset toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	p, err := svc.UpdateEnabledToolPreset(preset, plaintextKey)
+	return redactToolPreset(p), err
 }
 
 func (a *App) CheckToolDrift(tool string) ([]service.DriftState, error) {
@@ -1099,25 +1126,6 @@ func (a *App) CheckToolDrift(tool string) ([]service.DriftState, error) {
 		return nil, err
 	}
 	return svc.CheckToolDrift(tool)
-}
-
-func (a *App) ImportToolPreset(tool, providerID, name string) (*toolconfig.Preset, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return nil, err
-	}
-	p, err := svc.ImportToolPreset(tool, providerID, name)
-	return redactToolPreset(p), err
-}
-
-// ListImportCandidates enumerates provider entries in a tool's existing
-// config for batch import. The DTO is secret-free by construction.
-func (a *App) ListImportCandidates(tool string) ([]service.ImportCandidate, error) {
-	svc, err := a.toolAccess()
-	if err != nil {
-		return nil, err
-	}
-	return svc.ListImportCandidates(tool)
 }
 
 func (a *App) ExportToolSnippet(id int64) (toolconfig.Snippet, error) {
@@ -1196,6 +1204,18 @@ func redactToolPresets(presets []toolconfig.Preset) []toolconfig.Preset {
 	out := make([]toolconfig.Preset, len(presets))
 	for i := range presets {
 		out[i] = *redactToolPreset(&presets[i])
+	}
+	return out
+}
+
+func redactToolProviderViews(views []service.ToolProviderView) []service.ToolProviderView {
+	if views == nil {
+		return []service.ToolProviderView{}
+	}
+	out := make([]service.ToolProviderView, len(views))
+	for i := range views {
+		out[i] = views[i]
+		out[i].Preset = *redactToolPreset(&views[i].Preset)
 	}
 	return out
 }

@@ -11,8 +11,6 @@ export function AddProviderModels(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function ApplyOmoConfig(arg1:toolconfig.OmoChange,arg2:boolean):Promise<void>;
 
-export function ApplyToolPreset(arg1:number,arg2:boolean):Promise<service.ToolApplyResult>;
-
 export function CancelModelTest(arg1:string):Promise<boolean>;
 
 export function CheckToolDrift(arg1:string):Promise<Array<service.DriftState>>;
@@ -42,6 +40,10 @@ export function DeleteProvider(arg1:string):Promise<void>;
 export function DeleteProviderFeatureCapability(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function DeleteToolPreset(arg1:number):Promise<void>;
+
+export function DisableToolPreset(arg1:string,arg2:string):Promise<service.ToolApplyResult>;
+
+export function EnableToolPreset(arg1:number):Promise<service.ToolApplyResult>;
 
 export function EnterBackground():Promise<void>;
 
@@ -93,15 +95,11 @@ export function HideApp():Promise<void>;
 
 export function HideWindow():Promise<void>;
 
-export function ImportToolPreset(arg1:string,arg2:string,arg3:string):Promise<toolconfig.Preset>;
-
 export function IsQuitting():Promise<boolean>;
 
 export function ListAPIKeys():Promise<Array<model.ApiKey>>;
 
 export function ListEndpoints():Promise<Array<model.Endpoint>>;
-
-export function ListImportCandidates(arg1:string):Promise<Array<service.ImportCandidate>>;
 
 export function ListModelCapabilities(arg1:string,arg2:string):Promise<Array<model.ModelCapability>>;
 
@@ -116,6 +114,8 @@ export function ListProviders():Promise<Array<model.Provider>>;
 export function ListToolBackups(arg1:string):Promise<Array<service.ToolBackupInfo>>;
 
 export function ListToolPresets(arg1:string):Promise<Array<toolconfig.Preset>>;
+
+export function ListToolProviders(arg1:string):Promise<Array<service.ToolProviderView>>;
 
 export function ListToolStatuses():Promise<Array<toolconfig.ToolStatus>>;
 
@@ -192,6 +192,8 @@ export function TestModelLatency(arg1:string,arg2:string):Promise<model.ModelTes
 export function TestProvider(arg1:string):Promise<model.ProviderTestResult>;
 
 export function UpdateAPIKey(arg1:string,arg2:model.ApiKeyInput):Promise<model.ApiKey>;
+
+export function UpdateEnabledToolPreset(arg1:toolconfig.Preset,arg2:string):Promise<toolconfig.Preset>;
 
 export function UpdateModelRule(arg1:string,arg2:model.ModelRuleInput):Promise<model.ModelRule>;
 

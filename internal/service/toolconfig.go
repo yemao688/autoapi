@@ -25,6 +25,13 @@ type ToolApplyResult struct {
 	RestartHint string
 }
 
+// ToolProviderView is the UI-facing row: a preset plus its live mirror state.
+type ToolProviderView struct {
+	Preset  toolconfig.Preset
+	Enabled bool // provider currently present in the tool's config file
+	InDB    bool // false for synthesized rows that exist only in the file
+}
+
 // DriftState reports the current drift state of one managed tool resource.
 type DriftState struct {
 	Resource toolconfig.Resource
@@ -89,6 +96,7 @@ func (s *Service) ListToolStatuses() ([]toolconfig.ToolStatus, error) {
 
 // CreateToolPreset encrypts an optional plaintext key and persists a preset.
 func (s *Service) CreateToolPreset(p toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
+	normalizeToolPresetVendor(&p)
 	if plaintextKey != "" {
 		encoded, err := s.encryptToolKey(plaintextKey)
 		if err != nil {
@@ -105,6 +113,7 @@ func (s *Service) CreateToolPreset(p toolconfig.Preset, plaintextKey string) (*t
 // UpdateToolPreset updates a preset. An empty plaintext key preserves the
 // existing encrypted key.
 func (s *Service) UpdateToolPreset(p toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
+	normalizeToolPresetVendor(&p)
 	existing, err := s.store.GetToolPreset(p.ID)
 	if err != nil {
 		return nil, err
@@ -135,12 +144,119 @@ func (s *Service) GetToolPresets(tool string) ([]toolconfig.Preset, error) {
 }
 
 func (s *Service) DeleteToolPreset(id int64) error {
+	preset, err := s.store.GetToolPreset(id)
+	if err != nil {
+		return err
+	}
+	if preset == nil {
+		return fmt.Errorf("service: tool preset %d not found", id)
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	adapter, err := adapterFor(preset.Tool)
+	if err != nil {
+		return err
+	}
+	providerIDs, err := providerIDsForTool(preset.Tool, adapter, homeDir)
+	if err != nil {
+		return err
+	}
+	providerID := toolconfig.ProviderKey(*preset)
+	for _, candidate := range providerIDs {
+		if candidate == providerID {
+			return fmt.Errorf("%w: 该供应商当前已启用，请先在列表中禁用", toolconfig.ErrConflict)
+		}
+	}
 	return s.store.DeleteToolPreset(id)
 }
 
-// ApplyToolPreset plans and commits a provider preset, then persists the
-// resulting hashes and backup paths as one database operation.
-func (s *Service) ApplyToolPreset(id int64, allowDrift bool) (ToolApplyResult, error) {
+// ListToolProviders returns the live mirror of a tool config and its parked DB
+// presets. Provider entries present only on disk are synthesized as ID 0 rows.
+func (s *Service) ListToolProviders(tool string) ([]ToolProviderView, error) {
+	toolID := toolconfig.Tool(tool)
+	adapter, err := adapterFor(toolID)
+	if err != nil {
+		return nil, err
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	providerIDs, err := providerIDsForTool(toolID, adapter, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	fileProviders := make(map[string]struct{}, len(providerIDs))
+	for _, providerID := range providerIDs {
+		fileProviders[providerID] = struct{}{}
+	}
+	presets, err := s.store.ListToolPresets(tool)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]ToolProviderView, 0, len(presets)+len(providerIDs))
+	claimed := make(map[string]struct{}, len(presets))
+	for _, preset := range presets {
+		normalizeToolPresetVendor(&preset)
+		providerID := toolconfig.ProviderKey(preset)
+		_, enabled := fileProviders[providerID]
+		if enabled {
+			claimed[providerID] = struct{}{}
+		}
+		views = append(views, ToolProviderView{Preset: preset, Enabled: enabled, InDB: true})
+	}
+	for _, providerID := range providerIDs {
+		if _, exists := claimed[providerID]; exists {
+			continue
+		}
+		raw, err := adapter.ReadManagedRaw(homeDir, providerID)
+		if err != nil {
+			return nil, err
+		}
+		if !raw.Present {
+			continue
+		}
+		name := raw.Name
+		if name == "" {
+			name = providerID
+		}
+		vendor := ""
+		if toolID == toolconfig.ToolOpencode {
+			vendor = toolconfig.NormalizeVendor(raw.Vendor)
+		}
+		views = append(views, ToolProviderView{
+			Preset: toolconfig.Preset{
+				Tool:       toolID,
+				Kind:       toolconfig.PresetDirect,
+				Name:       name,
+				ProviderID: providerID,
+				Vendor:     vendor,
+				BaseURL:    raw.BaseURL,
+				Models:     raw.Models,
+				APIKeyEnc:  raw.APIKey,
+			},
+			Enabled: true,
+			InDB:    false,
+		})
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		if views[i].Enabled != views[j].Enabled {
+			return views[i].Enabled
+		}
+		leftName := strings.ToLower(views[i].Preset.Name)
+		rightName := strings.ToLower(views[j].Preset.Name)
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		return toolconfig.ProviderKey(views[i].Preset) < toolconfig.ProviderKey(views[j].Preset)
+	})
+	return views, nil
+}
+
+// EnableToolPreset writes a parked DB preset into the live tool config.
+func (s *Service) EnableToolPreset(id int64) (ToolApplyResult, error) {
 	preset, err := s.store.GetToolPreset(id)
 	if err != nil {
 		return ToolApplyResult{}, err
@@ -165,7 +281,182 @@ func (s *Service) ApplyToolPreset(id int64, allowDrift bool) (ToolApplyResult, e
 		return ToolApplyResult{}, err
 	}
 	configPath := adapter.Detect(homeDir).ConfigPath
-	return s.commitToolChangeSet(preset.Tool, changeSet, allowDrift, id, configPath)
+	return s.commitToolChangeSet(preset.Tool, changeSet, true, 0, configPath)
+}
+
+// DisableToolPreset snapshots the live provider into the DB and removes it
+// from the tool config. The DB copy remains available for a later enable.
+func (s *Service) DisableToolPreset(tool, providerID string) (ToolApplyResult, error) {
+	toolID := toolconfig.Tool(tool)
+	adapter, err := adapterFor(toolID)
+	if err != nil {
+		return ToolApplyResult{}, err
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ToolApplyResult{}, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	raw, err := adapter.ReadManagedRaw(homeDir, providerID)
+	if err != nil {
+		return ToolApplyResult{}, err
+	}
+	existingPresets, err := s.store.ListToolPresets(tool)
+	if err != nil {
+		return ToolApplyResult{}, err
+	}
+	var existing *toolconfig.Preset
+	for i := range existingPresets {
+		if toolconfig.ProviderKey(existingPresets[i]) == providerID {
+			existing = &existingPresets[i]
+			break
+		}
+	}
+	if !raw.Present {
+		if existing != nil {
+			return ToolApplyResult{Tool: tool}, nil
+		}
+		return ToolApplyResult{}, fmt.Errorf("service: managed configuration for %s is not present: %w", tool, toolconfig.ErrConfigNotFound)
+	}
+
+	if existing != nil {
+		updated := *existing
+		if raw.Name != "" {
+			updated.Name = raw.Name
+		}
+		if toolID == toolconfig.ToolOpencode {
+			updated.Vendor = toolconfig.NormalizeVendor(raw.Vendor)
+		}
+		updated.BaseURL = raw.BaseURL
+		updated.Models = raw.Models
+		if raw.APIKey != "" {
+			updated.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
+			if err != nil {
+				return ToolApplyResult{}, err
+			}
+		}
+		if err := s.store.UpdateToolPreset(&updated); err != nil {
+			return ToolApplyResult{}, err
+		}
+	} else {
+		name := raw.Name
+		if name == "" {
+			name = providerID
+		}
+		preset := toolconfig.Preset{
+			Tool:       toolID,
+			Kind:       toolconfig.PresetDirect,
+			Name:       name,
+			ProviderID: providerID,
+			BaseURL:    raw.BaseURL,
+			Models:     raw.Models,
+		}
+		if toolID == toolconfig.ToolOpencode {
+			preset.Vendor = toolconfig.NormalizeVendor(raw.Vendor)
+		}
+		if raw.APIKey != "" {
+			preset.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
+			if err != nil {
+				return ToolApplyResult{}, err
+			}
+		}
+		if err := s.store.CreateToolPreset(&preset); err != nil {
+			return ToolApplyResult{}, err
+		}
+	}
+
+	changeSet, err := adapter.PlanRemoval(homeDir, providerID)
+	if err != nil {
+		return ToolApplyResult{}, err
+	}
+	configPath := adapter.Detect(homeDir).ConfigPath
+	return s.commitToolChangeSet(toolID, changeSet, true, 0, configPath)
+}
+
+// UpdateEnabledToolPreset writes an enabled provider through to disk and then
+// reconciles its DB row. ID 0 is used for a provider that exists only on disk.
+func (s *Service) UpdateEnabledToolPreset(p toolconfig.Preset, plaintextKey string) (*toolconfig.Preset, error) {
+	toolID := p.Tool
+	adapter, err := adapterFor(toolID)
+	if err != nil {
+		return nil, err
+	}
+	if p.Kind == toolconfig.PresetAutoapi {
+		if p.ID == 0 {
+			return nil, fmt.Errorf("service: autoapi tool preset must already exist in the database")
+		}
+		if _, err := s.UpdateToolPreset(p, plaintextKey); err != nil {
+			return nil, err
+		}
+		if _, err := s.EnableToolPreset(p.ID); err != nil {
+			return nil, err
+		}
+		return s.store.GetToolPreset(p.ID)
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	var existing *toolconfig.Preset
+	if p.ID != 0 {
+		existing, err = s.store.GetToolPreset(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			return nil, fmt.Errorf("service: tool preset %d not found", p.ID)
+		}
+	}
+	var resolvedPlaintextKey string
+	if plaintextKey != "" {
+		resolvedPlaintextKey = plaintextKey
+		p.APIKeyEnc, err = s.encryptToolKey(plaintextKey)
+		if err != nil {
+			return nil, err
+		}
+	} else if existing != nil && existing.APIKeyEnc != "" {
+		resolvedPlaintextKey, err = s.decryptToolKey(existing.APIKeyEnc)
+		if err != nil {
+			return nil, err
+		}
+		p.APIKeyEnc = existing.APIKeyEnc
+	} else {
+		raw, rawErr := adapter.ReadManagedRaw(homeDir, toolconfig.ProviderKey(p))
+		if rawErr != nil {
+			return nil, rawErr
+		}
+		if raw.APIKey != "" {
+			resolvedPlaintextKey = raw.APIKey
+			p.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			p.APIKeyEnc = ""
+		}
+	}
+	normalizeToolPresetVendor(&p)
+	plaintext := toolconfig.PresetPlaintext{Preset: p, APIKey: resolvedPlaintextKey}
+	changeSet, err := adapter.Plan(plaintext, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	configPath := adapter.Detect(homeDir).ConfigPath
+	if _, err := s.commitToolChangeSet(toolID, changeSet, true, 0, configPath); err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		if err := s.store.CreateToolPreset(&p); err != nil {
+			return nil, err
+		}
+	} else {
+		if p.CreatedAt == 0 {
+			p.CreatedAt = existing.CreatedAt
+		}
+		if err := s.store.UpdateToolPreset(&p); err != nil {
+			return nil, err
+		}
+	}
+	return s.store.GetToolPreset(p.ID)
 }
 
 // CheckToolDrift returns per-resource drift details for a tool.
@@ -195,142 +486,6 @@ func (s *Service) CheckToolDrift(tool string) ([]DriftState, error) {
 		})
 	}
 	return out, nil
-}
-
-// ImportToolPreset reconstructs a direct preset from the adapter's raw,
-// plaintext managed section. The plaintext key is encrypted before storage.
-func (s *Service) ImportToolPreset(tool, providerID, name string) (*toolconfig.Preset, error) {
-	toolID := toolconfig.Tool(tool)
-	adapter, err := adapterFor(toolID)
-	if err != nil {
-		return nil, err
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	raw, err := adapter.ReadManagedRaw(homeDir, providerID)
-	if err != nil {
-		return nil, err
-	}
-	if !raw.Present {
-		return nil, fmt.Errorf("service: managed configuration for %s is not present: %w", tool, toolconfig.ErrConfigNotFound)
-	}
-	if raw.ProviderID == "" {
-		raw.ProviderID = providerID
-	}
-	preset := toolconfig.Preset{
-		Tool:       toolID,
-		Kind:       toolconfig.PresetDirect,
-		Name:       name,
-		ProviderID: raw.ProviderID,
-		BaseURL:    raw.BaseURL,
-		Models:     raw.Models,
-	}
-	if raw.APIKey != "" {
-		preset.APIKeyEnc, err = s.encryptToolKey(raw.APIKey)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := s.store.CreateToolPreset(&preset); err != nil {
-		return nil, err
-	}
-	return &preset, nil
-}
-
-// ImportCandidate describes one provider entry discovered in a tool's
-// existing on-disk config, for batch import. It is secret-free: HasKey is a
-// presence boolean and plaintext keys never leave the backend.
-type ImportCandidate struct {
-	ProviderID      string
-	BaseURL         string
-	HasKey          bool
-	Models          []string
-	AlreadyImported bool
-	SuggestedName   string
-}
-
-// ListImportCandidates enumerates the provider entries present in a tool's
-// existing config so the UI can offer batch import. opencode/codex list
-// every provider entry; claude exposes at most one candidate (its single
-// env block) under the conventional provider ID "anthropic". Entries whose
-// provider ID already belongs to a stored preset are marked AlreadyImported.
-func (s *Service) ListImportCandidates(tool string) ([]ImportCandidate, error) {
-	toolID := toolconfig.Tool(tool)
-	adapter, err := adapterFor(toolID)
-	if err != nil {
-		return nil, err
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-
-	var providerIDs []string
-	switch toolID {
-	case toolconfig.ToolOpencode:
-		providerIDs, err = toolconfig.ListOpenCodeProviderIDs(homeDir)
-	case toolconfig.ToolCodex:
-		providerIDs, err = toolconfig.ListCodexProviderIDs(homeDir)
-	case toolconfig.ToolClaude:
-		// Claude manages a single env block with no provider key; probe the
-		// conventional ID and surface at most one candidate.
-		raw, rerr := adapter.ReadManagedRaw(homeDir, "anthropic")
-		if rerr != nil {
-			return nil, rerr
-		}
-		if raw.Present {
-			providerIDs = []string{"anthropic"}
-		}
-	default:
-		return nil, fmt.Errorf("service: unsupported tool %q", tool)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if len(providerIDs) == 0 {
-		return []ImportCandidate{}, nil
-	}
-
-	existing, err := s.store.ListToolPresets(string(toolID))
-	if err != nil {
-		return nil, err
-	}
-	usedProviderIDs := make(map[string]bool, len(existing))
-	usedNames := make(map[string]bool, len(existing))
-	for _, p := range existing {
-		usedProviderIDs[p.ProviderID] = true
-		usedNames[p.Name] = true
-	}
-
-	candidates := make([]ImportCandidate, 0, len(providerIDs))
-	for _, providerID := range providerIDs {
-		raw, rerr := adapter.ReadManagedRaw(homeDir, providerID)
-		if rerr != nil {
-			return nil, rerr
-		}
-		if !raw.Present {
-			continue
-		}
-		models := make([]string, 0, len(raw.Models))
-		for _, m := range raw.Models {
-			models = append(models, m.Name)
-		}
-		suggested := providerID
-		for i := 2; usedNames[suggested]; i++ {
-			suggested = fmt.Sprintf("%s-%d", providerID, i)
-		}
-		candidates = append(candidates, ImportCandidate{
-			ProviderID:      providerID,
-			BaseURL:         raw.BaseURL,
-			HasKey:          raw.APIKey != "",
-			Models:          models,
-			AlreadyImported: usedProviderIDs[providerID],
-			SuggestedName:   suggested,
-		})
-	}
-	return candidates, nil
 }
 
 // ExportToolSnippet decrypts a preset only for the pure export renderer.
@@ -861,6 +1016,32 @@ func adapterFor(tool toolconfig.Tool) (toolconfig.Adapter, error) {
 		return toolconfig.NewCodexAdapter(), nil
 	case toolconfig.ToolClaude:
 		return toolconfig.NewClaudeAdapter(), nil
+	default:
+		return nil, fmt.Errorf("service: unsupported tool %q", tool)
+	}
+}
+
+func normalizeToolPresetVendor(p *toolconfig.Preset) {
+	if p != nil && p.Tool == toolconfig.ToolOpencode {
+		p.Vendor = toolconfig.NormalizeVendor(p.Vendor)
+	}
+}
+
+func providerIDsForTool(tool toolconfig.Tool, adapter toolconfig.Adapter, homeDir string) ([]string, error) {
+	switch tool {
+	case toolconfig.ToolOpencode:
+		return toolconfig.ListOpenCodeProviderIDs(homeDir)
+	case toolconfig.ToolCodex:
+		return toolconfig.ListCodexProviderIDs(homeDir)
+	case toolconfig.ToolClaude:
+		raw, err := adapter.ReadManagedRaw(homeDir, "anthropic")
+		if err != nil {
+			return nil, err
+		}
+		if raw.Present {
+			return []string{"anthropic"}, nil
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("service: unsupported tool %q", tool)
 	}

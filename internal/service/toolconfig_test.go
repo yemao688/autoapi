@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"autoapi/internal/model"
 	"autoapi/internal/store"
 	"autoapi/internal/toolconfig"
 )
@@ -57,7 +56,7 @@ func directTestPreset() toolconfig.Preset {
 		Kind:       toolconfig.PresetDirect,
 		Name:       "Direct Test",
 		ProviderID: "direct-test",
-		Vendor:     "@ai-sdk/openai-compatible",
+		Vendor:     toolconfig.VendorOpenAICompatible,
 		BaseURL:    "https://direct.example/v1",
 		Models: []toolconfig.PresetModel{{
 			Name:    "direct-model",
@@ -95,63 +94,49 @@ func TestGetOpencodeLiveStateReadsDisk(t *testing.T) {
 	}
 }
 
-func TestListImportCandidatesMarksExisting(t *testing.T) {
+func TestListToolProvidersMirrorsDatabaseAndFile(t *testing.T) {
 	svc, _, homeDir := newToolConfigTestService(t)
 	writeToolConfigFixture(t, homeDir, `{"provider":{
 		"acme-ai": {"options": {"baseURL": "https://acme.example/v1", "apiKey": "sk-acme"}, "models": {"m1": {}, "m2": {}}},
-		"zeta": {"options": {"baseURL": "https://zeta.example"}}
+		"zeta": {"options": {"baseURL": "https://zeta.example"}},
+		"file-only": {"name": "File Only", "options": {"baseURL": "https://file.example", "apiKey": "sk-file"}}
 	}}`)
 
-	// Occupy the acme-ai provider ID, and a preset name colliding with the
-	// zeta suggestion base to exercise the suffixing.
 	existing := directTestPreset()
 	existing.ProviderID = "acme-ai"
-	existing.Name = "zeta"
+	existing.Name = "Acme"
 	if _, err := svc.CreateToolPreset(existing, ""); err != nil {
 		t.Fatalf("CreateToolPreset: %v", err)
 	}
+	parked := directTestPreset()
+	parked.ProviderID = "parked"
+	parked.Name = "Parked"
+	if _, err := svc.CreateToolPreset(parked, ""); err != nil {
+		t.Fatalf("CreateToolPreset parked: %v", err)
+	}
 
-	candidates, err := svc.ListImportCandidates("opencode")
+	views, err := svc.ListToolProviders("opencode")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 2 {
-		t.Fatalf("candidates = %#v", candidates)
+	if len(views) != 4 {
+		t.Fatalf("views = %#v", views)
 	}
-	acme := candidates[0]
-	if acme.ProviderID != "acme-ai" || !acme.AlreadyImported || !acme.HasKey ||
-		acme.BaseURL != "https://acme.example/v1" || len(acme.Models) != 2 || acme.SuggestedName != "acme-ai" {
-		t.Fatalf("acme candidate: %+v", acme)
+	if views[0].Preset.ProviderID != "acme-ai" || !views[0].Enabled || !views[0].InDB {
+		t.Fatalf("enabled DB view: %+v", views[0])
 	}
-	zeta := candidates[1]
-	if zeta.ProviderID != "zeta" || zeta.AlreadyImported || zeta.HasKey || zeta.SuggestedName != "zeta-2" {
-		t.Fatalf("zeta candidate: %+v", zeta)
+	if views[1].Preset.ProviderID != "file-only" || !views[1].Enabled || views[1].InDB || views[1].Preset.APIKeyEnc != "sk-file" {
+		t.Fatalf("file-only view did not retain service-local key: %+v", views[1])
 	}
-
-	// Claude exposes at most one candidate under the conventional ID.
-	claudePath := toolconfig.DefaultConfigPath(toolconfig.ToolClaude, homeDir)
-	if err := os.MkdirAll(filepath.Dir(claudePath), 0o755); err != nil {
-		t.Fatal(err)
+	if views[2].Preset.ProviderID != "zeta" || !views[2].Enabled || views[2].InDB {
+		t.Fatalf("second file-only view: %+v", views[2])
 	}
-	if err := os.WriteFile(claudePath, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://c.example","ANTHROPIC_AUTH_TOKEN":"sk-c"},"model":"m"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	claudeCandidates, err := svc.ListImportCandidates("claude")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(claudeCandidates) != 1 || claudeCandidates[0].ProviderID != "anthropic" || !claudeCandidates[0].HasKey {
-		t.Fatalf("claude candidates = %#v", claudeCandidates)
-	}
-
-	// A tool with no config yields an empty list, not an error.
-	codexCandidates, err := svc.ListImportCandidates("codex")
-	if err != nil || len(codexCandidates) != 0 {
-		t.Fatalf("codex candidates = %#v, err=%v", codexCandidates, err)
+	if views[3].Preset.ProviderID != "parked" || views[3].Enabled || !views[3].InDB {
+		t.Fatalf("parked view: %+v", views[3])
 	}
 }
 
-func TestApplyToolPresetDirectPersistsFileAndState(t *testing.T) {
+func TestEnableToolPresetDirectPersistsFileAndState(t *testing.T) {
 	svc, db, homeDir := newToolConfigTestService(t)
 	configPath := writeToolConfigFixture(t, homeDir, "")
 
@@ -159,9 +144,9 @@ func TestApplyToolPresetDirectPersistsFileAndState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateToolPreset: %v", err)
 	}
-	result, err := svc.ApplyToolPreset(preset.ID, false)
+	result, err := svc.EnableToolPreset(preset.ID)
 	if err != nil {
-		t.Fatalf("ApplyToolPreset: %v", err)
+		t.Fatalf("EnableToolPreset: %v", err)
 	}
 	if result.Tool != string(toolconfig.ToolOpencode) || result.ConfigPath != configPath || len(result.BackupPaths) != 1 {
 		t.Fatalf("unexpected apply result: %+v", result)
@@ -182,7 +167,7 @@ func TestApplyToolPresetDirectPersistsFileAndState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetToolState: %v", err)
 	}
-	if state.ActivePresetID != preset.ID || state.ConfigPath != configPath || state.AppliedAt == 0 {
+	if state.ActivePresetID != 0 || state.ConfigPath != configPath || state.AppliedAt == 0 {
 		t.Fatalf("unexpected tool state: %+v", state)
 	}
 	resolvedConfigPath, err := filepath.EvalSymlinks(configPath)
@@ -198,89 +183,29 @@ func TestApplyToolPresetDirectPersistsFileAndState(t *testing.T) {
 	}
 }
 
-func TestApplyToolPresetDriftRequiresExplicitOverride(t *testing.T) {
+func TestDisableToolPresetUpsertsAndEncryptsManagedKey(t *testing.T) {
 	svc, _, homeDir := newToolConfigTestService(t)
-	configPath := writeToolConfigFixture(t, homeDir, "")
-	preset, err := svc.CreateToolPreset(directTestPreset(), "sk-drift-secret")
+	configPath := writeToolConfigFixture(t, homeDir, `{"provider":{"imported":{"npm":"@ai-sdk/openai-compatible","name":"Imported","options":{"baseURL":"https://import.example/v1","apiKey":"import-secret"},"models":{"import-model":{"name":"import-model"}}}},"model":"imported/import-model"}`)
+
+	result, err := svc.DisableToolPreset("opencode", "imported")
 	if err != nil {
-		t.Fatalf("CreateToolPreset: %v", err)
+		t.Fatalf("DisableToolPreset: %v", err)
 	}
-	if _, err := svc.ApplyToolPreset(preset.ID, false); err != nil {
-		t.Fatalf("initial ApplyToolPreset: %v", err)
-	}
-	if err := os.WriteFile(configPath, []byte(`{"provider":{},"external":true}
-`), 0o644); err != nil {
-		t.Fatalf("write drift: %v", err)
-	}
-	if _, err := svc.ApplyToolPreset(preset.ID, false); !errors.Is(err, toolconfig.ErrDrifted) {
-		t.Fatalf("expected ErrDrifted, got %v", err)
-	}
-	if _, err := svc.ApplyToolPreset(preset.ID, true); err != nil {
-		t.Fatalf("override ApplyToolPreset: %v", err)
+	if result.Tool != "opencode" {
+		t.Fatalf("unexpected result: %+v", result)
 	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		t.Fatalf("read overridden config: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"https://direct.example/v1"`) {
-		t.Fatalf("override did not apply preset: %s", data)
+	if strings.Contains(string(data), "imported") {
+		t.Fatalf("provider remained in config: %s", data)
 	}
-}
-
-func TestApplyToolPresetAutoapiValidatesKeyAndUsesRelayAddress(t *testing.T) {
-	svc, db, homeDir := newToolConfigTestService(t)
-	configPath := writeToolConfigFixture(t, homeDir, "")
-	autoapi := toolconfig.Preset{
-		Tool:     toolconfig.ToolOpencode,
-		Kind:     toolconfig.PresetAutoapi,
-		Name:     "Autoapi Test",
-		APIKeyID: "missing-key",
-		Models:   []toolconfig.PresetModel{{Name: "relay-model", Default: true}},
+	presets, err := svc.GetToolPresets("opencode")
+	if err != nil || len(presets) != 1 {
+		t.Fatalf("presets = %#v, err=%v", presets, err)
 	}
-	created, err := svc.CreateToolPreset(autoapi, "")
-	if err != nil {
-		t.Fatalf("CreateToolPreset: %v", err)
-	}
-	if _, err := svc.ApplyToolPreset(created.ID, false); err == nil || !strings.Contains(err.Error(), "请重新选择访问密钥") {
-		t.Fatalf("expected readable missing-key error, got %v", err)
-	}
-
-	key, err := db.CreateAPIKey(modelAPIKeyInput())
-	if err != nil {
-		t.Fatalf("CreateAPIKey: %v", err)
-	}
-	created.APIKeyID = key.ID
-	if _, err := svc.UpdateToolPreset(*created, ""); err != nil {
-		t.Fatalf("UpdateToolPreset: %v", err)
-	}
-	plain, err := svc.presetPlaintext(*created)
-	if err != nil {
-		t.Fatalf("presetPlaintext: %v", err)
-	}
-	if !strings.HasSuffix(plain.BaseURL, ":8344/v1") {
-		t.Fatalf("unexpected relay BaseURL: %q", plain.BaseURL)
-	}
-	if _, err := svc.ApplyToolPreset(created.ID, false); err != nil {
-		t.Fatalf("ApplyToolPreset autoapi: %v", err)
-	}
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read autoapi config: %v", err)
-	}
-	if !strings.Contains(string(data), plain.BaseURL) {
-		t.Fatalf("autoapi BaseURL missing from config: %s", data)
-	}
-}
-
-func TestImportToolPresetEncryptsManagedKey(t *testing.T) {
-	svc, _, homeDir := newToolConfigTestService(t)
-	writeToolConfigFixture(t, homeDir, `{"provider":{"imported":{"npm":"@ai-sdk/openai-compatible","name":"Imported","options":{"baseURL":"https://import.example/v1","apiKey":"import-secret"},"models":{"import-model":{"name":"import-model"}}}},"model":"imported/import-model"}
-`)
-
-	preset, err := svc.ImportToolPreset(string(toolconfig.ToolOpencode), "imported", "Imported Preset")
-	if err != nil {
-		t.Fatalf("ImportToolPreset: %v", err)
-	}
+	preset := presets[0]
 	if preset.APIKeyEnc == "" {
 		t.Fatal("expected encrypted API key")
 	}
@@ -290,6 +215,58 @@ func TestImportToolPresetEncryptsManagedKey(t *testing.T) {
 	}
 	if plaintext != "import-secret" {
 		t.Fatalf("decrypted imported key = %q", plaintext)
+	}
+}
+
+func TestUpdateEnabledToolPresetSynthesizedPreservesOnFileKey(t *testing.T) {
+	svc, db, homeDir := newToolConfigTestService(t)
+	configPath := writeToolConfigFixture(t, homeDir, `{"provider":{"file-only":{"name":"File Only","options":{"baseURL":"https://file.example","apiKey":"on-file-secret"}}}}`)
+	views, err := svc.ListToolProviders("opencode")
+	if err != nil || len(views) != 1 || views[0].InDB {
+		t.Fatalf("initial mirror = %#v, err=%v", views, err)
+	}
+	updated := views[0].Preset
+	updated.Name = "Edited File Provider"
+	updated.BaseURL = "https://edited.example"
+	stored, err := svc.UpdateEnabledToolPreset(updated, "")
+	if err != nil {
+		t.Fatalf("UpdateEnabledToolPreset: %v", err)
+	}
+	if stored == nil || stored.ID == 0 {
+		t.Fatalf("synthesized row was not created: %+v", stored)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "on-file-secret") || !strings.Contains(string(content), "edited.example") {
+		t.Fatalf("write-through lost existing key or update: %s", content)
+	}
+	persisted, err := db.GetToolPreset(stored.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := svc.decryptToolKey(persisted.APIKeyEnc)
+	if err != nil || key != "on-file-secret" {
+		t.Fatalf("persisted key = %q, err=%v", key, err)
+	}
+}
+
+func TestDeleteToolPresetRejectsEnabledProvider(t *testing.T) {
+	svc, _, homeDir := newToolConfigTestService(t)
+	writeToolConfigFixture(t, homeDir, `{"provider":{"direct-test":{"options":{"baseURL":"https://live.example"}}}}`)
+	preset, err := svc.CreateToolPreset(directTestPreset(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteToolPreset(preset.ID); !errors.Is(err, toolconfig.ErrConflict) || !strings.Contains(err.Error(), "请先在列表中禁用") {
+		t.Fatalf("enabled delete error = %v", err)
+	}
+	if _, err := svc.DisableToolPreset("opencode", "direct-test"); err != nil {
+		t.Fatalf("DisableToolPreset: %v", err)
+	}
+	if err := svc.DeleteToolPreset(preset.ID); err != nil {
+		t.Fatalf("delete parked preset: %v", err)
 	}
 }
 
@@ -304,9 +281,9 @@ func TestRestoreToolBackupRestoresPreviousContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateToolPreset: %v", err)
 	}
-	result, err := svc.ApplyToolPreset(preset.ID, false)
+	result, err := svc.EnableToolPreset(preset.ID)
 	if err != nil {
-		t.Fatalf("ApplyToolPreset: %v", err)
+		t.Fatalf("EnableToolPreset: %v", err)
 	}
 	if len(result.BackupPaths) != 1 {
 		t.Fatalf("expected one backup, got %+v", result.BackupPaths)
@@ -325,8 +302,4 @@ func TestRestoreToolBackupRestoresPreviousContent(t *testing.T) {
 	if string(restored) != string(original) {
 		t.Fatalf("restored content mismatch: got=%q want=%q", restored, original)
 	}
-}
-
-func modelAPIKeyInput() model.ApiKeyInput {
-	return model.ApiKeyInput{Name: "tool-access-test-key"}
 }

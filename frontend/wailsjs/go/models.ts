@@ -1701,28 +1701,6 @@ export namespace service {
 	        this.Missing = source["Missing"];
 	    }
 	}
-	export class ImportCandidate {
-	    ProviderID: string;
-	    BaseURL: string;
-	    HasKey: boolean;
-	    Models: string[];
-	    AlreadyImported: boolean;
-	    SuggestedName: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImportCandidate(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ProviderID = source["ProviderID"];
-	        this.BaseURL = source["BaseURL"];
-	        this.HasKey = source["HasKey"];
-	        this.Models = source["Models"];
-	        this.AlreadyImported = source["AlreadyImported"];
-	        this.SuggestedName = source["SuggestedName"];
-	    }
-	}
 	export class OmoConfigView {
 	    Path: string;
 	    ActivePreset: string;
@@ -1848,6 +1826,40 @@ export namespace service {
 	        this.Resource = source["Resource"];
 	        this.Path = source["Path"];
 	        this.ModTime = this.convertValues(source["ModTime"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolProviderView {
+	    Preset: toolconfig.Preset;
+	    Enabled: boolean;
+	    InDB: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolProviderView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Preset = this.convertValues(source["Preset"], toolconfig.Preset);
+	        this.Enabled = source["Enabled"];
+	        this.InDB = source["InDB"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

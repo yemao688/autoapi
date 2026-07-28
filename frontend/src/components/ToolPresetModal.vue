@@ -6,14 +6,17 @@ import { useToast } from '@/composables/useToast'
 import { toolconfig } from '../../wailsjs/go/models'
 import type { model } from '../../wailsjs/go/models'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   open: boolean
   tool: string
   preset: toolconfig.Preset | null
+  enabled?: boolean
   apiKeys: model.ApiKey[]
   modelRules: model.ModelRule[]
   supportingLoading?: boolean
-}>()
+}>(), {
+  enabled: false,
+})
 
 const emit = defineEmits<{
   close: []
@@ -46,6 +49,7 @@ type ModelRow = {
 
 const modelRows = ref<ModelRow[]>([])
 const editing = computed(() => !!props.preset)
+const editingEnabled = computed(() => editing.value && props.enabled)
 const toolLabel = computed(() => t(`toolAccess.tools.${props.tool}`))
 const storedKeyHint = computed(() => editing.value && !!props.preset?.APIKeyEnc)
 const valid = computed(() => {
@@ -97,7 +101,7 @@ function reset() {
   kind.value = preset?.Kind === 'autoapi' ? 'autoapi' : 'direct'
   name.value = preset?.Name || ''
   providerID.value = preset?.ProviderID || ''
-  vendor.value = preset?.Vendor || ''
+  vendor.value = preset?.Vendor || 'openai-compatible'
   baseURL.value = preset?.BaseURL || ''
   apiKeyID.value = preset?.APIKeyID || ''
   plaintextKey.value = ''
@@ -174,9 +178,9 @@ function buildPayload(): toolconfig.Preset {
     Kind: kind.value,
     Name: name.value.trim(),
     ProviderID: providerID.value.trim(),
-    Vendor: vendor.value.trim(),
+    Vendor: props.tool === 'opencode' && kind.value === 'direct' ? vendor.value.trim() : props.preset?.Vendor || '',
     BaseURL: baseURL.value.trim(),
-    APIKeyEnc: props.preset?.APIKeyEnc || '',
+    APIKeyEnc: props.preset?.APIKeyEnc && props.preset.APIKeyEnc !== '********' ? props.preset.APIKeyEnc : '',
     APIKeyID: kind.value === 'autoapi' ? apiKeyID.value : '',
     Models: models,
     Extra: props.preset?.Extra || {},
@@ -192,7 +196,8 @@ async function save() {
   const generation = modalGeneration.value
   try {
     const payload = buildPayload()
-    if (editing.value) await api.updateToolPreset(payload, plaintextKey.value)
+    if (editingEnabled.value) await api.updateEnabledToolPreset(payload, plaintextKey.value)
+    else if (editing.value) await api.updateToolPreset(payload, plaintextKey.value)
     else await api.createToolPreset(payload, plaintextKey.value)
     if (generation !== modalGeneration.value) return
     toast.push(t('toolAccess.toast.presetSaved'), 'success')
@@ -242,7 +247,8 @@ watch(() => props.open, (open) => {
           </div>
           <div class="field">
             <label class="field-label">{{ t('toolAccess.preset.providerID') }}</label>
-            <input v-model="providerID" class="input mono" :placeholder="t('toolAccess.preset.providerIDPlaceholder')">
+            <input v-model="providerID" class="input mono" :disabled="editingEnabled" :placeholder="t('toolAccess.preset.providerIDPlaceholder')">
+            <div v-if="editingEnabled" class="field-help">{{ t('toolAccess.preset.providerIDLocked') }}</div>
           </div>
         </div>
 
@@ -252,10 +258,16 @@ watch(() => props.open, (open) => {
               <label class="field-label">{{ t('toolAccess.preset.baseURL') }}</label>
               <input v-model="baseURL" class="input mono" :placeholder="t('toolAccess.preset.baseURLPlaceholder')">
             </div>
-            <div class="field">
+            <div v-if="tool === 'opencode'" class="field">
               <label class="field-label">{{ t('toolAccess.preset.vendor') }}</label>
-              <input v-model="vendor" class="input" :placeholder="t('toolAccess.preset.vendorPlaceholder')">
-              <div class="field-help">{{ t('toolAccess.preset.vendorHelp') }}</div>
+              <select v-model="vendor" class="select">
+                <option value="openai-responses">{{ t('toolAccess.vendors.openai-responses') }}</option>
+                <option value="openai-compatible">{{ t('toolAccess.vendors.openai-compatible') }}</option>
+                <option value="anthropic">{{ t('toolAccess.vendors.anthropic') }}</option>
+                <option value="amazon-bedrock">{{ t('toolAccess.vendors.amazon-bedrock') }}</option>
+                <option value="google-gemini">{{ t('toolAccess.vendors.google-gemini') }}</option>
+              </select>
+              <div class="field-help">{{ t('toolAccess.preset.vendorHelp.' + (vendor || 'openai-compatible')) }}</div>
             </div>
           </div>
           <div class="field">
