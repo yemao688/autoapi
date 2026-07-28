@@ -1727,11 +1727,16 @@ export namespace service {
 	    Path: string;
 	    ActivePreset: string;
 	    Agents: Record<string, toolconfig.OmoAgent>;
+	    CustomAgents: Record<string, toolconfig.OmoCustomAgent>;
 	    DisabledAgents: string[];
+	    DisabledSkills: string[];
+	    DisabledMcps: string[];
 	    KnownPresets: string[];
 	    ValidModels: string[];
 	    AvailableVariants: string[];
 	    PresetAgents: Record<string, any>;
+	    KnownSkills: string[];
+	    KnownMcps: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new OmoConfigView(source);
@@ -1742,11 +1747,16 @@ export namespace service {
 	        this.Path = source["Path"];
 	        this.ActivePreset = source["ActivePreset"];
 	        this.Agents = this.convertValues(source["Agents"], toolconfig.OmoAgent, true);
+	        this.CustomAgents = this.convertValues(source["CustomAgents"], toolconfig.OmoCustomAgent, true);
 	        this.DisabledAgents = source["DisabledAgents"];
+	        this.DisabledSkills = source["DisabledSkills"];
+	        this.DisabledMcps = source["DisabledMcps"];
 	        this.KnownPresets = source["KnownPresets"];
 	        this.ValidModels = source["ValidModels"];
 	        this.AvailableVariants = source["AvailableVariants"];
 	        this.PresetAgents = source["PresetAgents"];
+	        this.KnownSkills = source["KnownSkills"];
+	        this.KnownMcps = source["KnownMcps"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1766,6 +1776,22 @@ export namespace service {
 		    }
 		    return a;
 		}
+	}
+	export class OmoPreview {
+	    Path: string;
+	    Before: string;
+	    After: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Path = source["Path"];
+	        this.Before = source["Before"];
+	        this.After = source["After"];
+	    }
 	}
 	export class OpencodeLiveState {
 	    Model: string;
@@ -1862,8 +1888,11 @@ export namespace toolconfig {
 	    }
 	}
 	export class OmoAgent {
-	    Model: string;
-	    Variant: string;
+	    model: string;
+	    variant: string;
+	    displayName: string;
+	    skills?: string[];
+	    mcps?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new OmoAgent(source);
@@ -1871,14 +1900,44 @@ export namespace toolconfig {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.Model = source["Model"];
-	        this.Variant = source["Variant"];
+	        this.model = source["model"];
+	        this.variant = source["variant"];
+	        this.displayName = source["displayName"];
+	        this.skills = source["skills"];
+	        this.mcps = source["mcps"];
+	    }
+	}
+	export class OmoCustomAgent {
+	    model: string;
+	    variant: string;
+	    displayName: string;
+	    skills?: string[];
+	    mcps?: string[];
+	    prompt: string;
+	    orchestratorPrompt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoCustomAgent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.variant = source["variant"];
+	        this.displayName = source["displayName"];
+	        this.skills = source["skills"];
+	        this.mcps = source["mcps"];
+	        this.prompt = source["prompt"];
+	        this.orchestratorPrompt = source["orchestratorPrompt"];
 	    }
 	}
 	export class OmoChange {
 	    ActivePreset?: string;
 	    Agents: Record<string, OmoAgent>;
+	    CustomAgents: Record<string, OmoCustomAgent>;
 	    DisabledAgents: string[];
+	    DisabledSkills: string[];
+	    DisabledMcps: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new OmoChange(source);
@@ -1888,7 +1947,10 @@ export namespace toolconfig {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ActivePreset = source["ActivePreset"];
 	        this.Agents = this.convertValues(source["Agents"], OmoAgent, true);
+	        this.CustomAgents = this.convertValues(source["CustomAgents"], OmoCustomAgent, true);
 	        this.DisabledAgents = source["DisabledAgents"];
+	        this.DisabledSkills = source["DisabledSkills"];
+	        this.DisabledMcps = source["DisabledMcps"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1909,6 +1971,7 @@ export namespace toolconfig {
 		    return a;
 		}
 	}
+	
 	export class PresetVariant {
 	    reasoningEffort?: string;
 	    reasoningSummary?: string;

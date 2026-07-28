@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -16,8 +17,10 @@ const omoFixture = `{
       "orchestrator": {
         "model": "autoapi-compatible/old-model",
         "variant": "slow",
+        "displayName": "chief",
         "skills": ["keep-skill"],
-        "mcps": {"keep": true}
+        "mcps": ["keep-mcp"],
+        "temperature": 0.5
       },
       "oracle": {
         "model": "autoapi-compatible/oracle-model",
@@ -39,10 +42,16 @@ const omoFixture = `{
     "custom": {
       "model": "autoapi-compatible/custom-model",
       "variant": "custom",
-      "prompt": "keep prompt"
+      "displayName": "helper",
+      "skills": ["simplify"],
+      "mcps": ["*"],
+      "prompt": "keep prompt",
+      "orchestratorPrompt": "@custom\n- route things"
     }
   },
-  "disabled_agents": ["observer"]
+  "disabled_agents": ["observer"],
+  "disabled_skills": ["codemap"],
+  "disabled_mcps": ["context7"]
 }
 `
 
@@ -86,14 +95,46 @@ func TestReadOmoConfigRoundTripProjection(t *testing.T) {
 	if config.Path != resolvedPath || config.ActivePreset != "balanced" {
 		t.Fatalf("unexpected config identity: %+v", config)
 	}
-	if config.Agents["orchestrator"] != (OmoAgent{Model: "autoapi-compatible/old-model", Variant: "slow"}) {
+	wantOrchestrator := OmoAgent{
+		Model:       "autoapi-compatible/old-model",
+		Variant:     "slow",
+		DisplayName: "chief",
+		Skills:      []string{"keep-skill"},
+		Mcps:        []string{"keep-mcp"},
+	}
+	if !reflect.DeepEqual(config.Agents["orchestrator"], wantOrchestrator) {
 		t.Fatalf("built-in agent not read: %+v", config.Agents["orchestrator"])
 	}
-	if config.Agents["custom"] != (OmoAgent{Model: "autoapi-compatible/custom-model", Variant: "custom"}) {
+	wantCustom := OmoAgent{
+		Model:       "autoapi-compatible/custom-model",
+		Variant:     "custom",
+		DisplayName: "helper",
+		Skills:      []string{"simplify"},
+		Mcps:        []string{"*"},
+	}
+	if !reflect.DeepEqual(config.Agents["custom"], wantCustom) {
 		t.Fatalf("custom agent not read: %+v", config.Agents["custom"])
+	}
+	wantCustomFull := OmoCustomAgent{
+		Model:              "autoapi-compatible/custom-model",
+		Variant:            "custom",
+		DisplayName:        "helper",
+		Skills:             []string{"simplify"},
+		Mcps:               []string{"*"},
+		Prompt:             "keep prompt",
+		OrchestratorPrompt: "@custom\n- route things",
+	}
+	if !reflect.DeepEqual(config.CustomAgents["custom"], wantCustomFull) {
+		t.Fatalf("custom agent full record not read: %+v", config.CustomAgents["custom"])
 	}
 	if len(config.DisabledAgents) != 1 || config.DisabledAgents[0] != "observer" {
 		t.Fatalf("disabled agents = %#v", config.DisabledAgents)
+	}
+	if len(config.DisabledSkills) != 1 || config.DisabledSkills[0] != "codemap" {
+		t.Fatalf("disabled skills = %#v", config.DisabledSkills)
+	}
+	if len(config.DisabledMcps) != 1 || config.DisabledMcps[0] != "context7" {
+		t.Fatalf("disabled mcps = %#v", config.DisabledMcps)
 	}
 }
 
@@ -116,7 +157,17 @@ func TestPlanOmoChangePreservesJSONCAndChecksOpencode(t *testing.T) {
 	changeSet, err := PlanOmoChange(home, OmoChange{
 		Agents: map[string]OmoAgent{
 			"orchestrator": {Model: "autoapi-compatible/kimi-k3", Variant: "balanced"},
-			"custom":       {Model: "autoapi-compatible/kimi-k3", Variant: "fast"},
+		},
+		CustomAgents: map[string]OmoCustomAgent{
+			"custom": {
+				Model:              "autoapi-compatible/kimi-k3",
+				Variant:            "fast",
+				DisplayName:        "helper",
+				Skills:             []string{"simplify"},
+				Mcps:               []string{"*"},
+				Prompt:             "keep prompt",
+				OrchestratorPrompt: "@custom\n- route things",
+			},
 		},
 		DisabledAgents: []string{"observer", "council"},
 	}, []string{"autoapi-compatible/kimi-k3"})
@@ -143,11 +194,26 @@ func TestPlanOmoChangePreservesJSONCAndChecksOpencode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Agents["orchestrator"] != (OmoAgent{Model: "autoapi-compatible/kimi-k3", Variant: "balanced"}) {
+	wantOrchestrator := OmoAgent{
+		Model:   "autoapi-compatible/kimi-k3",
+		Variant: "balanced",
+		// DisplayName was not included in the change payload: empty string
+		// means "clear the override", so the leaf is deleted. Nil Skills/Mcps
+		// leave those leaves untouched.
+		Skills: []string{"keep-skill"},
+		Mcps:   []string{"keep-mcp"},
+	}
+	if !reflect.DeepEqual(config.Agents["orchestrator"], wantOrchestrator) {
 		t.Fatalf("built-in patch not committed: %+v", config.Agents["orchestrator"])
 	}
-	if config.Agents["custom"] != (OmoAgent{Model: "autoapi-compatible/kimi-k3", Variant: "fast"}) {
-		t.Fatalf("custom patch not committed: %+v", config.Agents["custom"])
+	if !strings.Contains(string(changeSet.Changes[0].After), `"temperature": 0.5`) {
+		t.Fatal("unmanaged temperature leaf was dropped from rendered output")
+	}
+	if got := config.Agents["custom"]; got.Model != "autoapi-compatible/kimi-k3" || got.Variant != "fast" || got.DisplayName != "helper" {
+		t.Fatalf("custom patch not committed: %+v", got)
+	}
+	if got := config.CustomAgents["custom"]; got.Prompt != "keep prompt" || got.OrchestratorPrompt != "@custom\n- route things" {
+		t.Fatalf("custom prompt leaves not committed: %+v", got)
 	}
 	if len(config.DisabledAgents) != 2 || config.DisabledAgents[1] != "council" {
 		t.Fatalf("disabled agent patch not committed: %#v", config.DisabledAgents)
@@ -197,6 +263,191 @@ func TestPlanOmoChangeReportsAllMissingModels(t *testing.T) {
 		if !strings.Contains(err.Error(), reference) {
 			t.Errorf("error %q omitted %q", err, reference)
 		}
+	}
+}
+
+func TestPlanOmoChangeWritesAgentArraysAndClearsLeaves(t *testing.T) {
+	home, omoPath := writeOmoFixture(t)
+	changeSet, err := PlanOmoChange(home, OmoChange{
+		Agents: map[string]OmoAgent{
+			"orchestrator": {
+				Model:       "autoapi-compatible/kimi-k3",
+				Variant:     "", // clear the variant leaf
+				DisplayName: "", // clear the displayName leaf
+				Skills:      []string{"*", "!codemap"},
+				Mcps:        []string{},
+			},
+		},
+	}, []string{"autoapi-compatible/kimi-k3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ReadOmoConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := OmoAgent{
+		Model:  "autoapi-compatible/kimi-k3",
+		Skills: []string{"*", "!codemap"},
+		Mcps:   []string{},
+	}
+	if !reflect.DeepEqual(config.Agents["orchestrator"], want) {
+		t.Fatalf("agent leaves not written as expected: %+v", config.Agents["orchestrator"])
+	}
+	committed, err := os.ReadFile(omoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(committed), `"variant": "slow"`) || strings.Contains(string(committed), `"chief"`) {
+		t.Fatal("cleared leaves still present in committed output")
+	}
+	if !strings.Contains(string(committed), `"temperature": 0.5`) {
+		t.Fatal("unmanaged temperature leaf was dropped")
+	}
+}
+
+func TestPlanOmoChangeCustomAgentsReplaceDropsStaleAndPreservesBuiltIn(t *testing.T) {
+	home, omoPath := writeOmoFixture(t)
+	// Add a built-in override under agents; the replace must preserve it.
+	raw, err := os.ReadFile(omoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(raw), `"agents": {`, "\"agents\": {\n    \"oracle\": {\"displayName\": \"advisor\"},", 1)
+	if err := os.WriteFile(omoPath, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changeSet, err := PlanOmoChange(home, OmoChange{
+		CustomAgents: map[string]OmoCustomAgent{
+			"database": {
+				Model:              "autoapi-compatible/kimi-k3",
+				DisplayName:        "db",
+				Prompt:             "You are a database specialist.",
+				OrchestratorPrompt: "@database\n- Delegate SQL work.",
+			},
+		},
+	}, []string{"autoapi-compatible/kimi-k3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ReadOmoConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, stale := config.CustomAgents["custom"]; stale {
+		t.Fatal("stale custom agent survived the replace")
+	}
+	if got := config.CustomAgents["database"]; got.Model != "autoapi-compatible/kimi-k3" || got.DisplayName != "db" || got.Prompt == "" {
+		t.Fatalf("new custom agent not written: %+v", got)
+	}
+	committed, err := os.ReadFile(omoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(committed), `"advisor"`) {
+		t.Fatal("built-in override under agents was dropped by the replace")
+	}
+}
+
+func TestValidateOmoCustomAgentsRules(t *testing.T) {
+	valid := []string{"autoapi-compatible/kimi-k3"}
+	cases := []struct {
+		name   string
+		agents map[string]OmoCustomAgent
+		want   string
+	}{
+		{
+			name:   "built-in name rejected",
+			agents: map[string]OmoCustomAgent{"oracle": {Model: "autoapi-compatible/kimi-k3"}},
+			want:   "built-in",
+		},
+		{
+			name:   "unknown model rejected",
+			agents: map[string]OmoCustomAgent{"custom": {Model: "nope"}},
+			want:   "custom=nope",
+		},
+		{
+			name:   "display name collides with built-in",
+			agents: map[string]OmoCustomAgent{"custom": {DisplayName: "oracle"}},
+			want:   "collides with a built-in",
+		},
+		{
+			name: "display name duplicated",
+			agents: map[string]OmoCustomAgent{
+				"a": {DisplayName: "helper"},
+				"b": {DisplayName: "helper"},
+			},
+			want: "used by both",
+		},
+		{
+			name:   "orchestratorPrompt must self-mention",
+			agents: map[string]OmoCustomAgent{"custom": {OrchestratorPrompt: "do things"}},
+			want:   "must start with @custom",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home, _ := writeOmoFixture(t)
+			_, err := PlanOmoChange(home, OmoChange{CustomAgents: tc.agents}, valid)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestListKnownSkills(t *testing.T) {
+	home := t.TempDir()
+	for _, rel := range []string{
+		filepath.Join(".config", "opencode", "skills", "simplify"),
+		filepath.Join(".agents", "skills", "vitest"),
+	} {
+		if err := os.MkdirAll(filepath.Join(home, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skills, err := ListKnownSkills(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(skills, []string{"simplify", "vitest"}) {
+		t.Fatalf("skills = %#v", skills)
+	}
+	if got, err := ListKnownSkills(t.TempDir()); err != nil || len(got) != 0 {
+		t.Fatalf("missing dirs must yield an empty list, got %#v, %v", got, err)
+	}
+}
+
+func TestListMcpNamesIncludesBundledAndConfigured(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"mcp": {"dbx": {}, "agent-browser": {}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	names, err := ListMcpNames(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"agent-browser", "context7", "dbx", "gh_grep", "websearch"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("mcp names = %#v, want %#v", names, want)
+	}
+	// A missing config still yields the bundled set.
+	missing, err := ListMcpNames(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(missing, []string{"context7", "gh_grep", "websearch"}) {
+		t.Fatalf("bundled-only mcp names = %#v", missing)
 	}
 }
 

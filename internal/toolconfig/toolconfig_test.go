@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -619,10 +620,16 @@ func TestListOmoPresetAgentsProjectsEveryPreset(t *testing.T) {
 	if len(projection) != 2 {
 		t.Fatalf("ListOmoPresetAgents = %#v", projection)
 	}
-	if got := projection["balanced"]["orchestrator"]; got != (OmoAgent{Model: "autoapi-compatible/old-model", Variant: "slow"}) {
+	if got := projection["balanced"]["orchestrator"]; !reflect.DeepEqual(got, OmoAgent{
+		Model:       "autoapi-compatible/old-model",
+		Variant:     "slow",
+		DisplayName: "chief",
+		Skills:      []string{"keep-skill"},
+		Mcps:        []string{"keep-mcp"},
+	}) {
 		t.Fatalf("balanced orchestrator = %+v", got)
 	}
-	if got := projection["fast"]["oracle"]; got != (OmoAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
+	if got := projection["fast"]["oracle"]; !reflect.DeepEqual(got, OmoAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
 		t.Fatalf("fast oracle = %+v", got)
 	}
 	if _, ok := projection["balanced"]["custom"]; ok {

@@ -127,6 +127,8 @@ export function OpenStorageFolder():Promise<void>;
 
 export function PingLogEvent():Promise<void>;
 
+export function PreviewToolOmoChange(arg1:toolconfig.OmoChange):Promise<service.OmoPreview>;
+
 export function ProbeUpstreamMonitorModel(arg1:model.UpstreamMonitorSelection):Promise<model.UpstreamMonitorResult>;
 
 export function ProbeUpstreamMonitorModels(arg1:Array<model.UpstreamMonitorSelection>):Promise<model.UpstreamMonitorBatch>;

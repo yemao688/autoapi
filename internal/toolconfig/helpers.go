@@ -271,6 +271,22 @@ func findUniqueObjectMember(object *hujson.Object, name string) (int, error) {
 	return indexes[0], nil
 }
 
+// deleteObjectMember removes every member with the given name from an object.
+// Callers must have established key uniqueness beforehand (requireUniqueKeys),
+// so in practice at most one member is removed.
+func deleteObjectMember(object *hujson.Object, name string) {
+	if object == nil {
+		return
+	}
+	kept := object.Members[:0]
+	for _, member := range object.Members {
+		if memberName(member) != name {
+			kept = append(kept, member)
+		}
+	}
+	object.Members = kept
+}
+
 func objectMemberValue(object *hujson.Object, name string) *hujson.Value {
 	if object == nil {
 		return nil
