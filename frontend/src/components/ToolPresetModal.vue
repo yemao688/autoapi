@@ -12,6 +12,7 @@ const props = defineProps<{
   preset: toolconfig.Preset | null
   apiKeys: model.ApiKey[]
   modelRules: model.ModelRule[]
+  supportingLoading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -107,12 +108,23 @@ function reset() {
 
 function onKindChange() {
   if (kind.value === 'autoapi' && !modelRows.value.some((row) => row.name.trim())) {
-    modelRows.value = props.modelRules.filter((rule) => rule.enabled).map((rule, index) => ({
-      ...emptyRow(rule.name),
-      isDefault: index === 0,
-    }))
+    const named = props.modelRules.filter((rule) => rule.enabled)
+    modelRows.value = named.length
+      ? named.map((rule, index) => ({ ...emptyRow(rule.name), isDefault: index === 0 }))
+      : [emptyRow()]
   }
 }
+
+// Model rules can arrive after the modal opens (they load in the
+// background); backfill the autoapi rows once they do, but never overwrite
+// anything the user already typed.
+watch(() => props.modelRules, (rules) => {
+  if (props.preset || kind.value !== 'autoapi') return
+  if (modelRows.value.some((row) => row.name.trim())) return
+  const named = (rules || []).filter((rule) => rule.enabled)
+  if (!named.length) return
+  modelRows.value = named.map((rule, index) => ({ ...emptyRow(rule.name), isDefault: index === 0 }))
+})
 
 function addModel() {
   modelRows.value.push(emptyRow())
@@ -255,11 +267,11 @@ watch(() => props.open, (open) => {
         <template v-else>
           <div class="field">
             <label class="field-label">{{ t('toolAccess.preset.apiKeySelector') }}</label>
-            <select v-model="apiKeyID" class="select">
+            <select v-model="apiKeyID" class="select" :disabled="supportingLoading">
               <option value="" disabled>{{ t('toolAccess.preset.apiKeyPlaceholder') }}</option>
               <option v-for="key in apiKeys" :key="key.id" :value="key.id">{{ key.name }}</option>
             </select>
-            <div class="field-help">{{ t('toolAccess.preset.apiKeyHelp') }}</div>
+            <div class="field-help">{{ supportingLoading ? t('toolAccess.preset.loadingSupporting') : t('toolAccess.preset.apiKeyHelp') }}</div>
           </div>
         </template>
 

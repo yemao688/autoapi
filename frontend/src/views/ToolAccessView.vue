@@ -104,24 +104,29 @@ async function refresh() {
   }
 }
 
+const supportingLoading = ref(false)
+
 async function loadSupportingData() {
+  supportingLoading.value = true
   try {
     const [keys, rules] = await Promise.all([api.apiKeys(), api.modelRules()])
-    apiKeys.value = keys
-    modelRules.value = rules
+    apiKeys.value = keys || []
+    modelRules.value = rules || []
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
+  } finally {
+    supportingLoading.value = false
   }
 }
 
 async function openPreset(tool: ToolName, preset: toolconfig.Preset | null = null) {
+  // Open the modal immediately — ListModelRules can take seconds, and
+  // awaiting it before opening looked like a dead button (no feedback).
   modalGeneration.value++
-  const generation = modalGeneration.value
   editingPreset.value = preset
   presetModalTool.value = tool
-  await loadSupportingData()
-  if (generation !== modalGeneration.value) return
   presetModalOpen.value = true
+  void loadSupportingData()
 }
 
 function closePresetModal() {
@@ -406,7 +411,7 @@ onMounted(() => {
     </div>
   </div>
 
-  <ToolPresetModal :open="presetModalOpen" :tool="presetModalTool" :preset="editingPreset" :api-keys="apiKeys" :model-rules="modelRules" @close="closePresetModal" @saved="closePresetModal(); refresh()" />
+  <ToolPresetModal :open="presetModalOpen" :tool="presetModalTool" :preset="editingPreset" :api-keys="apiKeys" :model-rules="modelRules" :supporting-loading="supportingLoading" @close="closePresetModal" @saved="closePresetModal(); refresh()" />
   <OmoModal :open="omoOpen" @close="omoOpen = false" @applied="refresh" />
 
   <Teleport to="body">
