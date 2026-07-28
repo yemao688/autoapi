@@ -186,6 +186,10 @@ export const api = {
     ensureWails()
     return wails.GetOpencodeLiveState() as Promise<service.OpencodeLiveState>
   },
+  previewToolOmoChange: (change: toolconfig.OmoChange): Promise<service.OmoPreview> => {
+    ensureWails()
+    return wails.PreviewToolOmoChange(change) as Promise<service.OmoPreview>
+  },
   applyOmoConfig: (change: toolconfig.OmoChange, allowDrift: boolean): Promise<void> => {
     ensureWails()
     return wails.ApplyOmoConfig(change, allowDrift) as Promise<void>
