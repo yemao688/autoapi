@@ -188,6 +188,7 @@ type toolAccessService interface {
 	GetOmoConfig() (service.OmoConfigView, error)
 	GetOpencodeLiveState() (service.OpencodeLiveState, error)
 	ApplyOmoConfig(toolconfig.OmoChange, bool) error
+	PreviewToolOmoChange(toolconfig.OmoChange) (service.OmoPreview, error)
 	ListToolBackups(string) ([]service.ToolBackupInfo, error)
 	RestoreToolBackup(string, string, string) error
 }
@@ -1149,6 +1150,16 @@ func (a *App) ApplyOmoConfig(change toolconfig.OmoChange, allowDrift bool) error
 		return err
 	}
 	return svc.ApplyOmoConfig(change, allowDrift)
+}
+
+// PreviewToolOmoChange renders the OMO file content a change would produce
+// without writing anything, powering the confirm-before-write preview modal.
+func (a *App) PreviewToolOmoChange(change toolconfig.OmoChange) (service.OmoPreview, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return service.OmoPreview{}, err
+	}
+	return svc.PreviewToolOmoChange(change)
 }
 
 func (a *App) ListToolBackups(tool string) ([]service.ToolBackupInfo, error) {

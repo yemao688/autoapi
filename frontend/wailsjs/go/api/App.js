@@ -242,6 +242,10 @@ export function PingLogEvent() {
   return window['go']['api']['App']['PingLogEvent']();
 }
 
+export function PreviewToolOmoChange(arg1) {
+  return window['go']['api']['App']['PreviewToolOmoChange'](arg1);
+}
+
 export function ProbeUpstreamMonitorModel(arg1) {
   return window['go']['api']['App']['ProbeUpstreamMonitorModel'](arg1);
 }

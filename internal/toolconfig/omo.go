@@ -3,6 +3,7 @@ package toolconfig
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -10,10 +11,43 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-// OmoAgent is the managed projection of one OMO agent.
+// omoBuiltinAgents are the agent names OMO ships with. They may be overridden
+// per preset (presets.<preset>.<name>) or at the top level (agents.<name>);
+// any other name under agents is a custom agent definition.
+var omoBuiltinAgents = map[string]bool{
+	"orchestrator": true,
+	"oracle":       true,
+	"librarian":    true,
+	"explorer":     true,
+	"designer":     true,
+	"fixer":        true,
+	"observer":     true,
+	"council":      true,
+}
+
+// OmoAgent is the managed projection of one preset-level agent override.
+// Empty string fields mean "no override" (the leaf is deleted on write);
+// nil Skills/Mcps mean the leaf is left untouched, while a non-nil slice
+// (including an empty one) replaces it.
 type OmoAgent struct {
-	Model   string
-	Variant string
+	Model       string   `json:"model"`
+	Variant     string   `json:"variant"`
+	DisplayName string   `json:"displayName"`
+	Skills      []string `json:"skills,omitempty"`
+	Mcps        []string `json:"mcps,omitempty"`
+}
+
+// OmoCustomAgent is a full custom agent definition from the top-level agents
+// object. Only custom agents may carry prompt/orchestratorPrompt; built-in
+// prompt overrides live in markdown files OMO manages itself.
+type OmoCustomAgent struct {
+	Model              string   `json:"model"`
+	Variant            string   `json:"variant"`
+	DisplayName        string   `json:"displayName"`
+	Skills             []string `json:"skills,omitempty"`
+	Mcps               []string `json:"mcps,omitempty"`
+	Prompt             string   `json:"prompt"`
+	OrchestratorPrompt string   `json:"orchestratorPrompt"`
 }
 
 // OmoConfig is the managed projection of an oh-my-opencode-slim config.
@@ -21,15 +55,24 @@ type OmoConfig struct {
 	Path           string
 	ActivePreset   string
 	Agents         map[string]OmoAgent
+	CustomAgents   map[string]OmoCustomAgent
 	DisabledAgents []string
+	DisabledSkills []string
+	DisabledMcps   []string
 }
 
-// OmoChange uses set semantics for agent leaves and whole-leaf replacement for
-// disabled_agents. A nil DisabledAgents means that leaf is left untouched.
+// OmoChange uses per-field leaf semantics: agents listed in Agents are
+// upserted into the target preset (empty strings delete that leaf, nil
+// Skills/Mcps leave it untouched), CustomAgents fully replaces the set of
+// custom agent definitions when non-nil, and each Disabled* leaf is replaced
+// only when non-nil.
 type OmoChange struct {
 	ActivePreset   *string
 	Agents         map[string]OmoAgent
+	CustomAgents   map[string]OmoCustomAgent
 	DisabledAgents []string
+	DisabledSkills []string
+	DisabledMcps   []string
 }
 
 // DetectOmoConfig returns the preferred OMO config path without creating it.
@@ -132,6 +175,11 @@ func PlanOmoChange(homeDir string, ch OmoChange, validModels []string) (*ChangeS
 	if err := validateOmoModels(ch.Agents, validModels); err != nil {
 		return nil, err
 	}
+	if ch.CustomAgents != nil {
+		if err := validateOmoCustomAgents(ch.CustomAgents, validModels); err != nil {
+			return nil, err
+		}
+	}
 	if ch.ActivePreset != nil && strings.TrimSpace(*ch.ActivePreset) == "" {
 		return nil, fmt.Errorf("%w: active OMO preset is empty", ErrInvalidPreset)
 	}
@@ -167,45 +215,34 @@ func PlanOmoChange(homeDir string, ch OmoChange, validModels []string) (*ChangeS
 		return nil, omoShape("preset %q is missing", targetPreset)
 	}
 
-	var custom *hujson.Object
-	if value := objectMemberValue(root, "agents"); value != nil {
-		custom, _, err = omoObjectMember(root, "agents", true)
-		if err != nil {
-			return nil, err
-		}
-	} else if len(ch.Agents) > 0 {
-		custom = &hujson.Object{}
-		if err := setObjectMember(root, "agents", hujson.Value{Value: custom}); err != nil {
-			return nil, err
-		}
-	}
-
 	for _, name := range sortedOmoAgentNames(ch.Agents) {
-		agent := ch.Agents[name]
-		parent := target
-		if custom != nil && objectMemberValue(custom, name) != nil {
-			parent = custom
-		} else if objectMemberValue(target, name) == nil {
-			parent = custom
-			if parent == nil {
-				custom = &hujson.Object{}
-				if err := setObjectMember(root, "agents", hujson.Value{Value: custom}); err != nil {
-					return nil, err
-				}
-				parent = custom
-			}
-		}
-		if err := setOmoAgent(parent, name, agent); err != nil {
+		if err := setOmoAgent(target, name, ch.Agents[name]); err != nil {
 			return nil, err
 		}
 	}
 
-	if ch.DisabledAgents != nil {
-		value, err := jsonValue(ch.DisabledAgents)
+	if ch.CustomAgents != nil {
+		if err := writeOmoCustomAgents(root, ch.CustomAgents); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, leaf := range []struct {
+		name  string
+		value []string
+	}{
+		{"disabled_agents", ch.DisabledAgents},
+		{"disabled_skills", ch.DisabledSkills},
+		{"disabled_mcps", ch.DisabledMcps},
+	} {
+		if leaf.value == nil {
+			continue
+		}
+		value, err := jsonValue(leaf.value)
 		if err != nil {
 			return nil, err
 		}
-		if err := setObjectMember(root, "disabled_agents", value); err != nil {
+		if err := setObjectMember(root, leaf.name, value); err != nil {
 			return nil, err
 		}
 	}
@@ -244,7 +281,7 @@ func readOmoDocument(homeDir string) (string, []byte, hujson.Value, *hujson.Obje
 	if err != nil {
 		return "", nil, hujson.Value{}, nil, fmt.Errorf("parse OMO config: %w", err)
 	}
-	if err := requireUniqueKeys(root, "preset", "presets", "agents", "disabled_agents"); err != nil {
+	if err := requireUniqueKeys(root, "preset", "presets", "agents", "disabled_agents", "disabled_skills", "disabled_mcps"); err != nil {
 		return "", nil, hujson.Value{}, nil, err
 	}
 	return resolved, before, doc, root, nil
@@ -277,27 +314,45 @@ func readOmoConfigRoot(root *hujson.Object) (OmoConfig, error) {
 	for name, agent := range builtIn {
 		agents[name] = agent
 	}
+	customAgents := map[string]OmoCustomAgent{}
 	if value := objectMemberValue(root, "agents"); value != nil {
 		custom, _, err := omoObjectMember(root, "agents", true)
 		if err != nil {
 			return OmoConfig{}, err
 		}
-		customAgents, err := readOmoAgents(custom, "agents")
+		customAgents, err = readOmoCustomAgents(custom, "agents")
 		if err != nil {
 			return OmoConfig{}, err
 		}
-		for name, agent := range customAgents {
-			agents[name] = agent
+		for name, customAgent := range customAgents {
+			agents[name] = OmoAgent{
+				Model:       customAgent.Model,
+				Variant:     customAgent.Variant,
+				DisplayName: customAgent.DisplayName,
+				Skills:      customAgent.Skills,
+				Mcps:        customAgent.Mcps,
+			}
 		}
 	}
-	disabled, err := readOmoDisabledAgents(root)
+	disabled, err := readOmoStringArray(root, "disabled_agents")
+	if err != nil {
+		return OmoConfig{}, err
+	}
+	disabledSkills, err := readOmoStringArray(root, "disabled_skills")
+	if err != nil {
+		return OmoConfig{}, err
+	}
+	disabledMcps, err := readOmoStringArray(root, "disabled_mcps")
 	if err != nil {
 		return OmoConfig{}, err
 	}
 	return OmoConfig{
 		ActivePreset:   activePreset,
 		Agents:         agents,
+		CustomAgents:   customAgents,
 		DisabledAgents: disabled,
+		DisabledSkills: disabledSkills,
+		DisabledMcps:   disabledMcps,
 	}, nil
 }
 
@@ -341,6 +396,36 @@ func omoStringMember(object *hujson.Object, name string) (string, bool, error) {
 	return literal.String(), true, nil
 }
 
+// readOmoAgentFields reads the shared agent override leaves from one agent
+// object. Unknown leaves (temperature, options, permission, ...) are ignored
+// but preserved by the leaf-level write path.
+func readOmoAgentFields(agent *hujson.Object, path string) (OmoAgent, error) {
+	if err := requireUniqueKeys(agent, "model", "variant", "displayName", "skills", "mcps", "prompt", "orchestratorPrompt"); err != nil {
+		return OmoAgent{}, err
+	}
+	model, _, err := omoStringMember(agent, "model")
+	if err != nil {
+		return OmoAgent{}, fmt.Errorf("%s: %w", path, err)
+	}
+	variant, _, err := omoStringMember(agent, "variant")
+	if err != nil {
+		return OmoAgent{}, fmt.Errorf("%s: %w", path, err)
+	}
+	displayName, _, err := omoStringMember(agent, "displayName")
+	if err != nil {
+		return OmoAgent{}, fmt.Errorf("%s: %w", path, err)
+	}
+	skills, err := readOmoStringArray(agent, "skills")
+	if err != nil {
+		return OmoAgent{}, fmt.Errorf("%s: %w", path, err)
+	}
+	mcps, err := readOmoStringArray(agent, "mcps")
+	if err != nil {
+		return OmoAgent{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return OmoAgent{Model: model, Variant: variant, DisplayName: displayName, Skills: skills, Mcps: mcps}, nil
+}
+
 func readOmoAgents(object *hujson.Object, path string) (map[string]OmoAgent, error) {
 	if object == nil {
 		return map[string]OmoAgent{}, nil
@@ -352,36 +437,75 @@ func readOmoAgents(object *hujson.Object, path string) (map[string]OmoAgent, err
 		if !ok {
 			return nil, omoShape("%s.%s is not an object", path, name)
 		}
-		if err := requireUniqueKeys(agent, "model", "variant"); err != nil {
+		fields, err := readOmoAgentFields(agent, path+"."+name)
+		if err != nil {
 			return nil, err
 		}
-		model, _, err := omoStringMember(agent, "model")
-		if err != nil {
-			return nil, fmt.Errorf("%s.%s: %w", path, name, err)
-		}
-		variant, _, err := omoStringMember(agent, "variant")
-		if err != nil {
-			return nil, fmt.Errorf("%s.%s: %w", path, name, err)
-		}
-		result[name] = OmoAgent{Model: model, Variant: variant}
+		result[name] = fields
 	}
 	return result, nil
 }
 
-func readOmoDisabledAgents(root *hujson.Object) ([]string, error) {
-	value := objectMemberValue(root, "disabled_agents")
+// readOmoCustomAgents reads the top-level agents object, splitting custom
+// definitions (full fields) from built-in overrides (shared fields only;
+// prompt/orchestratorPrompt are not supported for built-ins in JSON).
+func readOmoCustomAgents(object *hujson.Object, path string) (map[string]OmoCustomAgent, error) {
+	if object == nil {
+		return map[string]OmoCustomAgent{}, nil
+	}
+	result := make(map[string]OmoCustomAgent, len(object.Members))
+	for _, member := range object.Members {
+		name := memberName(member)
+		if omoBuiltinAgents[name] {
+			// Built-in overrides under agents are not managed here; the
+			// write path preserves them untouched.
+			continue
+		}
+		agent, ok := member.Value.Value.(*hujson.Object)
+		if !ok {
+			return nil, omoShape("%s.%s is not an object", path, name)
+		}
+		fields, err := readOmoAgentFields(agent, path+"."+name)
+		if err != nil {
+			return nil, err
+		}
+		prompt, _, err := omoStringMember(agent, "prompt")
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", path, name, err)
+		}
+		orchestratorPrompt, _, err := omoStringMember(agent, "orchestratorPrompt")
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", path, name, err)
+		}
+		result[name] = OmoCustomAgent{
+			Model:              fields.Model,
+			Variant:            fields.Variant,
+			DisplayName:        fields.DisplayName,
+			Skills:             fields.Skills,
+			Mcps:               fields.Mcps,
+			Prompt:             prompt,
+			OrchestratorPrompt: orchestratorPrompt,
+		}
+	}
+	return result, nil
+}
+
+// readOmoStringArray reads a string-array leaf from an object. A missing leaf
+// yields nil; a present non-array or non-string element fails closed.
+func readOmoStringArray(object *hujson.Object, name string) ([]string, error) {
+	value := objectMemberValue(object, name)
 	if value == nil {
 		return nil, nil
 	}
 	array, ok := value.Value.(*hujson.Array)
 	if !ok {
-		return nil, omoShape("disabled_agents is not an array")
+		return nil, omoShape("%s is not an array", name)
 	}
 	result := make([]string, 0, len(array.Elements))
 	for _, element := range array.Elements {
 		literal, ok := element.Value.(hujson.Literal)
 		if !ok || literal.Kind() != hujson.Kind('"') {
-			return nil, omoShape("disabled_agents contains a non-string value")
+			return nil, omoShape("%s contains a non-string value", name)
 		}
 		result = append(result, literal.String())
 	}
@@ -426,6 +550,10 @@ func setOmoString(object *hujson.Object, name, value string) error {
 	return setObjectMember(object, name, literal)
 }
 
+// setOmoAgent upserts one preset-level agent override. Empty string fields
+// delete the corresponding leaf ("no override"); nil Skills/Mcps leave that
+// leaf untouched, a non-nil slice replaces it. Unknown leaves (temperature,
+// options, permission, prompt, ...) are preserved.
 func setOmoAgent(parent *hujson.Object, name string, agent OmoAgent) error {
 	agentObject, present, err := requireObjectMember(parent, name)
 	if err != nil {
@@ -437,13 +565,198 @@ func setOmoAgent(parent *hujson.Object, name string, agent OmoAgent) error {
 			return err
 		}
 	}
-	if err := requireUniqueKeys(agentObject, "model", "variant"); err != nil {
+	if err := requireUniqueKeys(agentObject, "model", "variant", "displayName", "skills", "mcps"); err != nil {
 		return err
 	}
-	if err := setOmoString(agentObject, "model", agent.Model); err != nil {
-		return err
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"model", agent.Model},
+		{"variant", agent.Variant},
+		{"displayName", agent.DisplayName},
+	} {
+		if field.value == "" {
+			deleteObjectMember(agentObject, field.name)
+			continue
+		}
+		if err := setOmoString(agentObject, field.name, field.value); err != nil {
+			return err
+		}
 	}
-	return setOmoString(agentObject, "variant", agent.Variant)
+	for _, field := range []struct {
+		name  string
+		value []string
+	}{
+		{"skills", agent.Skills},
+		{"mcps", agent.Mcps},
+	} {
+		if field.value == nil {
+			continue
+		}
+		array, err := jsonValue(field.value)
+		if err != nil {
+			return err
+		}
+		if err := setObjectMember(agentObject, field.name, array); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeOmoCustomAgents replaces the set of custom agent definitions under the
+// top-level agents object. Built-in overrides already present are preserved
+// untouched; every other existing entry is removed first.
+func writeOmoCustomAgents(root *hujson.Object, agents map[string]OmoCustomAgent) error {
+	var custom *hujson.Object
+	if value := objectMemberValue(root, "agents"); value != nil {
+		var err error
+		custom, _, err = omoObjectMember(root, "agents", true)
+		if err != nil {
+			return err
+		}
+		stale := make([]string, 0, len(custom.Members))
+		for _, member := range custom.Members {
+			if name := memberName(member); !omoBuiltinAgents[name] {
+				stale = append(stale, name)
+			}
+		}
+		for _, name := range stale {
+			deleteObjectMember(custom, name)
+		}
+	} else if len(agents) > 0 {
+		custom = &hujson.Object{}
+		if err := setObjectMember(root, "agents", hujson.Value{Value: custom}); err != nil {
+			return err
+		}
+	}
+	if custom == nil {
+		return nil
+	}
+	for _, name := range sortedOmoCustomAgentNames(agents) {
+		agent := agents[name]
+		agentObject := &hujson.Object{}
+		if err := setObjectMember(custom, name, hujson.Value{Value: agentObject}); err != nil {
+			return err
+		}
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{"model", agent.Model},
+			{"variant", agent.Variant},
+			{"displayName", agent.DisplayName},
+			{"prompt", agent.Prompt},
+			{"orchestratorPrompt", agent.OrchestratorPrompt},
+		} {
+			if field.value == "" {
+				continue
+			}
+			if err := setOmoString(agentObject, field.name, field.value); err != nil {
+				return err
+			}
+		}
+		for _, field := range []struct {
+			name  string
+			value []string
+		}{
+			{"skills", agent.Skills},
+			{"mcps", agent.Mcps},
+		} {
+			if field.value == nil {
+				continue
+			}
+			array, err := jsonValue(field.value)
+			if err != nil {
+				return err
+			}
+			if err := setObjectMember(agentObject, field.name, array); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateOmoCustomAgents enforces the schema rules for custom agent
+// definitions: non-empty non-built-in names, known models, display names that
+// are unique and collide with neither built-in nor custom agent names, and an
+// orchestratorPrompt that begins with the agent's own @mention.
+func validateOmoCustomAgents(agents map[string]OmoCustomAgent, validModels []string) error {
+	valid := make(map[string]struct{}, len(validModels))
+	for _, model := range validModels {
+		valid[model] = struct{}{}
+	}
+	displayNames := make(map[string]string, len(agents))
+	for _, name := range sortedOmoCustomAgentNames(agents) {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%w: custom agent name is empty", ErrInvalidPreset)
+		}
+		if omoBuiltinAgents[name] {
+			return fmt.Errorf("%w: %q is a built-in agent and cannot be redefined", ErrInvalidPreset, name)
+		}
+		agent := agents[name]
+		if agent.Model != "" {
+			if _, ok := valid[agent.Model]; !ok {
+				return fmt.Errorf("%w: missing OMO model references: %s=%s", ErrInvalidPreset, name, agent.Model)
+			}
+		}
+		if agent.DisplayName != "" {
+			if omoBuiltinAgents[agent.DisplayName] {
+				return fmt.Errorf("%w: display name %q collides with a built-in agent", ErrInvalidPreset, agent.DisplayName)
+			}
+			if _, exists := agents[agent.DisplayName]; exists {
+				return fmt.Errorf("%w: display name %q collides with custom agent %q", ErrInvalidPreset, agent.DisplayName, agent.DisplayName)
+			}
+			if other, taken := displayNames[agent.DisplayName]; taken {
+				return fmt.Errorf("%w: display name %q used by both %q and %q", ErrInvalidPreset, agent.DisplayName, other, name)
+			}
+			displayNames[agent.DisplayName] = name
+		}
+		if agent.OrchestratorPrompt != "" && !strings.HasPrefix(agent.OrchestratorPrompt, "@"+name) {
+			return fmt.Errorf("%w: orchestratorPrompt for %q must start with @%s", ErrInvalidPreset, name, name)
+		}
+	}
+	return nil
+}
+
+func sortedOmoCustomAgentNames(agents map[string]OmoCustomAgent) []string {
+	names := make([]string, 0, len(agents))
+	for name := range agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ListKnownSkills enumerates installed OpenCode skills from the two standard
+// skill directories (~/.config/opencode/skills and ~/.agents/skills), giving
+// the UI closed-list candidates for agent skills arrays. Missing directories
+// are tolerated.
+func ListKnownSkills(homeDir string) ([]string, error) {
+	homeDir = absoluteHomeDir(homeDir)
+	seen := map[string]bool{}
+	for _, rel := range []string{
+		filepath.Join(".config", "opencode", "skills"),
+		filepath.Join(".agents", "skills"),
+	} {
+		entries, err := os.ReadDir(filepath.Join(homeDir, rel))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				seen[entry.Name()] = true
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for name := range seen {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func omoOpenCodeChecks(homeDir string) ([]FileCheck, error) {

@@ -360,11 +360,16 @@ type OmoConfigView struct {
 	Path              string
 	ActivePreset      string
 	Agents            map[string]toolconfig.OmoAgent
+	CustomAgents      map[string]toolconfig.OmoCustomAgent
 	DisabledAgents    []string
+	DisabledSkills    []string
+	DisabledMcps      []string
 	KnownPresets      []string
 	ValidModels       []string
 	AvailableVariants []string
 	PresetAgents      map[string]map[string]toolconfig.OmoAgent
+	KnownSkills       []string
+	KnownMcps         []string
 }
 
 func (s *Service) GetOmoConfig() (OmoConfigView, error) {
@@ -392,15 +397,63 @@ func (s *Service) GetOmoConfig() (OmoConfigView, error) {
 	if err != nil {
 		return OmoConfigView{}, err
 	}
+	knownSkills, err := toolconfig.ListKnownSkills(homeDir)
+	if err != nil {
+		return OmoConfigView{}, err
+	}
+	knownMcps, err := toolconfig.ListMcpNames(homeDir)
+	if err != nil {
+		return OmoConfigView{}, err
+	}
 	return OmoConfigView{
 		Path:              config.Path,
 		ActivePreset:      config.ActivePreset,
 		Agents:            config.Agents,
+		CustomAgents:      config.CustomAgents,
 		DisabledAgents:    config.DisabledAgents,
+		DisabledSkills:    config.DisabledSkills,
+		DisabledMcps:      config.DisabledMcps,
 		KnownPresets:      knownPresets,
 		ValidModels:       validModels,
 		AvailableVariants: variants,
 		PresetAgents:      presetAgents,
+		KnownSkills:       knownSkills,
+		KnownMcps:         knownMcps,
+	}, nil
+}
+
+// OmoPreview renders the result of an OMO change without writing anything, so
+// the UI can show the exact file content before the user confirms a write.
+type OmoPreview struct {
+	Path   string
+	Before string
+	After  string
+}
+
+// PreviewToolOmoChange plans an OMO change and returns the resulting file
+// content. Nothing is written and no drift state is touched.
+func (s *Service) PreviewToolOmoChange(ch toolconfig.OmoChange) (OmoPreview, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return OmoPreview{}, fmt.Errorf("service: resolve home dir: %w", err)
+	}
+	validModels, err := toolconfig.ListProviderModels(homeDir)
+	if err != nil {
+		return OmoPreview{}, err
+	}
+	changeSet, err := toolconfig.PlanOmoChange(homeDir, ch, validModels)
+	if err != nil {
+		return OmoPreview{}, err
+	}
+	if len(changeSet.Changes) == 0 {
+		return OmoPreview{}, fmt.Errorf("service: OMO plan produced no changes")
+	}
+	change := changeSet.Changes[0]
+	before, _ := os.ReadFile(change.Path)
+	return OmoPreview{
+		Path:   change.Path,
+		Before: string(before),
+		After:  string(change.After),
 	}, nil
 }
 

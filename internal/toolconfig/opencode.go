@@ -418,6 +418,41 @@ func parseJSONBytes(data []byte) (hujson.Value, error) {
 // OMO cross-file validation (agent model references must exist somewhere in
 // opencode.json). A missing config yields an empty list, not an error; the
 // adapter's Plan path still fails closed on non-object shapes when applying.
+// ListMcpNames returns the sorted names of MCP servers declared under the
+// top-level "mcp" object of the opencode config, plus the MCP servers OMO
+// bundles itself (websearch, context7, gh_grep). It powers closed-list
+// candidates for agent mcps arrays. A missing config yields the bundled set.
+func ListMcpNames(homeDir string) ([]string, error) {
+	seen := map[string]bool{
+		"websearch": true,
+		"context7":  true,
+		"gh_grep":   true,
+	}
+	doc, err := readJSONDocument(resolvedOpenCodePath(homeDir))
+	if err != nil {
+		return nil, err
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, err
+	}
+	if mcps := objectMemberValue(root, "mcp"); mcps != nil {
+		object, ok := mcps.Value.(*hujson.Object)
+		if !ok {
+			return nil, fmt.Errorf("managed JSON key %q is not an object: %w", "mcp", ErrUnsafeShape)
+		}
+		for _, member := range object.Members {
+			seen[memberName(member)] = true
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for name := range seen {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
 func ListProviderModels(homeDir string) ([]string, error) {
 	doc, err := readJSONDocument(resolvedOpenCodePath(homeDir))
 	if err != nil {
