@@ -108,6 +108,12 @@ function reset() {
   modelRows.value = rowsFromPreset(preset)
   modalGeneration.value++
   mutationBusy.value = false
+  saving.value = false
+}
+
+function close() {
+  if (saving.value) return
+  emit('close')
 }
 
 function onKindChange() {
@@ -219,14 +225,14 @@ watch(() => props.open, (open) => {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="modal-overlay" @click.self="emit('close')">
+    <div v-if="open" class="modal-overlay" @click.self="close">
       <div class="modal-card wide modal-card-scroll tool-preset-modal">
         <div class="row-between modal-heading">
           <div>
             <div class="modal-title">{{ editing ? t('toolAccess.preset.edit') : t('toolAccess.preset.create') }}</div>
             <div class="section-sub">{{ t('toolAccess.preset.toolHint', { tool: toolLabel }) }}</div>
           </div>
-          <button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="emit('close')">
+          <button class="btn btn-icon" :disabled="saving" :title="t('common.close')" :aria-label="t('common.close')" @click="close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
         </div>
@@ -338,7 +344,7 @@ watch(() => props.open, (open) => {
 
         <div v-if="!valid" class="tool-validation" role="alert">{{ t('toolAccess.preset.validation') }}</div>
         <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 4px;">
-          <button class="btn btn-secondary" @click="emit('close')">{{ t('common.cancel') }}</button>
+          <button class="btn btn-secondary" :disabled="saving" @click="close">{{ t('common.cancel') }}</button>
           <button class="btn btn-primary" :disabled="saving || !valid" @click="save">{{ saving ? t('common.processing') : t('common.save') }}</button>
         </div>
       </div>

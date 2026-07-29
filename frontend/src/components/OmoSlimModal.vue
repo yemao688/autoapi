@@ -48,12 +48,17 @@ type PresetEntry = {
 }
 type Section = 'agent' | 'custom' | 'global'
 type GlobalKind = 'agents' | 'skills' | 'mcps'
+type PresetAgentDraft = {
+  agents: Record<string, AgentDraft>
+  dirtyAgents: Set<string>
+}
 
 const builtInNames = ['orchestrator', 'oracle', 'librarian', 'explorer', 'designer', 'fixer', 'observer', 'council']
 
 const loading = ref(false)
 const previewLoading = ref(false)
 const saving = ref(false)
+const modalGeneration = ref(0)
 const error = ref('')
 const path = ref('')
 const activePreset = ref('')
@@ -64,6 +69,7 @@ const variants = ref<string[]>([])
 const knownSkills = ref<string[]>([])
 const knownMcps = ref<string[]>([])
 const agents = ref<Record<string, AgentDraft>>({})
+const presetDrafts = ref<Record<string, PresetAgentDraft>>({})
 const customAgents = ref<CustomDraft[]>([])
 const presetAgents = ref<Projection>({})
 const disabledAgents = ref<string[]>([])
@@ -101,7 +107,7 @@ const presetEntries = computed<PresetEntry[]>(() => {
       const previous = entries.get(op.Name)
       entries.set(op.Name, {
         name: op.Name,
-        agents: op.Agents || {},
+        agents: { ...(previous?.agents || {}), ...(op.Agents || {}) },
         isNew: previous ? previous.isNew : !knownPresets.value.includes(op.Name),
         upsertIndex: index,
       })
@@ -180,20 +186,59 @@ function clonePresetAgents(source: Record<string, ProjectionAgent> | undefined):
   })]))
 }
 
+function cloneAgentDraft(agent: AgentDraft): AgentDraft {
+  return {
+    model: agent.model,
+    variant: agent.variant,
+    displayName: agent.displayName,
+    skills: { mode: agent.skills.mode, items: [...agent.skills.items] },
+    mcps: { mode: agent.mcps.mode, items: [...agent.mcps.items] },
+  }
+}
+
+function cloneAgentDrafts(source: Record<string, AgentDraft>): Record<string, AgentDraft> {
+  return Object.fromEntries(Object.entries(source).map(([name, agent]) => [name, cloneAgentDraft(agent)]))
+}
+
+function changedPresetAgents(draft: PresetAgentDraft) {
+  return Object.fromEntries([...draft.dirtyAgents].flatMap((name) => {
+    const agent = draft.agents[name]
+    return agent ? [[name, draftToAgent(agent)] as const] : []
+  }))
+}
+
 function entryForPreset(name: string) {
   return presetEntries.value.find((entry) => entry.name === name)
 }
 
+function createPresetAgentDraft(name: string, source?: Record<string, ProjectionAgent>): PresetAgentDraft {
+  const projection = source || presetAgents.value[name] || {}
+  return {
+    agents: Object.fromEntries(builtInNames.map((agentName) => [agentName, makeAgent(projection[agentName])])),
+    dirtyAgents: new Set(),
+  }
+}
+
+function ensurePresetAgentDraft(name: string, source?: Record<string, ProjectionAgent>) {
+  const existing = presetDrafts.value[name]
+  if (existing) return existing
+  const created = createPresetAgentDraft(name, source)
+  presetDrafts.value[name] = created
+  return created
+}
+
+function activatePresetAgentDraft(name: string, source?: Record<string, ProjectionAgent>) {
+  const draft = ensurePresetAgentDraft(name, source)
+  agents.value = cloneAgentDrafts(draft.agents)
+  dirtyAgents.value = new Set(draft.dirtyAgents)
+}
+
 function stagedPresetAgents(name: string) {
   const entry = entryForPreset(name)
-  const cloned = clonePresetAgents(entry?.agents)
-  if (name === activePreset.value && dirtyAgents.value.size) {
-    for (const agentName of dirtyAgents.value) {
-      const agent = agents.value[agentName]
-      if (agent) cloned[agentName] = draftToAgent(agent)
-    }
-  }
-  return cloned
+  const draft = presetDrafts.value[name]
+  const staged = clonePresetAgents(entry?.agents)
+  if (draft) Object.assign(staged, changedPresetAgents(draft))
+  return staged
 }
 
 function stageUpsert(name: string, source: Record<string, ProjectionAgent>) {
@@ -207,7 +252,8 @@ function stageUpsert(name: string, source: Record<string, ProjectionAgent>) {
     }
   }
   const next = [...presetOps.value]
-  const operation: PresetOpDraft = { Operation: 'upsert', Name: name, Agents: agentsForPreset }
+  const previousAgents = currentIndex >= 0 ? next[currentIndex].Agents || {} : {}
+  const operation: PresetOpDraft = { Operation: 'upsert', Name: name, Agents: { ...previousAgents, ...agentsForPreset } }
   if (currentIndex >= 0) next[currentIndex] = operation
   else next.push(operation)
   presetOps.value = next
@@ -233,13 +279,15 @@ function uniquePresetName(base: string) {
 }
 
 function selectPreset(name: string) {
+  if (activePreset.value) {
+    const draft = ensurePresetAgentDraft(activePreset.value)
+    draft.agents = cloneAgentDrafts(agents.value)
+    draft.dirtyAgents = new Set(dirtyAgents.value)
+  }
   activePreset.value = name
   selectedSection.value = 'agent'
   const entry = entryForPreset(name)
-  if (entry?.isNew) {
-    agents.value = Object.fromEntries(builtInNames.map((agentName) => [agentName, makeAgent(entry.agents[agentName])]))
-    dirtyAgents.value = new Set()
-  }
+  activatePresetAgentDraft(name, entry?.agents)
 }
 
 function startRename(name: string) {
@@ -272,8 +320,23 @@ function commitRename() {
     return
   }
 
+  if (activePreset.value === oldName) {
+    const draft = ensurePresetAgentDraft(oldName)
+    draft.agents = cloneAgentDrafts(agents.value)
+    draft.dirtyAgents = new Set(dirtyAgents.value)
+  }
   presetOps.value = [...presetOps.value, { Operation: 'rename', Name: oldName, NewName: newName }]
-  if (activePreset.value === oldName) activePreset.value = newName
+  const draft = presetDrafts.value[oldName]
+  if (draft) {
+    const nextDrafts = { ...presetDrafts.value }
+    delete nextDrafts[oldName]
+    nextDrafts[newName] = draft
+    presetDrafts.value = nextDrafts
+  }
+  if (activePreset.value === oldName) {
+    activePreset.value = newName
+    activatePresetAgentDraft(newName)
+  }
   cancelRename()
 }
 
@@ -285,9 +348,9 @@ function addPreset() {
     name = t('toolAccess.omoSlim.presetDefaultName', { index })
   }
   stageUpsert(name, {})
+  presetDrafts.value[name] = createPresetAgentDraft(name, {})
   activePreset.value = name
-  agents.value = Object.fromEntries(builtInNames.map((agentName) => [agentName, makeAgent()]))
-  dirtyAgents.value = new Set()
+  activatePresetAgentDraft(name)
   selectedSection.value = 'agent'
   startRename(name)
 }
@@ -296,9 +359,9 @@ function duplicatePreset(name: string) {
   const source = stagedPresetAgents(name)
   const copyName = uniquePresetName(`${name}${t('toolAccess.omoSlim.presetCopySuffix')}`)
   stageUpsert(copyName, source)
+  presetDrafts.value[copyName] = createPresetAgentDraft(copyName, source)
   activePreset.value = copyName
-  agents.value = Object.fromEntries(builtInNames.map((agentName) => [agentName, makeAgent(source[agentName])]))
-  dirtyAgents.value = new Set()
+  activatePresetAgentDraft(copyName)
   selectedSection.value = 'agent'
 }
 
@@ -343,12 +406,13 @@ function isAgentDisabled(name: string) {
 }
 
 function markAgentDirty(name: string) {
-  if (entryForPreset(activePreset.value)?.isNew) {
-    dirtyAgents.value = new Set(dirtyAgents.value).add(name)
-    syncNewPresetAgents()
-    return
-  }
-  dirtyAgents.value = new Set(dirtyAgents.value).add(name)
+  const nextDirty = new Set(dirtyAgents.value).add(name)
+  dirtyAgents.value = nextDirty
+  const draft = ensurePresetAgentDraft(activePreset.value)
+  draft.agents = cloneAgentDrafts(agents.value)
+  draft.dirtyAgents = nextDirty
+  if (entryForPreset(activePreset.value)?.isNew) syncNewPresetAgents()
+  else stageUpsert(activePreset.value, changedPresetAgents(draft))
 }
 
 function markCustomDirty() {
@@ -402,9 +466,18 @@ async function load() {
     variants.value = config.AvailableVariants || []
     knownSkills.value = config.KnownSkills || []
     knownMcps.value = config.KnownMcps || []
-    agents.value = Object.fromEntries(builtInNames.map((name) => [name, makeAgent(config.Agents?.[name])]))
     customAgents.value = Object.entries(config.CustomAgents || {}).map(([name, agent]) => makeCustom(name, agent))
     presetAgents.value = (config.PresetAgents || {}) as Projection
+    presetDrafts.value = Object.fromEntries(knownPresets.value.map((name) => [name, createPresetAgentDraft(name)]))
+    const initialAgents = Object.fromEntries(builtInNames.map((name) => [name, makeAgent(config.Agents?.[name])]))
+    if (activePreset.value) {
+      presetDrafts.value[activePreset.value] = { agents: cloneAgentDrafts(initialAgents), dirtyAgents: new Set() }
+      agents.value = cloneAgentDrafts(initialAgents)
+      dirtyAgents.value = new Set()
+    } else {
+      agents.value = initialAgents
+      dirtyAgents.value = new Set()
+    }
     disabledAgents.value = [...(config.DisabledAgents || [])]
     disabledSkills.value = [...(config.DisabledSkills || [])]
     disabledMcps.value = [...(config.DisabledMcps || [])]
@@ -508,7 +581,7 @@ function buildChange() {
 }
 
 async function previewChange() {
-  if (previewLoading.value || loading.value) return
+  if (previewLoading.value || loading.value || saving.value) return
   previewLoading.value = true
   try {
     pendingChange.value = buildChange()
@@ -524,16 +597,20 @@ async function previewChange() {
 async function confirmWrite(allowDrift = false) {
   const change = pendingChange.value
   if (!change || saving.value) return
+  const generation = modalGeneration.value
   saving.value = true
   try {
     await api.applyOmoSlimConfig(change, allowDrift)
+    if (generation !== modalGeneration.value || !props.open) return
     toast.push(t('toolAccess.toast.omoSlimApplied'), 'success')
     await load()
+    if (generation !== modalGeneration.value || !props.open) return
     previewOpen.value = false
     pendingChange.value = null
     emit('applied')
     emit('close')
   } catch (e: any) {
+    if (generation !== modalGeneration.value || !props.open) return
     const message = e?.message || String(e)
     if (!allowDrift && message.includes('config file changed externally since last apply')) {
       try {
@@ -544,7 +621,7 @@ async function confirmWrite(allowDrift = false) {
           confirmText: t('toolAccess.omoSlim.configChangedConfirm'),
           danger: true,
         })
-        if (ok) {
+        if (ok && generation === modalGeneration.value && props.open) {
           saving.value = false
           await confirmWrite(true)
         }
@@ -555,25 +632,39 @@ async function confirmWrite(allowDrift = false) {
       toast.push(message, 'error')
     }
   } finally {
-    saving.value = false
+    if (generation === modalGeneration.value) saving.value = false
   }
 }
 
+function close() {
+  if (saving.value) return
+  emit('close')
+}
+
+function closePreview() {
+  if (saving.value) return
+  previewOpen.value = false
+}
+
 watch(() => props.open, (open) => {
-  if (open) void load()
+  modalGeneration.value++
+  if (open) {
+    saving.value = false
+    void load()
+  }
 })
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="modal-overlay" @click.self="emit('close')">
+    <div v-if="open" class="modal-overlay" @click.self="close">
       <div class="modal-card omo-slim-workbench" role="dialog" aria-modal="true">
         <div class="row-between modal-heading omo-slim-workbench-heading">
           <div>
             <div class="modal-title">{{ t('toolAccess.omoSlim.title') }}</div>
             <div class="section-sub text-mono omo-slim-path">{{ path || t('toolAccess.omoSlim.pathUnavailable') }}</div>
           </div>
-          <button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="emit('close')">
+          <button class="btn btn-icon" :disabled="saving" :title="t('common.close')" :aria-label="t('common.close')" @click="close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
         </div>
@@ -703,17 +794,17 @@ watch(() => props.open, (open) => {
             </main>
           </div>
 
-          <div class="omo-slim-workbench-footer"><span class="field-help">{{ t('toolAccess.omoSlim.previewBeforeWrite') }}</span><div class="row"><button class="btn btn-secondary" @click="emit('close')">{{ t('common.cancel') }}</button><button class="btn btn-primary" :disabled="previewLoading" @click="previewChange">{{ previewLoading ? t('toolAccess.omoSlim.previewLoading') : t('toolAccess.omoSlim.previewChanges') }}</button></div></div>
+          <div class="omo-slim-workbench-footer"><span class="field-help">{{ t('toolAccess.omoSlim.previewBeforeWrite') }}</span><div class="row"><button class="btn btn-secondary" :disabled="saving" @click="close">{{ t('common.cancel') }}</button><button class="btn btn-primary" :disabled="previewLoading || saving" @click="previewChange">{{ previewLoading ? t('toolAccess.omoSlim.previewLoading') : t('toolAccess.omoSlim.previewChanges') }}</button></div></div>
         </template>
       </div>
     </div>
 
-    <div v-if="previewOpen && previewData" class="modal-overlay modal-overlay-stacked omo-slim-preview-overlay" @click.self="previewOpen = false">
+    <div v-if="previewOpen && previewData" class="modal-overlay modal-overlay-stacked omo-slim-preview-overlay" @click.self="closePreview">
       <div class="modal-card omo-slim-preview-modal">
-        <div class="row-between modal-heading"><div><div class="modal-title">{{ t('toolAccess.omoSlim.previewTitle') }}</div><div class="section-sub text-mono omo-slim-path">{{ previewData.Path }}</div></div><button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="previewOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <div class="row-between modal-heading"><div><div class="modal-title">{{ t('toolAccess.omoSlim.previewTitle') }}</div><div class="section-sub text-mono omo-slim-path">{{ previewData.Path }}</div></div><button class="btn btn-icon" :disabled="saving" :title="t('common.close')" :aria-label="t('common.close')" @click="closePreview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
         <div class="omo-slim-preview-note">{{ t('toolAccess.omoSlim.previewBackupNote') }}</div>
         <DiffPreview class="omo-slim-diff-preview" :before="previewData.Before" :after="previewData.After" />
-        <div class="row omo-slim-preview-actions"><button class="btn btn-secondary" :disabled="saving" @click="previewOpen = false">{{ t('toolAccess.omoSlim.cancelPreview') }}</button><button class="btn btn-primary" :disabled="saving" @click="confirmWrite()">{{ saving ? t('common.processing') : t('toolAccess.omoSlim.confirmWrite') }}</button></div>
+        <div class="row omo-slim-preview-actions"><button class="btn btn-secondary" :disabled="saving" @click="closePreview">{{ t('toolAccess.omoSlim.cancelPreview') }}</button><button class="btn btn-primary" :disabled="saving" @click="confirmWrite()">{{ saving ? t('common.processing') : t('toolAccess.omoSlim.confirmWrite') }}</button></div>
       </div>
     </div>
   </Teleport>

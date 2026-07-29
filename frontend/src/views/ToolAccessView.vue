@@ -43,6 +43,7 @@ const backupsTool = ref<ToolName>('opencode')
 const backupsResource = ref('')
 const backups = ref<service.ToolBackupInfo[]>([])
 const backupsLoading = ref(false)
+const backupsGeneration = ref(0)
 
 const toolCards = computed(() => tools.map((tool) => ({ tool, label: t(`toolAccess.tools.${tool}`) })))
 const statusMap = computed(() => Object.fromEntries(statuses.value.map((status) => [status.Tool, status])))
@@ -220,6 +221,7 @@ async function copySnippet() {
 }
 
 async function openBackups(tool: ToolName, resource = '') {
+  const generation = ++backupsGeneration.value
   backupsTool.value = tool
   backupsResource.value = resource
   backupsOpen.value = true
@@ -227,11 +229,13 @@ async function openBackups(tool: ToolName, resource = '') {
   backups.value = []
   try {
     const rows = await api.listToolBackups(tool)
+    if (generation !== backupsGeneration.value) return
     backups.value = resource ? rows.filter((backup) => backup.Resource === resource) : rows
   } catch (e: any) {
+    if (generation !== backupsGeneration.value) return
     toast.push(e?.message || String(e), 'error')
   } finally {
-    backupsLoading.value = false
+    if (generation === backupsGeneration.value) backupsLoading.value = false
   }
 }
 
@@ -241,6 +245,8 @@ function formatModTime(value: any) {
 }
 
 async function restoreBackup(backup: service.ToolBackupInfo) {
+  const tool = backupsTool.value
+  const resource = backupsResource.value
   const ok = await confirm.open({
     title: t('toolAccess.confirm.restoreTitle'),
     message: t('toolAccess.confirm.restoreMessage', { path: backup.Path }),
@@ -249,9 +255,9 @@ async function restoreBackup(backup: service.ToolBackupInfo) {
   })
   if (!ok) return
   try {
-    await api.restoreToolBackup(backupsTool.value, backup.Resource, backup.Path)
+    await api.restoreToolBackup(tool, backup.Resource, backup.Path)
     toast.push(t('toolAccess.toast.backupRestored'), 'success')
-    await openBackups(backupsTool.value, backupsResource.value)
+    await openBackups(tool, resource)
     await refresh()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
@@ -270,7 +276,7 @@ onMounted(() => {
       <span class="main-subtitle">{{ t('toolAccess.subtitle') }}</span>
     </div>
     <div class="main-actions">
-      <button class="btn btn-secondary" :disabled="refreshing" @click="refresh">
+      <button class="btn btn-secondary" :disabled="refreshing || mutationBusy" @click="refresh">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
         {{ refreshing ? t('toolAccess.refreshing') : t('toolAccess.refresh') }}
       </button>
@@ -280,7 +286,7 @@ onMounted(() => {
   <div class="main-content">
     <div class="main-content-inner stack-loose">
       <div v-if="loading" class="text-muted tool-page-state">{{ t('toolAccess.loading') }}</div>
-      <div v-else-if="loadError" class="tool-page-error" role="alert">{{ t('toolAccess.loadFailed', { error: loadError }) }} <button class="btn btn-secondary" @click="refresh">{{ t('toolAccess.retry') }}</button></div>
+      <div v-else-if="loadError" class="tool-page-error" role="alert">{{ t('toolAccess.loadFailed', { error: loadError }) }} <button class="btn btn-secondary" :disabled="mutationBusy" @click="refresh">{{ t('toolAccess.retry') }}</button></div>
       <section v-else class="tool-grid">
         <article v-for="card in toolCards" :key="card.tool" class="card card-hover tool-card" :class="{ 'tool-card-opencode': card.tool === 'opencode' }">
           <div class="row-between tool-card-heading">
@@ -314,7 +320,7 @@ onMounted(() => {
           <div class="h-divider tool-divider"></div>
           <div class="row-between tool-section-heading">
             <div><div class="section-title" style="font-size: 15px;">{{ t('toolAccess.presets.title') }}</div><div class="section-sub">{{ t('toolAccess.presets.count', { count: presetsFor(card.tool).length }) }}</div></div>
-            <div class="row tool-heading-actions"><button v-if="card.tool === 'opencode'" class="btn btn-primary" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-secondary" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
+            <div class="row tool-heading-actions"><button v-if="card.tool === 'opencode'" class="btn btn-primary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-secondary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
           </div>
 
           <div v-if="!presetsFor(card.tool).length" class="tool-empty">{{ t('toolAccess.presets.empty') }}</div>
@@ -325,11 +331,11 @@ onMounted(() => {
                 <div class="tool-preset-meta"><template v-if="card.tool === 'opencode' && view.Preset.Kind === 'direct' && view.Preset.Vendor"><span>{{ t('toolAccess.vendors.' + view.Preset.Vendor) }}</span><span>·</span></template><span>{{ view.Preset.Kind === 'autoapi' ? t('toolAccess.presets.relay') : view.Preset.BaseURL }}</span><span>·</span><span>{{ t('toolAccess.presets.models', { count: view.Preset.Models?.length || 0 }) }}</span><span v-if="view.Preset.APIKeyEnc" class="key-hint">· {{ t('toolAccess.presets.storedKey') }}</span></div>
               </div>
               <div v-if="card.tool !== 'opencode'" class="row tool-preset-actions">
-                <button v-if="view.Enabled" class="btn btn-secondary" style="padding: 4px 9px; font-size: 11px;" @click="disableProvider(card.tool, view)">{{ t('toolAccess.presets.disable') }}</button>
+                <button v-if="view.Enabled" class="btn btn-secondary" :disabled="mutationBusy" style="padding: 4px 9px; font-size: 11px;" @click="disableProvider(card.tool, view)">{{ t('toolAccess.presets.disable') }}</button>
                 <button v-else class="btn btn-primary" style="padding: 4px 9px; font-size: 11px;" :disabled="mutationBusy || !statusFor(card.tool)?.Installed" :title="!statusFor(card.tool)?.Installed ? t('toolAccess.presets.installHint') : ''" @click="enableProvider(view)">{{ t('toolAccess.presets.enable') }}</button>
-                <button class="btn btn-icon" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
-                <button v-if="view.InDB" class="btn btn-icon" :title="t('toolAccess.presets.export')" :aria-label="t('toolAccess.presets.export')" @click="openExport(view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg></button>
-                <button v-if="!view.Enabled" class="btn btn-icon danger-icon" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deletePreset(view.Preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+                <button class="btn btn-icon" :disabled="mutationBusy" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+                <button v-if="view.InDB" class="btn btn-icon" :disabled="mutationBusy" :title="t('toolAccess.presets.export')" :aria-label="t('toolAccess.presets.export')" @click="openExport(view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg></button>
+                <button v-if="!view.Enabled" class="btn btn-icon danger-icon" :disabled="mutationBusy" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deletePreset(view.Preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
               </div>
             </div>
           </div>
@@ -341,13 +347,13 @@ onMounted(() => {
                 <div v-if="opencodeLive?.OmoSlimConfigured" class="omo-slim-card-summary">{{ t('toolAccess.omoSlim.activeSummary', { preset: opencodeLive.OmoSlimActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoSlimAgentCount, disabled: opencodeLive.OmoSlimDisabledCount }) }}</div>
                 <div v-else class="omo-slim-card-summary muted">{{ t('toolAccess.omoSlim.notConfigured') }}</div>
               </div>
-              <div class="row omo-slim-card-actions"><button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button><button class="btn btn-ghost" style="padding: 5px 8px; font-size: 11.5px;" @click="openBackups('opencode', 'opencode-omo')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3"/></svg>{{ t('toolAccess.omoSlim.backups') }}</button></div>
+              <div class="row omo-slim-card-actions"><button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" :disabled="mutationBusy" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button><button class="btn btn-ghost" :disabled="mutationBusy" style="padding: 5px 8px; font-size: 11.5px;" @click="openBackups('opencode', 'opencode-omo')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3"/></svg>{{ t('toolAccess.omoSlim.backups') }}</button></div>
             </div>
             <div class="text-mono omo-slim-card-path" :title="statusFor('opencode')?.ExtraPaths?.omo_slim_config || ''">{{ pathText(statusFor('opencode')?.ExtraPaths?.omo_slim_config || '') }}</div>
           </div>
 
           <div class="row tool-card-actions">
-            <button class="btn btn-ghost" @click="openBackups(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button>
+            <button class="btn btn-ghost" :disabled="mutationBusy" @click="openBackups(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button>
           </div>
         </article>
       </section>

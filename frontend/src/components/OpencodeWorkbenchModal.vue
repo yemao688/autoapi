@@ -69,8 +69,10 @@ const nextNewID = ref(1)
 const keyVisible = ref(false)
 const revealLoading = ref(false)
 const revealError = ref(false)
+const revealGeneration = ref(0)
 const previewLoading = ref(false)
 const saving = ref(false)
+const modalGeneration = ref(0)
 const previewOpen = ref(false)
 const previewData = ref<service.OmoSlimPreview | null>(null)
 const pendingPlan = ref<service.OpencodeConfigPlan | null>(null)
@@ -247,27 +249,43 @@ async function load() {
 async function revealKey(key: DraftKey) {
   const draft = drafts.value[key]
   if (!draft || draft.isNew || draft.kind !== 'direct' || !draft.providerID) return
+  const generation = ++revealGeneration.value
   revealLoading.value = true
   revealError.value = false
   try {
     const value = await api.revealToolProviderKey('opencode', draft.providerID)
-    if (drafts.value[key]) drafts.value[key].plaintextKey = value || ''
+    if (generation === revealGeneration.value && drafts.value[key]) drafts.value[key].plaintextKey = value || ''
   } catch {
-    if (drafts.value[key]) drafts.value[key].plaintextKey = ''
-    revealError.value = true
+    if (generation === revealGeneration.value) {
+      if (drafts.value[key]) drafts.value[key].plaintextKey = ''
+      revealError.value = true
+      toast.push(t('toolAccess.opencode.revealFailed'), 'error')
+    }
   } finally {
-    revealLoading.value = false
+    if (generation === revealGeneration.value) revealLoading.value = false
   }
 }
 
 async function selectProvider(key: DraftKey, force = false) {
-  if (!force && selectedKey.value === key) return
   section.value = 'provider'
+  if (!force && selectedKey.value === key) {
+    if (revealError.value) void revealKey(key)
+    return
+  }
+  revealGeneration.value++
   selectedKey.value = key
   keyVisible.value = false
   revealError.value = false
   const draft = drafts.value[key]
   if (draft?.kind === 'direct') void revealKey(key)
+}
+
+function toggleKeyVisibility(key: DraftKey) {
+  if (revealError.value) {
+    void revealKey(key)
+    return
+  }
+  keyVisible.value = !keyVisible.value
 }
 
 function selectGlobal() {
@@ -397,21 +415,24 @@ function driftMessage(states: service.DriftState[]) {
 
 async function confirmWrite(allowDrift = false) {
   if (!pendingPlan.value || saving.value) return
+  const generation = modalGeneration.value
   saving.value = true
   try {
     await api.applyOpencodeConfigChange(pendingPlan.value, allowDrift)
+    if (generation !== modalGeneration.value || !props.open) return
     toast.push(t('toolAccess.toast.opencodeApplied'), 'success')
     previewOpen.value = false
     pendingPlan.value = null
     emit('changed')
     emit('close')
   } catch (error: any) {
+    if (generation !== modalGeneration.value || !props.open) return
     const message = error?.message || String(error)
     if (!allowDrift && message.includes('config file changed externally since last apply')) {
       try {
         const states = await api.checkToolDrift('opencode')
         const ok = await confirm.open({ title: t('toolAccess.omoSlim.configChangedTitle'), message: driftMessage(states), confirmText: t('toolAccess.omoSlim.configChangedConfirm'), danger: true })
-        if (ok) {
+        if (ok && generation === modalGeneration.value && props.open) {
           saving.value = false
           await confirmWrite(true)
         }
@@ -420,11 +441,12 @@ async function confirmWrite(allowDrift = false) {
       }
     } else toast.push(message, 'error')
   } finally {
-    saving.value = false
+    if (generation === modalGeneration.value) saving.value = false
   }
 }
 
 async function close() {
+  if (saving.value) return
   if (previewOpen.value) {
     previewOpen.value = false
     return
@@ -436,6 +458,11 @@ async function close() {
   emit('close')
 }
 
+function closePreview() {
+  if (saving.value) return
+  previewOpen.value = false
+}
+
 watch(modelRules, (rules) => {
   const draft = selectedDraft.value
   if (!draft?.isNew || draft.kind !== 'autoapi' || draft.modelRows.some((row) => row.name.trim())) return
@@ -443,8 +470,19 @@ watch(modelRules, (rules) => {
   if (named.length) draft.modelRows = named.map((rule, index) => ({ ...emptyRow(rule.name), isDefault: index === 0 }))
 })
 
-watch(() => props.open, (open) => { if (open) void load() })
-watch(() => props.initialProviderID, (id) => { if (props.open && id) void load() })
+watch(() => props.open, (open) => {
+  modalGeneration.value++
+  if (open) {
+    saving.value = false
+    void load()
+  }
+})
+watch(() => props.initialProviderID, (id) => {
+  if (!props.open || !id) return
+  modalGeneration.value++
+  saving.value = false
+  void load()
+})
 </script>
 
 <template>
@@ -453,7 +491,7 @@ watch(() => props.initialProviderID, (id) => { if (props.open && id) void load()
       <div class="modal-card opencode-workbench" role="dialog" aria-modal="true">
         <div class="row-between modal-heading opencode-workbench-heading">
           <div><div class="modal-title">{{ t('toolAccess.opencode.title') }}</div><div class="section-sub">{{ t('toolAccess.opencode.subtitle') }}</div></div>
-          <button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <button class="btn btn-icon" :disabled="saving" :title="t('common.close')" :aria-label="t('common.close')" @click="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
         </div>
 
         <div v-if="loading" class="text-muted opencode-workbench-state">{{ t('toolAccess.opencode.loading') }}</div>
@@ -497,7 +535,7 @@ watch(() => props.initialProviderID, (id) => { if (props.open && id) void load()
                 <div v-if="selectedIsPendingDelete" class="opencode-pending-note" role="status">{{ t('toolAccess.opencode.pendingDelete') }}</div>
                 <div class="field"><label class="field-label">{{ t('toolAccess.preset.kind') }}</label><div class="tabs"><button class="tab" :class="{ active: selectedDraft.kind === 'direct' }" :disabled="!selectedDraft.isNew || selectedIsPendingDelete" @click="selectedDraft.kind = 'direct'">{{ t('toolAccess.preset.direct') }}</button><button class="tab" :class="{ active: selectedDraft.kind === 'autoapi' }" :disabled="!selectedDraft.isNew || selectedIsPendingDelete" @click="selectedDraft.kind = 'autoapi'; onKindChange()">{{ t('toolAccess.preset.autoapi') }}</button></div><div class="field-help">{{ selectedDraft.isNew ? t('toolAccess.preset.kindHelp') : t('toolAccess.preset.kindImmutable') }}</div></div>
                 <div class="col-2 opencode-form-grid"><div class="field"><label class="field-label">{{ t('toolAccess.preset.name') }}</label><input v-model="selectedDraft.name" class="input" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.namePlaceholder')"></div><div class="field"><label class="field-label">{{ t('toolAccess.preset.providerID') }}</label><input v-model="selectedDraft.providerID" class="input mono" :disabled="!!selectedView?.Enabled || selectedIsPendingDelete" :placeholder="t('toolAccess.preset.providerIDPlaceholder')"><div v-if="selectedView?.Enabled" class="field-help">{{ t('toolAccess.preset.providerIDLocked') }}</div></div></div>
-                <template v-if="selectedDraft.kind === 'direct'"><div class="col-2 opencode-form-grid"><div class="field"><label class="field-label">{{ t('toolAccess.preset.baseURL') }}</label><input v-model="selectedDraft.baseURL" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.baseURLPlaceholder')"></div><div class="field"><label class="field-label">{{ t('toolAccess.preset.vendor') }}</label><select v-model="selectedDraft.vendor" class="select" :disabled="selectedIsPendingDelete"><option value="openai-responses">{{ t('toolAccess.vendors.openai-responses') }}</option><option value="openai-compatible">{{ t('toolAccess.vendors.openai-compatible') }}</option><option value="anthropic">{{ t('toolAccess.vendors.anthropic') }}</option><option value="amazon-bedrock">{{ t('toolAccess.vendors.amazon-bedrock') }}</option><option value="google-gemini">{{ t('toolAccess.vendors.google-gemini') }}</option></select><div class="field-help">{{ t('toolAccess.preset.vendorHelp.' + (selectedDraft.vendor || 'openai-compatible')) }}</div></div></div><div class="field"><label class="field-label">{{ t('toolAccess.preset.apiKey') }}</label><div class="opencode-key-input"><input v-model="selectedDraft.plaintextKey" :type="keyVisible ? 'text' : 'password'" autocomplete="new-password" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="selectedView?.Preset.APIKeyEnc || revealError ? t('toolAccess.preset.keyKeepHint') : t('toolAccess.preset.keyPlaceholder')" @input="selectedDraft.keyTouched = true"><button type="button" class="btn btn-icon" :disabled="revealLoading || selectedIsPendingDelete" :title="keyVisible ? t('toolAccess.opencode.hideKey') : t('toolAccess.opencode.revealKey')" :aria-label="keyVisible ? t('toolAccess.opencode.hideKey') : t('toolAccess.opencode.revealKey')" @click="keyVisible = !keyVisible"><svg v-if="!keyVisible" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></svg><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 18 18M10.6 5.1A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a18.3 18.3 0 0 1-3.1 3.7M6.2 6.2C3.4 8.1 2 12 2 12s3.5 7 10 7a9.9 9.9 0 0 0 3.5-.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div><div class="field-help">{{ selectedView?.Preset.APIKeyEnc || revealError ? t('toolAccess.preset.keyKeepHelp') : t('toolAccess.preset.keyHelp') }}</div></div></template>
+                <template v-if="selectedDraft.kind === 'direct'"><div class="col-2 opencode-form-grid"><div class="field"><label class="field-label">{{ t('toolAccess.preset.baseURL') }}</label><input v-model="selectedDraft.baseURL" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.baseURLPlaceholder')"></div><div class="field"><label class="field-label">{{ t('toolAccess.preset.vendor') }}</label><select v-model="selectedDraft.vendor" class="select" :disabled="selectedIsPendingDelete"><option value="openai-responses">{{ t('toolAccess.vendors.openai-responses') }}</option><option value="openai-compatible">{{ t('toolAccess.vendors.openai-compatible') }}</option><option value="anthropic">{{ t('toolAccess.vendors.anthropic') }}</option><option value="amazon-bedrock">{{ t('toolAccess.vendors.amazon-bedrock') }}</option><option value="google-gemini">{{ t('toolAccess.vendors.google-gemini') }}</option></select><div class="field-help">{{ t('toolAccess.preset.vendorHelp.' + (selectedDraft.vendor || 'openai-compatible')) }}</div></div></div><div class="field"><label class="field-label">{{ t('toolAccess.preset.apiKey') }}</label><div class="opencode-key-input"><input v-model="selectedDraft.plaintextKey" :type="keyVisible ? 'text' : 'password'" autocomplete="new-password" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="selectedView?.Preset.APIKeyEnc || revealError ? t('toolAccess.preset.keyKeepHint') : t('toolAccess.preset.keyPlaceholder')" @input="selectedDraft.keyTouched = true"><button type="button" class="btn btn-icon" :disabled="revealLoading || selectedIsPendingDelete" :title="revealError ? t('toolAccess.opencode.retryRevealKey') : keyVisible ? t('toolAccess.opencode.hideKey') : t('toolAccess.opencode.revealKey')" :aria-label="revealError ? t('toolAccess.opencode.retryRevealKey') : keyVisible ? t('toolAccess.opencode.hideKey') : t('toolAccess.opencode.revealKey')" @click="toggleKeyVisibility(selectedDraft.key)"><svg v-if="!keyVisible" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></svg><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 18 18M10.6 5.1A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a18.3 18.3 0 0 1-3.1 3.7M6.2 6.2C3.4 8.1 2 12 2 12s3.5 7 10 7a9.9 9.9 0 0 0 3.5-.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div><div class="field-help">{{ selectedView?.Preset.APIKeyEnc || revealError ? t('toolAccess.preset.keyKeepHelp') : t('toolAccess.preset.keyHelp') }}</div><div v-if="revealError" class="field-help opencode-key-error" role="alert">{{ t('toolAccess.opencode.revealFailed') }}</div></div></template>
                 <div v-else class="field"><label class="field-label">{{ t('toolAccess.preset.apiKeySelector') }}</label><select v-model="selectedDraft.apiKeyID" class="select" :disabled="supportingLoading || selectedIsPendingDelete"><option value="" disabled>{{ t('toolAccess.preset.apiKeyPlaceholder') }}</option><option v-for="key in apiKeys" :key="key.id" :value="key.id">{{ key.name }}</option></select><div class="field-help">{{ supportingLoading ? t('toolAccess.preset.loadingSupporting') : t('toolAccess.preset.apiKeyHelp') }}</div></div>
                 <div class="field opencode-model-section"><div class="row-between"><div><label class="field-label">{{ t('toolAccess.preset.models') }}</label><div class="field-help">{{ t('toolAccess.preset.modelsHelp') }}</div></div><button class="btn btn-secondary" type="button" :disabled="selectedIsPendingDelete" @click="addModel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.preset.addModel') }}</button></div><div class="tool-model-editor"><div v-for="(row, index) in selectedDraft.modelRows" :key="index" class="tool-model-row"><div class="row-between" style="align-items: flex-start;"><div class="tool-model-index">{{ index + 1 }}</div><div class="tool-model-main"><input v-model="row.name" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.modelPlaceholder')"><div class="row tool-model-options"><label class="check-label"><input v-model="row.isDefault" type="checkbox" :disabled="selectedIsPendingDelete"> {{ t('toolAccess.preset.defaultModel') }}</label><label class="check-label"><input v-model="row.reasoning" type="checkbox" :disabled="selectedIsPendingDelete"> {{ t('toolAccess.preset.reasoning') }}</label></div></div><button class="btn btn-icon" :disabled="selectedDraft.modelRows.length <= 1 || selectedIsPendingDelete" :title="t('toolAccess.preset.removeModel')" :aria-label="t('toolAccess.preset.removeModel')" @click="removeModel(index)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 12h14"/></svg></button></div><div class="col-3 tool-model-fields"><div><label class="field-label">{{ t('toolAccess.preset.contextLimit') }}</label><input v-model="row.context" type="number" min="1" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.optional')"></div><div><label class="field-label">{{ t('toolAccess.preset.outputLimit') }}</label><input v-model="row.output" type="number" min="1" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.optional')"></div><div><label class="field-label">{{ t('toolAccess.preset.modalities') }}</label><input v-model="row.modalities" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.modalitiesPlaceholder')"></div></div><div class="tool-variants"><div class="row-between"><span class="field-label">{{ t('toolAccess.preset.variants') }}</span><button class="btn btn-ghost" type="button" :disabled="selectedIsPendingDelete" @click="addVariant(row)">{{ t('toolAccess.preset.addVariant') }}</button></div><div v-if="row.variants.length" v-for="(variant, variantIndex) in row.variants" :key="variantIndex" class="row variant-row"><input v-model="variant.name" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.variantName')"><input v-model="variant.reasoningEffort" class="input" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.reasoningEffort')"><button class="btn btn-icon" :disabled="selectedIsPendingDelete" :title="t('toolAccess.preset.removeVariant')" :aria-label="t('toolAccess.preset.removeVariant')" @click="removeVariant(row, variantIndex)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 12h14"/></svg></button></div><div v-else class="field-help">{{ t('toolAccess.preset.noVariants') }}</div></div></div></div></div>
                 <div v-if="selectedValidation && !selectedIsPendingDelete" class="tool-validation" role="alert">{{ selectedValidation }}</div>
@@ -509,13 +547,13 @@ watch(() => props.initialProviderID, (id) => { if (props.open && id) void load()
               <div v-else class="opencode-empty-editor"><div class="opencode-empty-mark">↗</div><h3>{{ t('toolAccess.opencode.selectProvider') }}</h3><p>{{ t('toolAccess.opencode.selectProviderHelp') }}</p></div>
             </main>
           </div>
-          <div class="opencode-workbench-footer"><span class="field-help">{{ hasStagedChanges ? t('toolAccess.opencode.stagedHint') : t('toolAccess.opencode.footerHint') }}</span><div class="row"><button class="btn btn-secondary" type="button" @click="close">{{ t('common.cancel') }}</button><button class="btn btn-primary" type="button" :disabled="previewDisabled" @click="previewChange">{{ previewLoading ? t('toolAccess.opencode.previewLoading') : t('toolAccess.opencode.previewChanges') }}</button></div></div>
+          <div class="opencode-workbench-footer"><span class="field-help">{{ hasStagedChanges ? t('toolAccess.opencode.stagedHint') : t('toolAccess.opencode.footerHint') }}</span><div class="row"><button class="btn btn-secondary" type="button" :disabled="saving" @click="close">{{ t('common.cancel') }}</button><button class="btn btn-primary" type="button" :disabled="previewDisabled" @click="previewChange">{{ previewLoading ? t('toolAccess.opencode.previewLoading') : t('toolAccess.opencode.previewChanges') }}</button></div></div>
         </template>
       </div>
     </div>
 
-    <div v-if="previewOpen && previewData" class="modal-overlay modal-overlay-stacked opencode-preview-overlay" @click.self="previewOpen = false">
-      <div class="modal-card opencode-preview-modal"><div class="row-between modal-heading"><div><div class="modal-title">{{ t('toolAccess.opencode.previewTitle') }}</div><div class="section-sub text-mono opencode-preview-path">{{ previewData.Path }}</div></div><button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="previewOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div class="opencode-preview-note">{{ t('toolAccess.opencode.previewNote') }}</div><DiffPreview class="opencode-diff-preview" :before="previewData.Before" :after="previewData.After" /><div class="row omo-slim-preview-actions"><button class="btn btn-secondary" :disabled="saving" @click="previewOpen = false">{{ t('toolAccess.opencode.cancelPreview') }}</button><button class="btn btn-primary" :disabled="saving" @click="confirmWrite()">{{ saving ? t('common.processing') : t('toolAccess.opencode.confirmSave') }}</button></div></div>
+    <div v-if="previewOpen && previewData" class="modal-overlay modal-overlay-stacked opencode-preview-overlay" @click.self="closePreview">
+      <div class="modal-card opencode-preview-modal"><div class="row-between modal-heading"><div><div class="modal-title">{{ t('toolAccess.opencode.previewTitle') }}</div><div class="section-sub text-mono opencode-preview-path">{{ previewData.Path }}</div></div><button class="btn btn-icon" :disabled="saving" :title="t('common.close')" :aria-label="t('common.close')" @click="closePreview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div class="opencode-preview-note">{{ t('toolAccess.opencode.previewNote') }}</div><DiffPreview class="opencode-diff-preview" :before="previewData.Before" :after="previewData.After" /><div class="row omo-slim-preview-actions"><button class="btn btn-secondary" :disabled="saving" @click="closePreview">{{ t('toolAccess.opencode.cancelPreview') }}</button><button class="btn btn-primary" :disabled="saving" @click="confirmWrite()">{{ saving ? t('common.processing') : t('toolAccess.opencode.confirmSave') }}</button></div></div>
     </div>
   </Teleport>
 </template>
@@ -561,6 +599,7 @@ watch(() => props.initialProviderID, (id) => { if (props.open && id) void load()
 .opencode-key-input { display: flex; align-items: center; gap: 5px; }
 .opencode-key-input .input { min-width: 0; flex: 1; }
 .opencode-key-input .btn { flex: 0 0 auto; }
+.opencode-key-error { color: var(--negative); }
 .opencode-model-section { margin-top: 23px; padding-top: 18px; border-top: 1px solid var(--border); }
 .tool-model-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .tool-model-row { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--surface) 92%, var(--bg)); }
