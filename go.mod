@@ -5,7 +5,9 @@ go 1.25.0
 require (
 	fyne.io/systray v1.12.2
 	github.com/go-chi/chi/v5 v5.3.1
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/shirou/gopsutil/v4 v4.26.6
+	github.com/tailscale/hujson v0.0.0-20220630195928-54599719472f
 	github.com/wailsapp/wails/v2 v2.12.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	modernc.org/sqlite v1.53.0

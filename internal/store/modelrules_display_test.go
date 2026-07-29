@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -662,5 +663,140 @@ func TestModelRuleExport_DoesNotIncludeDeprecatedFields(t *testing.T) {
 		if strings.Contains(str, "\""+key+"\"") {
 			t.Fatalf("exported JSON contains forbidden key %q", key)
 		}
+	}
+}
+
+// mkTargetAttemptLog builds a completed request log whose chain holds a
+// single attempt against targetID. Attempt timestamps come from the log row.
+func mkTargetAttemptLog(id string, ts time.Time, targetID, status string, started bool) model.RequestLog {
+	return model.RequestLog{
+		ID:         id,
+		Timestamp:  ts.UnixMilli(),
+		StatusCode: 200,
+		Chain: []model.RequestLogChainEntry{{
+			AttemptOrder:    1,
+			TargetID:        targetID,
+			Status:          status,
+			UpstreamStarted: started,
+		}},
+	}
+}
+
+// createRuleWithTargetID returns the persisted target ID of a single-target rule.
+func createRuleWithTargetID(t *testing.T, s *Store) string {
+	t.Helper()
+	r, err := s.CreateModelRule(model.ModelRuleInput{Name: "r", Enabled: true, Targets: []model.ModelRuleTargetInput{{ProviderID: "p", ModelName: "m"}}})
+	if err != nil {
+		t.Fatalf("CreateModelRule: %v", err)
+	}
+	full, err := s.GetModelRule(r.ID)
+	if err != nil {
+		t.Fatalf("GetModelRule: %v", err)
+	}
+	if len(full.Targets) != 1 || full.Targets[0].ID == "" {
+		t.Fatalf("expected 1 persisted target, got %+v", full.Targets)
+	}
+	return full.Targets[0].ID
+}
+
+func displayTargetRates(t *testing.T, s *Store) (*float64, *float64) {
+	t.Helper()
+	rules, err := s.ListModelRulesForDisplay()
+	if err != nil {
+		t.Fatalf("ListModelRulesForDisplay: %v", err)
+	}
+	if len(rules) != 1 || len(rules[0].Targets) != 1 {
+		t.Fatalf("expected 1 rule with 1 target, got %+v", rules)
+	}
+	return rules[0].Targets[0].SuccessRateRecent100, rules[0].Targets[0].SuccessRateHour
+}
+
+func TestModelRuleTargetSuccessRates_NilWithoutAttempts(t *testing.T) {
+	s := newTestStore(t)
+	createRuleWithTargetID(t, s)
+
+	recent, hour := displayTargetRates(t, s)
+	if recent != nil || hour != nil {
+		t.Fatalf("expected nil rates, got recent=%v hour=%v", recent, hour)
+	}
+}
+
+func TestModelRuleTargetSuccessRates_CountsOnlyRealAttempts(t *testing.T) {
+	s := newTestStore(t)
+	tid := createRuleWithTargetID(t, s)
+	now := time.Now()
+
+	// One request whose chain holds a real success, a real failure, and a
+	// circuit-open rejection that never reached the upstream. Only the two
+	// real attempts count: 1/2 = 50%.
+	insertRequestLog(t, s, model.RequestLog{
+		ID:         "l1",
+		Timestamp:  now.UnixMilli(),
+		StatusCode: 200,
+		Chain: []model.RequestLogChainEntry{
+			{AttemptOrder: 1, TargetID: tid, Status: "success", UpstreamStarted: true},
+			{AttemptOrder: 2, TargetID: tid, Status: "retryable", UpstreamStarted: true},
+			{AttemptOrder: 3, TargetID: tid, Status: "circuit_open", UpstreamStarted: false},
+		},
+	})
+
+	recent, hour := displayTargetRates(t, s)
+	if recent == nil || *recent != 50 {
+		t.Fatalf("expected recent 50, got %v", recent)
+	}
+	if hour == nil || *hour != 50 {
+		t.Fatalf("expected hour 50, got %v", hour)
+	}
+}
+
+func TestModelRuleTargetSuccessRates_HourWindowExcludesOldAttempts(t *testing.T) {
+	s := newTestStore(t)
+	tid := createRuleWithTargetID(t, s)
+	now := time.Now()
+
+	insertRequestLog(t, s, mkTargetAttemptLog("old", now.Add(-2*time.Hour), tid, "success", true))
+	insertRequestLog(t, s, mkTargetAttemptLog("new", now.Add(-30*time.Minute), tid, "retryable", true))
+
+	recent, hour := displayTargetRates(t, s)
+	if recent == nil || *recent != 50 {
+		t.Fatalf("expected recent 50, got %v", recent)
+	}
+	// The hour window holds only the failure: a real 0%, not nil.
+	if hour == nil || *hour != 0 {
+		t.Fatalf("expected hour 0, got %v", hour)
+	}
+}
+
+func TestModelRuleTargetSuccessRates_Recent100UsesLatest100(t *testing.T) {
+	s := newTestStore(t)
+	tid := createRuleWithTargetID(t, s)
+	now := time.Now()
+
+	// 101 attempts inside the hour: the oldest is a failure, the 100 newest
+	// are successes. recent-100 drops the oldest; the hour window keeps all.
+	insertRequestLog(t, s, mkTargetAttemptLog("oldest", now.Add(-59*time.Minute), tid, "retryable", true))
+	for i := 0; i < 100; i++ {
+		insertRequestLog(t, s, mkTargetAttemptLog("s"+strconv.Itoa(i), now.Add(-58*time.Minute).Add(time.Duration(i)*time.Second), tid, "success", true))
+	}
+
+	recent, hour := displayTargetRates(t, s)
+	if recent == nil || *recent != 100 {
+		t.Fatalf("expected recent 100, got %v", recent)
+	}
+	wantHour := 100.0 / 101.0 * 100
+	if hour == nil || *hour < wantHour-1e-9 || *hour > wantHour+1e-9 {
+		t.Fatalf("expected hour %.6f, got %v", wantHour, hour)
+	}
+}
+
+func TestModelRuleTargetSuccessRates_ScanBoundExcludesVeryOldAttempts(t *testing.T) {
+	s := newTestStore(t)
+	tid := createRuleWithTargetID(t, s)
+
+	insertRequestLog(t, s, mkTargetAttemptLog("ancient", time.Now().Add(-31*24*time.Hour), tid, "success", true))
+
+	recent, hour := displayTargetRates(t, s)
+	if recent != nil || hour != nil {
+		t.Fatalf("expected nil rates beyond scan bound, got recent=%v hour=%v", recent, hour)
 	}
 }

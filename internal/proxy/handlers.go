@@ -180,6 +180,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = msgReq.Model, msgReq.Model, msgReq.Stream
+	logEntry.ReasoningEffort = msgReq.ReasoningEffort
 	inbound := &InboundRequest{Model: msgReq.Model, Header: extractHeaders(r.Header), Task: "messages", TimeHour: time.Now().Hour(), Endpoint: "/v1/messages", Stream: msgReq.Stream, Protocol: ProtocolAnthropicMessages, Requirements: reqs, AllowedRuleIDs: allowedRuleIDs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)
@@ -261,6 +262,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = modelName, modelName, stream
+	logEntry.ReasoningEffort = gReq.ReasoningEffort
 	inbound := &InboundRequest{Model: modelName, Header: extractHeaders(r.Header), Task: "gemini", TimeHour: time.Now().Hour(), Endpoint: r.URL.Path, Stream: stream, Protocol: ProtocolGemini, Requirements: reqs, AllowedRuleIDs: allowedRuleIDs}
 	p.insertPendingLog(logEntry)
 	candidates, err := p.resolveCandidates(inbound)

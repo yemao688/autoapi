@@ -30,16 +30,18 @@ type responsesInspectResult struct {
 // messagesInspectResult carries the routing fields and requirements parsed
 // from a single Messages body.
 type messagesInspectResult struct {
-	Model        string
-	Stream       bool
-	Requirements model.RequestRequirements
+	Model           string
+	Stream          bool
+	ReasoningEffort string
+	Requirements    model.RequestRequirements
 }
 
 // geminiInspectResult carries the routing fields and requirements parsed from
 // a single Gemini generateContent body.
 type geminiInspectResult struct {
-	Stream       bool
-	Requirements model.RequestRequirements
+	Stream          bool
+	ReasoningEffort string
+	Requirements    model.RequestRequirements
 }
 
 // requestParseError is a 422-level request validation failure.
@@ -188,6 +190,22 @@ func inspectChatRequest(body []byte) (chatInspectResult, error) {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
 		}
 		res.ReasoningEffort = s
+	}
+	// OpenRouter-style chat requests carry a reasoning object instead of the
+	// reasoning_effort string. Extraction is logging-only here; routing treats
+	// the unknown top-level key as native-only as before.
+	if res.ReasoningEffort == "" {
+		if raw, ok := fields["reasoning"]; ok && raw != nil && string(raw) != "null" {
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &obj); err == nil {
+				if effort, ok := obj["effort"]; ok {
+					var s string
+					if err := json.Unmarshal(effort, &s); err == nil {
+						res.ReasoningEffort = s
+					}
+				}
+			}
+		}
 	}
 	if err := markChatNonConvertibleFields(fields, reqs); err != nil {
 		return chatInspectResult{}, err
@@ -1046,6 +1064,7 @@ func inspectMessagesRequest(body []byte) (messagesInspectResult, error) {
 		var s string
 		if json.Unmarshal(raw, &s) == nil && s != "" {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+			res.ReasoningEffort = s
 		}
 	}
 	if raw, ok := fields["stop_sequences"]; ok {
@@ -1306,6 +1325,7 @@ func inspectGeminiRequest(body []byte) (geminiInspectResult, error) {
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return geminiInspectResult{}, &requestParseError{msg: "Invalid JSON body", cause: err}
 	}
+	var res geminiInspectResult
 	reqs := &model.RequestRequirements{}
 
 	if raw, ok := fields["tools"]; ok {
@@ -1328,6 +1348,19 @@ func inspectGeminiRequest(body []byte) (geminiInspectResult, error) {
 		}
 		if hasField(raw, "thinkingConfig") {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureReasoning)
+			// Gemini 3 exposes a thinking level string ("low"/"high"); Gemini 2.5
+			// uses a numeric thinkingBudget, which is not an effort label.
+			var thinkingCfg map[string]json.RawMessage
+			if cfgRaw, cfgOK := cfg["thinkingConfig"]; cfgOK {
+				if err := json.Unmarshal(cfgRaw, &thinkingCfg); err == nil {
+					if levelRaw, levelOK := thinkingCfg["thinkingLevel"]; levelOK {
+						var level string
+						if err := json.Unmarshal(levelRaw, &level); err == nil {
+							res.ReasoningEffort = level
+						}
+					}
+				}
+			}
 		}
 		if hasField(raw, "responseMimeType") || hasField(raw, "responseSchema") {
 			reqs.Features = appendFeature(reqs.Features, model.FeatureStructuredOutput)
@@ -1361,7 +1394,8 @@ func inspectGeminiRequest(body []byte) (geminiInspectResult, error) {
 		}
 	}
 
-	return geminiInspectResult{Requirements: *reqs}, nil
+	res.Requirements = *reqs
+	return res, nil
 }
 
 func parseGeminiTools(raw json.RawMessage) (hasFunc, hasNonFunc bool, err error) {

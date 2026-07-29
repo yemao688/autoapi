@@ -76,6 +76,81 @@ func TestResponsesToChatRequestInstructionsAndTools(t *testing.T) {
 	}
 }
 
+func TestChatResponsesRequestConversionPreservesReasoningEffort(t *testing.T) {
+	// Fresh map per case: json.Unmarshal merges into a non-nil map.
+	unmarshal := func(out []byte) map[string]any {
+		t.Helper()
+		got := map[string]any{}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	// Chat -> Responses: reasoning_effort becomes reasoning.effort. Dropping it
+	// let the upstream silently apply its own default effort.
+	out, err := chatToResponsesRequest([]byte(`{"model":"m","reasoning_effort":"xhigh","messages":[{"role":"user","content":"hi"}]}`), "u")
+	if err != nil {
+		t.Fatalf("chatToResponsesRequest: %v", err)
+	}
+	got := unmarshal(out)
+	reasoning, ok := got["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning effort not mapped: %#v", got)
+	}
+
+	// An OpenRouter-style reasoning object works too, and its other fields
+	// survive; reasoning_effort only fills a missing effort.
+	out, err = chatToResponsesRequest([]byte(`{"model":"m","reasoning_effort":"low","reasoning":{"effort":"high","summary":"auto"},"messages":[{"role":"user","content":"hi"}]}`), "u")
+	if err != nil {
+		t.Fatalf("chatToResponsesRequest with reasoning object: %v", err)
+	}
+	got = unmarshal(out)
+	reasoning, ok = got["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "high" || reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning object not preserved: %#v", got)
+	}
+
+	// Responses -> Chat: reasoning.effort becomes reasoning_effort.
+	out, err = responsesToChatRequest([]byte(`{"model":"m","reasoning":{"effort":"xhigh"},"input":"hi"}`), "u")
+	if err != nil {
+		t.Fatalf("responsesToChatRequest: %v", err)
+	}
+	got = unmarshal(out)
+	if got["reasoning_effort"] != "xhigh" {
+		t.Fatalf("reasoning_effort not mapped: %#v", got)
+	}
+
+	// Responses -> Chat: a bare reasoning_effort string passes through, and
+	// reasoning.effort wins when both are present.
+	out, err = responsesToChatRequest([]byte(`{"model":"m","reasoning_effort":"low","input":"hi"}`), "u")
+	if err != nil {
+		t.Fatalf("responsesToChatRequest passthrough: %v", err)
+	}
+	got = unmarshal(out)
+	if got["reasoning_effort"] != "low" {
+		t.Fatalf("reasoning_effort passthrough failed: %#v", got)
+	}
+	out, err = responsesToChatRequest([]byte(`{"model":"m","reasoning_effort":"low","reasoning":{"effort":"medium"},"input":"hi"}`), "u")
+	if err != nil {
+		t.Fatalf("responsesToChatRequest precedence: %v", err)
+	}
+	got = unmarshal(out)
+	if got["reasoning_effort"] != "medium" {
+		t.Fatalf("reasoning.effort must win: %#v", got)
+	}
+
+	// Requests without reasoning configuration stay without it.
+	out, err = responsesToChatRequest([]byte(`{"model":"m","input":"hi"}`), "u")
+	if err != nil {
+		t.Fatalf("responsesToChatRequest no reasoning: %v", err)
+	}
+	got = unmarshal(out)
+	if _, ok := got["reasoning_effort"]; ok {
+		t.Fatalf("unexpected reasoning_effort: %#v", got)
+	}
+}
+
 func TestResponsesFunctionCallRequiresCallIDAndToolOutputString(t *testing.T) {
 	if _, err := responsesToChatRequest([]byte(`{"model":"m","input":[{"type":"function_call","id":"only-id","name":"f","arguments":"{}"} ]}`), "u"); err == nil {
 		t.Fatal("function_call with only id accepted")

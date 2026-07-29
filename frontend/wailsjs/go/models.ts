@@ -704,6 +704,8 @@ export namespace model {
 	    hit_count: number;
 	    failure_count: number;
 	    enabled: boolean;
+	    success_rate_recent_100?: number;
+	    success_rate_hour?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelRuleTarget(source);
@@ -721,6 +723,8 @@ export namespace model {
 	        this.hit_count = source["hit_count"];
 	        this.failure_count = source["failure_count"];
 	        this.enabled = source["enabled"];
+	        this.success_rate_recent_100 = source["success_rate_recent_100"];
+	        this.success_rate_hour = source["success_rate_hour"];
 	    }
 	}
 	export class ModelRule {
@@ -1673,6 +1677,592 @@ export namespace proxy {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace service {
+	
+	export class DriftState {
+	    Resource: string;
+	    Path: string;
+	    Drifted: boolean;
+	    Missing: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DriftState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Resource = source["Resource"];
+	        this.Path = source["Path"];
+	        this.Drifted = source["Drifted"];
+	        this.Missing = source["Missing"];
+	    }
+	}
+	export class OmoSlimConfigView {
+	    Path: string;
+	    ActivePreset: string;
+	    Agents: Record<string, toolconfig.OmoSlimAgent>;
+	    CustomAgents: Record<string, toolconfig.OmoSlimCustomAgent>;
+	    DisabledAgents: string[];
+	    DisabledSkills: string[];
+	    DisabledMcps: string[];
+	    KnownPresets: string[];
+	    ValidModels: string[];
+	    AvailableVariants: string[];
+	    PresetAgents: Record<string, any>;
+	    KnownSkills: string[];
+	    KnownMcps: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoSlimConfigView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Path = source["Path"];
+	        this.ActivePreset = source["ActivePreset"];
+	        this.Agents = this.convertValues(source["Agents"], toolconfig.OmoSlimAgent, true);
+	        this.CustomAgents = this.convertValues(source["CustomAgents"], toolconfig.OmoSlimCustomAgent, true);
+	        this.DisabledAgents = source["DisabledAgents"];
+	        this.DisabledSkills = source["DisabledSkills"];
+	        this.DisabledMcps = source["DisabledMcps"];
+	        this.KnownPresets = source["KnownPresets"];
+	        this.ValidModels = source["ValidModels"];
+	        this.AvailableVariants = source["AvailableVariants"];
+	        this.PresetAgents = source["PresetAgents"];
+	        this.KnownSkills = source["KnownSkills"];
+	        this.KnownMcps = source["KnownMcps"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OmoSlimPreview {
+	    Path: string;
+	    Before: string;
+	    After: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoSlimPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Path = source["Path"];
+	        this.Before = source["Before"];
+	        this.After = source["After"];
+	    }
+	}
+	export class OpencodeProviderPlan {
+	    Action: string;
+	    Preset: toolconfig.Preset;
+	    PlaintextKey: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeProviderPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Action = source["Action"];
+	        this.Preset = this.convertValues(source["Preset"], toolconfig.Preset);
+	        this.PlaintextKey = source["PlaintextKey"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OpencodeConfigPlan {
+	    Providers: OpencodeProviderPlan[];
+	    Globals: toolconfig.OpencodeGlobalSettings;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeConfigPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Providers = this.convertValues(source["Providers"], OpencodeProviderPlan);
+	        this.Globals = this.convertValues(source["Globals"], toolconfig.OpencodeGlobalSettings);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OpencodeLiveState {
+	    Model: string;
+	    OmoSlimConfigured: boolean;
+	    OmoSlimActivePreset: string;
+	    OmoSlimAgentCount: number;
+	    OmoSlimDisabledCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeLiveState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Model = source["Model"];
+	        this.OmoSlimConfigured = source["OmoSlimConfigured"];
+	        this.OmoSlimActivePreset = source["OmoSlimActivePreset"];
+	        this.OmoSlimAgentCount = source["OmoSlimAgentCount"];
+	        this.OmoSlimDisabledCount = source["OmoSlimDisabledCount"];
+	    }
+	}
+	
+	export class ToolApplyResult {
+	    Tool: string;
+	    ConfigPath: string;
+	    BackupPaths: string[];
+	    HotReload: boolean;
+	    RestartHint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolApplyResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Tool = source["Tool"];
+	        this.ConfigPath = source["ConfigPath"];
+	        this.BackupPaths = source["BackupPaths"];
+	        this.HotReload = source["HotReload"];
+	        this.RestartHint = source["RestartHint"];
+	    }
+	}
+	export class ToolBackupInfo {
+	    Resource: string;
+	    Path: string;
+	    // Go type: time
+	    ModTime: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolBackupInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Resource = source["Resource"];
+	        this.Path = source["Path"];
+	        this.ModTime = this.convertValues(source["ModTime"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolProviderView {
+	    Preset: toolconfig.Preset;
+	    Enabled: boolean;
+	    InDB: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolProviderView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Preset = this.convertValues(source["Preset"], toolconfig.Preset);
+	        this.Enabled = source["Enabled"];
+	        this.InDB = source["InDB"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace toolconfig {
+	
+	export class ModelLimit {
+	    context?: number;
+	    output?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelLimit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.context = source["context"];
+	        this.output = source["output"];
+	    }
+	}
+	export class OmoSlimAgent {
+	    model: string;
+	    variant: string;
+	    displayName: string;
+	    skills?: string[];
+	    mcps?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoSlimAgent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.variant = source["variant"];
+	        this.displayName = source["displayName"];
+	        this.skills = source["skills"];
+	        this.mcps = source["mcps"];
+	    }
+	}
+	export class OmoSlimPresetOp {
+	    Operation: string;
+	    Name: string;
+	    NewName: string;
+	    Agents: Record<string, OmoSlimAgent>;
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoSlimPresetOp(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Operation = source["Operation"];
+	        this.Name = source["Name"];
+	        this.NewName = source["NewName"];
+	        this.Agents = this.convertValues(source["Agents"], OmoSlimAgent, true);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OmoSlimCustomAgent {
+	    model: string;
+	    variant: string;
+	    displayName: string;
+	    skills?: string[];
+	    mcps?: string[];
+	    prompt: string;
+	    orchestratorPrompt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoSlimCustomAgent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.variant = source["variant"];
+	        this.displayName = source["displayName"];
+	        this.skills = source["skills"];
+	        this.mcps = source["mcps"];
+	        this.prompt = source["prompt"];
+	        this.orchestratorPrompt = source["orchestratorPrompt"];
+	    }
+	}
+	export class OmoSlimChange {
+	    ActivePreset?: string;
+	    Agents: Record<string, OmoSlimAgent>;
+	    CustomAgents: Record<string, OmoSlimCustomAgent>;
+	    DisabledAgents: string[];
+	    DisabledSkills: string[];
+	    DisabledMcps: string[];
+	    PresetOps: OmoSlimPresetOp[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoSlimChange(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ActivePreset = source["ActivePreset"];
+	        this.Agents = this.convertValues(source["Agents"], OmoSlimAgent, true);
+	        this.CustomAgents = this.convertValues(source["CustomAgents"], OmoSlimCustomAgent, true);
+	        this.DisabledAgents = source["DisabledAgents"];
+	        this.DisabledSkills = source["DisabledSkills"];
+	        this.DisabledMcps = source["DisabledMcps"];
+	        this.PresetOps = this.convertValues(source["PresetOps"], OmoSlimPresetOp);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class OpencodeGlobalSettings {
+	    Model: string;
+	    SmallModel: string;
+	    Theme: string;
+	    Share: string;
+	    Autoupdate?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeGlobalSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Model = source["Model"];
+	        this.SmallModel = source["SmallModel"];
+	        this.Theme = source["Theme"];
+	        this.Share = source["Share"];
+	        this.Autoupdate = source["Autoupdate"];
+	    }
+	}
+	export class PresetVariant {
+	    reasoningEffort?: string;
+	    reasoningSummary?: string;
+	    include?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PresetVariant(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reasoningEffort = source["reasoningEffort"];
+	        this.reasoningSummary = source["reasoningSummary"];
+	        this.include = source["include"];
+	    }
+	}
+	export class PresetModel {
+	    name: string;
+	    limit?: ModelLimit;
+	    modalities?: string[];
+	    reasoning?: boolean;
+	    variants?: Record<string, PresetVariant>;
+	    default?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PresetModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.limit = this.convertValues(source["limit"], ModelLimit);
+	        this.modalities = source["modalities"];
+	        this.reasoning = source["reasoning"];
+	        this.variants = this.convertValues(source["variants"], PresetVariant, true);
+	        this.default = source["default"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Preset {
+	    ID: number;
+	    Tool: string;
+	    Kind: string;
+	    Name: string;
+	    ProviderID: string;
+	    Vendor: string;
+	    BaseURL: string;
+	    APIKeyEnc: string;
+	    APIKeyID: string;
+	    Models: PresetModel[];
+	    Extra: Record<string, string>;
+	    CreatedAt: number;
+	    UpdatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Preset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ID = source["ID"];
+	        this.Tool = source["Tool"];
+	        this.Kind = source["Kind"];
+	        this.Name = source["Name"];
+	        this.ProviderID = source["ProviderID"];
+	        this.Vendor = source["Vendor"];
+	        this.BaseURL = source["BaseURL"];
+	        this.APIKeyEnc = source["APIKeyEnc"];
+	        this.APIKeyID = source["APIKeyID"];
+	        this.Models = this.convertValues(source["Models"], PresetModel);
+	        this.Extra = source["Extra"];
+	        this.CreatedAt = source["CreatedAt"];
+	        this.UpdatedAt = source["UpdatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class Snippet {
+	    TargetPath: string;
+	    Format: string;
+	    Content: string;
+	    Notes: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Snippet(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.TargetPath = source["TargetPath"];
+	        this.Format = source["Format"];
+	        this.Content = source["Content"];
+	        this.Notes = source["Notes"];
+	    }
+	}
+	export class ToolStatus {
+	    Tool: string;
+	    Installed: boolean;
+	    ConfigPath: string;
+	    ConfigExists: boolean;
+	    ExtraPaths: Record<string, string>;
+	    ActivePresetID: number;
+	    Drifted: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Tool = source["Tool"];
+	        this.Installed = source["Installed"];
+	        this.ConfigPath = source["ConfigPath"];
+	        this.ConfigExists = source["ConfigExists"];
+	        this.ExtraPaths = source["ExtraPaths"];
+	        this.ActivePresetID = source["ActivePresetID"];
+	        this.Drifted = source["Drifted"];
+	    }
 	}
 
 }

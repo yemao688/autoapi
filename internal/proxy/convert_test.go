@@ -78,6 +78,56 @@ func TestResponsesToMessagesRequestConversion(t *testing.T) {
 	}
 }
 
+func TestMessagesResponsesRequestConversionPreservesReasoningEffort(t *testing.T) {
+	// Fresh map per case: json.Unmarshal merges into a non-nil map.
+	unmarshal := func(out []byte) map[string]any {
+		t.Helper()
+		got := map[string]any{}
+		mustUnmarshal(t, out, &got)
+		return got
+	}
+
+	// Messages -> Responses: reasoning_effort becomes reasoning.effort.
+	out, err := messagesToResponsesRequest([]byte(`{"model":"m","max_tokens":8,"reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`), "u")
+	if err != nil {
+		t.Fatalf("messagesToResponsesRequest: %v", err)
+	}
+	got := unmarshal(out)
+	reasoning, ok := got["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "high" {
+		t.Fatalf("reasoning effort not mapped: %s", out)
+	}
+
+	// Responses -> Messages: reasoning.effort becomes reasoning_effort, and
+	// wins over a bare reasoning_effort string.
+	out, err = responsesToMessagesRequest([]byte(`{"model":"m","reasoning":{"effort":"xhigh"},"input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`), "u")
+	if err != nil {
+		t.Fatalf("responsesToMessagesRequest: %v", err)
+	}
+	got = unmarshal(out)
+	if got["reasoning_effort"] != "xhigh" {
+		t.Fatalf("reasoning_effort not mapped: %s", out)
+	}
+	out, err = responsesToMessagesRequest([]byte(`{"model":"m","reasoning_effort":"low","reasoning":{"effort":"medium"},"input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`), "u")
+	if err != nil {
+		t.Fatalf("responsesToMessagesRequest precedence: %v", err)
+	}
+	got = unmarshal(out)
+	if got["reasoning_effort"] != "medium" {
+		t.Fatalf("reasoning.effort must win: %s", out)
+	}
+
+	// No reasoning configuration on input means none on output.
+	out, err = messagesToResponsesRequest([]byte(`{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`), "u")
+	if err != nil {
+		t.Fatalf("messagesToResponsesRequest no reasoning: %v", err)
+	}
+	got = unmarshal(out)
+	if _, ok := got["reasoning"]; ok {
+		t.Fatalf("unexpected reasoning object: %s", out)
+	}
+}
+
 func TestResponsesToMessagesResponseConversion(t *testing.T) {
 	body := []byte(`{"id":"resp_1","model":"upstream","status":"incomplete","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]},{"id":"item_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}],"usage":{"input_tokens":3,"output_tokens":4}}`)
 	out, err := responsesToMessagesResponse(body, "client-model")

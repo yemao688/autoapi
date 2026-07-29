@@ -98,6 +98,9 @@ func (s *Store) ListModelRulesForDisplay() ([]model.ModelRule, error) {
 	if err := s.hydrateTodayStats(rules); err != nil {
 		return nil, err
 	}
+	if err := s.hydrateTargetSuccessRates(rules); err != nil {
+		return nil, err
+	}
 
 	return rules, nil
 }
@@ -653,4 +656,96 @@ func (s *Store) hydrateTodayStats(rules []model.ModelRule) error {
 		}
 	}
 	return nil
+}
+
+// hydrateTargetSuccessRates computes per-target success rates from the
+// persisted request_logs attempt chain: one rate over the target's 100 most
+// recent real upstream attempts, and one over real attempts within the last
+// hour. "Real" means chain entries with upstream_started; circuit-open
+// rejections, preflight errors, and client aborts never tested the upstream
+// and are excluded from both windows. Targets with no real attempts in a
+// window keep a nil rate so the UI can show an em dash instead of a
+// misleading 0% or 100%.
+//
+// The json_each scan is bounded to the last 30 days: a target idle longer
+// than that simply reports no recent-100 rate. This keeps ListModelRulesForDisplay
+// cheap even with large log tables.
+func (s *Store) hydrateTargetSuccessRates(rules []model.ModelRule) error {
+	targetIndex := make(map[string]*model.ModelRuleTarget)
+	for ri := range rules {
+		for ti := range rules[ri].Targets {
+			t := &rules[ri].Targets[ti]
+			if t.ID != "" {
+				targetIndex[t.ID] = t
+			}
+		}
+	}
+	if len(targetIndex) == 0 {
+		return nil
+	}
+
+	ids := make([]string, 0, len(targetIndex))
+	for id := range targetIndex {
+		ids = append(ids, id)
+	}
+
+	nowMs := time.Now().UnixMilli()
+	scanStartMs := nowMs - 30*24*60*60*1000
+	hourStartMs := nowMs - 60*60*1000
+
+	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
+	args := make([]interface{}, 0, 2+len(ids)+1)
+	args = append(args, scanStartMs)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	args = append(args, hourStartMs, hourStartMs)
+
+	rows, err := s.db.Query(fmt.Sprintf(`
+		WITH attempts AS (
+			SELECT json_extract(je.value, '$.target_id') AS target_id,
+				l.timestamp_ms AS ts,
+				CASE WHEN json_extract(je.value, '$.status') = 'success' THEN 1 ELSE 0 END AS ok
+			FROM request_logs l, json_each(l.chain_json) je
+			WHERE l.chain_json != '' AND l.timestamp_ms >= ?
+				AND json_extract(je.value, '$.upstream_started') = 1
+		),
+		ranked AS (
+			SELECT target_id, ts, ok,
+				ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY ts DESC) AS rn
+			FROM attempts
+			WHERE target_id IN (%s)
+		)
+		SELECT target_id,
+			COUNT(CASE WHEN rn <= 100 THEN 1 END) AS n100,
+			COALESCE(SUM(CASE WHEN rn <= 100 THEN ok END), 0) AS s100,
+			COUNT(CASE WHEN ts >= ? THEN 1 END) AS nhour,
+			COALESCE(SUM(CASE WHEN ts >= ? THEN ok END), 0) AS shour
+		FROM ranked
+		GROUP BY target_id`, placeholders), args...)
+	if err != nil {
+		return fmt.Errorf("store: hydrate target success rates: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var targetID string
+		var n100, s100, nhour, shour int64
+		if err := rows.Scan(&targetID, &n100, &s100, &nhour, &shour); err != nil {
+			return fmt.Errorf("store: scan target success rates: %w", err)
+		}
+		t, ok := targetIndex[targetID]
+		if !ok {
+			continue
+		}
+		if n100 > 0 {
+			rate := float64(s100) / float64(n100) * 100
+			t.SuccessRateRecent100 = &rate
+		}
+		if nhour > 0 {
+			rate := float64(shour) / float64(nhour) * 100
+			t.SuccessRateHour = &rate
+		}
+	}
+	return rows.Err()
 }

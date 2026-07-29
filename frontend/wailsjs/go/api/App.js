@@ -6,8 +6,20 @@ export function AddProviderModels(arg1, arg2) {
   return window['go']['api']['App']['AddProviderModels'](arg1, arg2);
 }
 
+export function ApplyOmoSlimConfig(arg1, arg2) {
+  return window['go']['api']['App']['ApplyOmoSlimConfig'](arg1, arg2);
+}
+
+export function ApplyOpencodeConfigChange(arg1, arg2) {
+  return window['go']['api']['App']['ApplyOpencodeConfigChange'](arg1, arg2);
+}
+
 export function CancelModelTest(arg1) {
   return window['go']['api']['App']['CancelModelTest'](arg1);
+}
+
+export function CheckToolDrift(arg1) {
+  return window['go']['api']['App']['CheckToolDrift'](arg1);
 }
 
 export function ClearLogs() {
@@ -28,6 +40,10 @@ export function CreateModelRule(arg1) {
 
 export function CreateProvider(arg1) {
   return window['go']['api']['App']['CreateProvider'](arg1);
+}
+
+export function CreateToolPreset(arg1, arg2) {
+  return window['go']['api']['App']['CreateToolPreset'](arg1, arg2);
 }
 
 export function DeleteAPIKey(arg1) {
@@ -54,6 +70,18 @@ export function DeleteProviderFeatureCapability(arg1, arg2, arg3) {
   return window['go']['api']['App']['DeleteProviderFeatureCapability'](arg1, arg2, arg3);
 }
 
+export function DeleteToolPreset(arg1) {
+  return window['go']['api']['App']['DeleteToolPreset'](arg1);
+}
+
+export function DisableToolPreset(arg1, arg2) {
+  return window['go']['api']['App']['DisableToolPreset'](arg1, arg2);
+}
+
+export function EnableToolPreset(arg1) {
+  return window['go']['api']['App']['EnableToolPreset'](arg1);
+}
+
 export function EnterBackground() {
   return window['go']['api']['App']['EnterBackground']();
 }
@@ -64,6 +92,10 @@ export function EnterForeground() {
 
 export function ExportData(arg1) {
   return window['go']['api']['App']['ExportData'](arg1);
+}
+
+export function ExportToolSnippet(arg1) {
+  return window['go']['api']['App']['ExportToolSnippet'](arg1);
 }
 
 export function FetchUpstreamModels(arg1) {
@@ -88,6 +120,18 @@ export function GetModelRule(arg1) {
 
 export function GetModelRuleShadowComparisons() {
   return window['go']['api']['App']['GetModelRuleShadowComparisons']();
+}
+
+export function GetOmoSlimConfig() {
+  return window['go']['api']['App']['GetOmoSlimConfig']();
+}
+
+export function GetOpencodeGlobalSettings() {
+  return window['go']['api']['App']['GetOpencodeGlobalSettings']();
+}
+
+export function GetOpencodeLiveState() {
+  return window['go']['api']['App']['GetOpencodeLiveState']();
 }
 
 export function GetProvider(arg1) {
@@ -174,6 +218,22 @@ export function ListProviders() {
   return window['go']['api']['App']['ListProviders']();
 }
 
+export function ListToolBackups(arg1) {
+  return window['go']['api']['App']['ListToolBackups'](arg1);
+}
+
+export function ListToolPresets(arg1) {
+  return window['go']['api']['App']['ListToolPresets'](arg1);
+}
+
+export function ListToolProviders(arg1) {
+  return window['go']['api']['App']['ListToolProviders'](arg1);
+}
+
+export function ListToolStatuses() {
+  return window['go']['api']['App']['ListToolStatuses']();
+}
+
 export function ListUpstreamMonitorModels() {
   return window['go']['api']['App']['ListUpstreamMonitorModels']();
 }
@@ -188,6 +248,14 @@ export function OpenStorageFolder() {
 
 export function PingLogEvent() {
   return window['go']['api']['App']['PingLogEvent']();
+}
+
+export function PreviewOpencodeConfigChange(arg1) {
+  return window['go']['api']['App']['PreviewOpencodeConfigChange'](arg1);
+}
+
+export function PreviewToolOmoSlimChange(arg1) {
+  return window['go']['api']['App']['PreviewToolOmoSlimChange'](arg1);
 }
 
 export function ProbeUpstreamMonitorModel(arg1) {
@@ -236,6 +304,14 @@ export function ResetTargetBreakers() {
 
 export function RestartProxy() {
   return window['go']['api']['App']['RestartProxy']();
+}
+
+export function RestoreToolBackup(arg1, arg2, arg3) {
+  return window['go']['api']['App']['RestoreToolBackup'](arg1, arg2, arg3);
+}
+
+export function RevealToolProviderKey(arg1, arg2) {
+  return window['go']['api']['App']['RevealToolProviderKey'](arg1, arg2);
 }
 
 export function SaveSettings(arg1) {
@@ -314,6 +390,10 @@ export function UpdateAPIKey(arg1, arg2) {
   return window['go']['api']['App']['UpdateAPIKey'](arg1, arg2);
 }
 
+export function UpdateEnabledToolPreset(arg1, arg2) {
+  return window['go']['api']['App']['UpdateEnabledToolPreset'](arg1, arg2);
+}
+
 export function UpdateModelRule(arg1, arg2) {
   return window['go']['api']['App']['UpdateModelRule'](arg1, arg2);
 }
@@ -324,4 +404,8 @@ export function UpdateProvider(arg1, arg2) {
 
 export function UpdateProviderModel(arg1) {
   return window['go']['api']['App']['UpdateProviderModel'](arg1);
+}
+
+export function UpdateToolPreset(arg1, arg2) {
+  return window['go']['api']['App']['UpdateToolPreset'](arg1, arg2);
 }

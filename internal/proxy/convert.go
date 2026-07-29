@@ -9,16 +9,17 @@ import (
 )
 
 type messagesRequestBody struct {
-	Model       string          `json:"model"`
-	MaxTokens   int             `json:"max_tokens"`
-	Metadata    json.RawMessage `json:"metadata"`
-	StopSeqs    json.RawMessage `json:"stop_sequences"`
-	System      json.RawMessage `json:"system"`
-	Messages    json.RawMessage `json:"messages"`
-	Tools       json.RawMessage `json:"tools"`
-	Temperature *float64        `json:"temperature"`
-	TopP        *float64        `json:"top_p"`
-	Stream      bool            `json:"stream"`
+	Model           string          `json:"model"`
+	MaxTokens       int             `json:"max_tokens"`
+	Metadata        json.RawMessage `json:"metadata"`
+	StopSeqs        json.RawMessage `json:"stop_sequences"`
+	System          json.RawMessage `json:"system"`
+	Messages        json.RawMessage `json:"messages"`
+	Tools           json.RawMessage `json:"tools"`
+	Temperature     *float64        `json:"temperature"`
+	TopP            *float64        `json:"top_p"`
+	Stream          bool            `json:"stream"`
+	ReasoningEffort string          `json:"reasoning_effort"`
 }
 
 type responsesRequestBody struct {
@@ -32,6 +33,32 @@ type responsesRequestBody struct {
 	Temperature     *float64        `json:"temperature,omitempty"`
 	TopP            *float64        `json:"top_p,omitempty"`
 	Stream          bool            `json:"stream"`
+	Reasoning       json.RawMessage `json:"reasoning,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+}
+
+// reasoningEffortOf extracts the effort string from a Responses-style
+// reasoning object, falling back to the reasoning_effort field value when the
+// object carries no effort. reasoning.effort takes precedence. Dropping the
+// effort during conversion would let the upstream silently apply its own
+// default, so every request converter preserves it.
+func reasoningEffortOf(raw json.RawMessage, fallback string) (string, error) {
+	effort := fallback
+	if len(raw) == 0 || string(raw) == "null" {
+		return effort, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return "", fmt.Errorf("reasoning must be an object")
+	}
+	if effortRaw, ok := obj["effort"]; ok {
+		var s string
+		if err := json.Unmarshal(effortRaw, &s); err != nil {
+			return "", fmt.Errorf("reasoning.effort must be a string")
+		}
+		effort = s
+	}
+	return effort, nil
 }
 
 type messageItem struct {
@@ -97,6 +124,13 @@ func messagesToResponsesRequest(body []byte, upstreamModel string) ([]byte, erro
 	if req.MaxTokens > 0 {
 		out.MaxOutputTokens = &req.MaxTokens
 	}
+	if req.ReasoningEffort != "" {
+		reasoning, err := json.Marshal(map[string]string{"effort": req.ReasoningEffort})
+		if err != nil {
+			return nil, err
+		}
+		out.Reasoning = reasoning
+	}
 	return json.Marshal(out)
 }
 
@@ -145,6 +179,13 @@ func responsesToMessagesRequest(body []byte, upstreamModel string) ([]byte, erro
 	}
 	if len(toolChoice) > 0 {
 		out["tool_choice"] = json.RawMessage(toolChoice)
+	}
+	effort, err := reasoningEffortOf(req.Reasoning, req.ReasoningEffort)
+	if err != nil {
+		return nil, err
+	}
+	if effort != "" {
+		out["reasoning_effort"] = effort
 	}
 	return json.Marshal(out)
 }
