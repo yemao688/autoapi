@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tailscale/hujson"
@@ -226,11 +227,280 @@ func jsonValue(value any) (hujson.Value, error) {
 // packFormatted serializes a hujson document and applies hujson's stable
 // two-space formatter while retaining comments and HuJSON syntax.
 func packFormatted(doc hujson.Value) ([]byte, error) {
-	formatted, err := hujson.Format(doc.Pack())
+	expanded := expandInlineComposites(doc.Pack())
+	formatted, err := hujson.Format(expanded)
 	if err != nil {
 		return nil, fmt.Errorf("format JSON document: %w", err)
 	}
-	return twoSpaceIndent(formatted), nil
+	formatted = normalizeFormattedLayout(formatted)
+	result := twoSpaceIndent(formatted)
+	result = bytes.TrimRight(result, "\r\n")
+	return append(result, '\n'), nil
+}
+
+type inlineCompositeSpan struct {
+	open     int
+	close    int
+	parent   int
+	depth    int
+	kind     byte
+	hasValue bool
+	commas   []int
+}
+
+type inlineCompositeEdit struct {
+	start       int
+	end         int
+	replacement []byte
+}
+
+// expandInlineComposites makes compact non-empty composites readable while
+// leaving HuJSON composites that already contain a newline unchanged.
+func expandInlineComposites(data []byte) []byte {
+	spans := scanInlineCompositeSpans(data)
+	edits := make([]inlineCompositeEdit, 0)
+	for _, span := range spans {
+		if span.close < 0 || !span.hasValue || hasLineBreak(data[span.open+1:span.close]) {
+			continue
+		}
+		if span.parent == 0 && spans[span.parent].close >= 0 {
+			if hasLineBreak(data[spans[span.parent].open+1 : spans[span.parent].close]) {
+				continue
+			}
+		}
+		indent := func(depth int) []byte {
+			return []byte("\n" + strings.Repeat("\t", depth))
+		}
+		openEnd := skipHorizontalWhitespace(data, span.open+1, span.close)
+		edits = append(edits, inlineCompositeEdit{
+			start:       span.open + 1,
+			end:         openEnd,
+			replacement: indent(span.depth + 1),
+		})
+
+		closeStart := span.close
+		for closeStart > span.open+1 && isHorizontalWhitespace(data[closeStart-1]) {
+			closeStart--
+		}
+		closeReplacement := indent(span.depth)
+		edits = append(edits, inlineCompositeEdit{
+			start:       closeStart,
+			end:         span.close,
+			replacement: closeReplacement,
+		})
+
+		for _, comma := range span.commas {
+			end := skipHorizontalWhitespace(data, comma+1, span.close)
+			edits = append(edits, inlineCompositeEdit{
+				start:       comma,
+				end:         end,
+				replacement: append([]byte{','}, indent(span.depth+1)...),
+			})
+		}
+	}
+	if len(edits) == 0 {
+		return data
+	}
+
+	sort.Slice(edits, func(i, j int) bool {
+		return edits[i].start < edits[j].start
+	})
+	result := make([]byte, 0, len(data)+len(edits)*4)
+	last := 0
+	for _, edit := range edits {
+		if edit.start < last || edit.start > len(data) || edit.end < edit.start || edit.end > len(data) {
+			continue
+		}
+		result = append(result, data[last:edit.start]...)
+		result = append(result, edit.replacement...)
+		last = edit.end
+	}
+	return append(result, data[last:]...)
+}
+
+// normalizeFormattedLayout removes HuJSON alignment and trailing-comma
+// choices that differ from the JSON formatting used by the config files.
+func normalizeFormattedLayout(data []byte) []byte {
+	result := make([]byte, 0, len(data))
+	for i := 0; i < len(data); {
+		switch {
+		case data[i] == '"':
+			end := skipJSONString(data, i)
+			result = append(result, data[i:end]...)
+			i = end
+		case data[i] == '/' && i+1 < len(data) && data[i+1] == '/':
+			end := skipLineComment(data, i)
+			result = append(result, data[i:end]...)
+			i = end
+		case data[i] == '/' && i+1 < len(data) && data[i+1] == '*':
+			end := skipBlockComment(data, i)
+			result = append(result, data[i:end]...)
+			i = end
+		case data[i] == ':':
+			result = append(result, ':')
+			i++
+			if i < len(data) && isHorizontalWhitespace(data[i]) {
+				for i < len(data) && isHorizontalWhitespace(data[i]) {
+					i++
+				}
+				result = append(result, ' ')
+			}
+		case data[i] == ',':
+			for len(result) > 0 && isHorizontalWhitespace(result[len(result)-1]) {
+				result = result[:len(result)-1]
+			}
+			j := skipWhitespaceAndComments(data, i+1)
+			if j < len(data) && (data[j] == '}' || data[j] == ']') {
+				i++
+				continue
+			}
+			result = append(result, ',')
+			i++
+		default:
+			result = append(result, data[i])
+			i++
+		}
+	}
+	return result
+}
+
+func skipWhitespaceAndComments(data []byte, start int) int {
+	for start < len(data) {
+		for start < len(data) && isWhitespaceByte(data[start]) {
+			start++
+		}
+		if start+1 < len(data) && data[start] == '/' && data[start+1] == '/' {
+			start = skipLineComment(data, start)
+			continue
+		}
+		if start+1 < len(data) && data[start] == '/' && data[start+1] == '*' {
+			start = skipBlockComment(data, start)
+			continue
+		}
+		break
+	}
+	return start
+}
+
+func scanInlineCompositeSpans(data []byte) []inlineCompositeSpan {
+	spans := make([]inlineCompositeSpan, 0)
+	stack := make([]int, 0)
+	for i := 0; i < len(data); {
+		switch {
+		case data[i] == '"':
+			if len(stack) > 0 {
+				span := &spans[stack[len(stack)-1]]
+				span.hasValue = true
+			}
+			i = skipJSONString(data, i)
+		case data[i] == '/' && i+1 < len(data) && data[i+1] == '/':
+			if len(stack) > 0 {
+				spans[stack[len(stack)-1]].hasValue = true
+			}
+			i = skipLineComment(data, i)
+		case data[i] == '/' && i+1 < len(data) && data[i+1] == '*':
+			if len(stack) > 0 {
+				spans[stack[len(stack)-1]].hasValue = true
+			}
+			i = skipBlockComment(data, i)
+		case data[i] == '{' || data[i] == '[':
+			if len(stack) > 0 {
+				span := &spans[stack[len(stack)-1]]
+				span.hasValue = true
+			}
+			spans = append(spans, inlineCompositeSpan{
+				open:   i,
+				close:  -1,
+				parent: -1,
+				depth:  len(stack),
+				kind:   data[i],
+			})
+			if len(stack) > 0 {
+				spans[len(spans)-1].parent = stack[len(stack)-1]
+			}
+			stack = append(stack, len(spans)-1)
+			i++
+		case data[i] == '}' || data[i] == ']':
+			if len(stack) == 0 {
+				i++
+				continue
+			}
+			spanIndex := stack[len(stack)-1]
+			span := &spans[spanIndex]
+			want := byte('}')
+			if span.kind == '[' {
+				want = ']'
+			}
+			if data[i] == want {
+				span.close = i
+				stack = stack[:len(stack)-1]
+			}
+			i++
+		case data[i] == ',':
+			if len(stack) > 0 {
+				span := &spans[stack[len(stack)-1]]
+				span.commas = append(span.commas, i)
+			}
+			i++
+		default:
+			if len(stack) > 0 && !isWhitespaceByte(data[i]) && data[i] != ',' {
+				span := &spans[stack[len(stack)-1]]
+				span.hasValue = true
+			}
+			i++
+		}
+	}
+	return spans
+}
+
+func skipJSONString(data []byte, start int) int {
+	for i := start + 1; i < len(data); i++ {
+		if data[i] == '\\' {
+			i++
+			continue
+		}
+		if data[i] == '"' {
+			return i + 1
+		}
+	}
+	return len(data)
+}
+
+func skipLineComment(data []byte, start int) int {
+	for i := start + 2; i < len(data); i++ {
+		if data[i] == '\n' || data[i] == '\r' {
+			return i
+		}
+	}
+	return len(data)
+}
+
+func skipBlockComment(data []byte, start int) int {
+	for i := start + 2; i+1 < len(data); i++ {
+		if data[i] == '*' && data[i+1] == '/' {
+			return i + 2
+		}
+	}
+	return len(data)
+}
+
+func hasLineBreak(data []byte) bool {
+	return bytes.IndexAny(data, "\r\n") >= 0
+}
+
+func skipHorizontalWhitespace(data []byte, start, limit int) int {
+	for start < limit && isHorizontalWhitespace(data[start]) {
+		start++
+	}
+	return start
+}
+
+func isHorizontalWhitespace(b byte) bool {
+	return b == ' ' || b == '\t'
+}
+
+func isWhitespaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
 }
 
 func twoSpaceIndent(data []byte) []byte {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"autoapi/internal/model"
 	"autoapi/internal/toolconfig"
 )
 
@@ -722,6 +723,8 @@ func (s *Service) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift
 	return err
 }
 
+const legacyOmoSlimBackupDir = "opencode-omo"
+
 // ListToolBackups lists both legacy central backups and timestamped source
 // siblings for every resource owned by the tool.
 func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
@@ -751,7 +754,11 @@ func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 		if err != nil {
 			return err
 		}
-		resource := toolconfig.Resource(filepath.ToSlash(filepath.Dir(rel)))
+		resourcePath := filepath.ToSlash(filepath.Dir(rel))
+		resource := toolconfig.Resource(resourcePath)
+		if resourcePath == legacyOmoSlimBackupDir {
+			resource = toolconfig.ResOmoSlimConfig
+		}
 		if !resourceBelongsToTool(toolID, resource) {
 			return nil
 		}
@@ -898,15 +905,23 @@ func (s *Service) presetPlaintext(p toolconfig.Preset) (toolconfig.PresetPlainte
 		if s.proxy == nil || !s.proxy.IsRunning() {
 			return toolconfig.PresetPlaintext{}, fmt.Errorf("service: relay is not running")
 		}
-		relayAddr := resolveAPIAddress(s.proxy.URL())
+		settings, err := s.store.GetSettings()
+		if err != nil {
+			return toolconfig.PresetPlaintext{}, fmt.Errorf("service: get settings: %w", err)
+		}
+		var serverSettings model.ServerSettings
+		if settings != nil {
+			serverSettings = settings.Server
+		}
+		relayAddr := resolveAPIAddress(s.proxy.URL(), serverSettings)
 		if relayAddr == "" {
 			return toolconfig.PresetPlaintext{}, fmt.Errorf("service: relay address is unavailable")
 		}
-		plain, err := toolconfig.BuildAutoapiPreset(p.Tool, p.Name, relayAddr, p.APIKeyID, p.Models)
+		plain, err := toolconfig.BuildAutoapiPreset(p.Tool, p.Name, relayAddr, p.APIKeyID, p.Models, p.Vendor)
 		if err != nil {
 			return toolconfig.PresetPlaintext{}, err
 		}
-		plain.BaseURL = toolconfig.AutoapiBaseURL(p.Tool, relayAddr)
+		plain.BaseURL = toolconfig.AutoapiBaseURLForVendor(p.Tool, relayAddr, p.Vendor)
 		if plain.APIKey == "" {
 			plain.APIKey = p.APIKeyID
 		}
@@ -1074,11 +1089,6 @@ func resourceBelongsToTool(tool toolconfig.Tool, resource toolconfig.Resource) b
 }
 
 func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupPath string, targets ...string) error {
-	resourceDir := filepath.Join(backupRoot, filepath.FromSlash(string(resource)))
-	rootAbs, err := filepath.Abs(resourceDir)
-	if err != nil {
-		return fmt.Errorf("service: resolve backup directory: %w", err)
-	}
 	backupAbs, err := filepath.Abs(backupPath)
 	if err != nil {
 		return fmt.Errorf("service: resolve backup path: %w", err)
@@ -1090,9 +1100,19 @@ func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupP
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("service: backup path is not a regular file")
 	}
-	rel, err := filepath.Rel(rootAbs, backupAbs)
-	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
-		return nil
+	resourceDirs := []string{filepath.Join(backupRoot, filepath.FromSlash(string(resource)))}
+	if resource == toolconfig.ResOmoSlimConfig {
+		resourceDirs = append(resourceDirs, filepath.Join(backupRoot, filepath.FromSlash(legacyOmoSlimBackupDir)))
+	}
+	for _, resourceDir := range resourceDirs {
+		rootAbs, err := filepath.Abs(resourceDir)
+		if err != nil {
+			return fmt.Errorf("service: resolve backup directory: %w", err)
+		}
+		rel, err := filepath.Rel(rootAbs, backupAbs)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			return nil
+		}
 	}
 	if len(targets) == 0 || !toolconfig.IsSourceBackup(resolveBackupTargetPath(targets[0]), backupAbs) {
 		return fmt.Errorf("service: backup path is outside resource directory")

@@ -235,6 +235,12 @@ type App struct {
 	quitting            atomic.Bool
 }
 
+// GetLocalIPv4Addresses returns the currently usable local IPv4 addresses
+// that can be advertised to LAN clients.
+func (a *App) GetLocalIPv4Addresses() ([]string, error) {
+	return service.LocalIPv4Addresses()
+}
+
 // GetTargetBreakerStatuses returns the in-memory rolling failure state for
 // model-rule targets. Runtime breaker state is intentionally not persisted.
 func (a *App) GetTargetBreakerStatuses() []proxy.TargetBreakerStatus {

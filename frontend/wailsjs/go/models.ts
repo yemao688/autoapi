@@ -1334,6 +1334,8 @@ export namespace model {
 	export class ServerSettings {
 	    port: number;
 	    bind_address: string;
+	    lan_enabled: boolean;
+	    lan_address: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ServerSettings(source);
@@ -1343,6 +1345,8 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.port = source["port"];
 	        this.bind_address = source["bind_address"];
+	        this.lan_enabled = source["lan_enabled"];
+	        this.lan_address = source["lan_address"];
 	    }
 	}
 	

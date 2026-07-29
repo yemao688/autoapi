@@ -156,6 +156,12 @@
       "bindAddress": "Bind address",
       "bindLocal": "127.0.0.1 (localhost only)",
       "bindAll": "0.0.0.0 (all interfaces)",
+      "lanEnabled": "Allow LAN access",
+      "lanEnabledHint": "Allow devices on the same local network to reach the local API server",
+      "lanAddress": "LAN address",
+      "lanNoAddress": "No usable LAN address was found; the preview will use the local address",
+      "lanAddressUnavailable": "currently unavailable",
+      "serviceAddress": "Service address",
       "apiEndpoints": "API endpoints",
       "copyEndpoint": "Copy endpoint",
       "serviceStatus": "Service status",
@@ -649,7 +655,8 @@
       "models": "{count} models",
       "storedKey": "Key stored",
       "export": "Export config snippet",
-      "backups": "Backups"
+      "backups": "Backups",
+      "interfaceFormat": "Interface format"
     },
     "vendors": {
       "openai-responses": "OpenAI Responses",

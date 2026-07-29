@@ -320,7 +320,7 @@ onMounted(() => {
           <div class="h-divider tool-divider"></div>
           <div class="row-between tool-section-heading">
             <div><div class="section-title" style="font-size: 15px;">{{ t('toolAccess.presets.title') }}</div><div class="section-sub">{{ t('toolAccess.presets.count', { count: presetsFor(card.tool).length }) }}</div></div>
-            <div class="row tool-heading-actions"><button v-if="card.tool === 'opencode'" class="btn btn-primary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-secondary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
+            <div class="row tool-heading-actions"><button class="btn btn-ghost tool-card-backups" :disabled="mutationBusy" @click="openBackups(card.tool, card.tool === 'opencode' ? 'opencode/config' : '')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button><button v-if="card.tool === 'opencode'" class="btn btn-primary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-secondary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
           </div>
 
           <div v-if="!presetsFor(card.tool).length" class="tool-empty">{{ t('toolAccess.presets.empty') }}</div>
@@ -347,14 +347,11 @@ onMounted(() => {
                 <div v-if="opencodeLive?.OmoSlimConfigured" class="omo-slim-card-summary">{{ t('toolAccess.omoSlim.activeSummary', { preset: opencodeLive.OmoSlimActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoSlimAgentCount, disabled: opencodeLive.OmoSlimDisabledCount }) }}</div>
                 <div v-else class="omo-slim-card-summary muted">{{ t('toolAccess.omoSlim.notConfigured') }}</div>
               </div>
-              <div class="row omo-slim-card-actions"><button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" :disabled="mutationBusy" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button><button class="btn btn-ghost" :disabled="mutationBusy" style="padding: 5px 8px; font-size: 11.5px;" @click="openBackups('opencode', 'opencode-omo')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3"/></svg>{{ t('toolAccess.omoSlim.backups') }}</button></div>
+              <div class="row omo-slim-card-actions"><button class="btn btn-ghost" :disabled="mutationBusy" style="padding: 5px 8px; font-size: 11.5px;" @click="openBackups('opencode', 'opencode-omo-slim')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3"/></svg>{{ t('toolAccess.omoSlim.backups') }}</button><button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" :disabled="mutationBusy" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button></div>
             </div>
             <div class="text-mono omo-slim-card-path" :title="statusFor('opencode')?.ExtraPaths?.omo_slim_config || ''">{{ pathText(statusFor('opencode')?.ExtraPaths?.omo_slim_config || '') }}</div>
           </div>
 
-          <div class="row tool-card-actions">
-            <button class="btn btn-ghost" :disabled="mutationBusy" @click="openBackups(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button>
-          </div>
         </article>
       </section>
     </div>
@@ -370,7 +367,27 @@ onMounted(() => {
     </div>
 
     <div v-if="backupsOpen" class="modal-overlay" @click.self="backupsOpen = false">
-      <div class="modal-card wide modal-card-scroll"><div class="row-between"><div><div class="modal-title">{{ t('toolAccess.backups.title', { tool: toolLabel(backupsTool) }) }}</div><div class="section-sub">{{ t('toolAccess.backups.subtitle') }}</div></div><button class="btn btn-icon" @click="backupsOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div v-if="backupsLoading" class="tool-page-state">{{ t('toolAccess.backups.loading') }}</div><div v-else-if="!backups.length" class="tool-page-state">{{ t('toolAccess.backups.empty') }}</div><div v-else class="tbl-wrap"><table class="tbl backups-table"><thead><tr><th>{{ t('toolAccess.backups.resource') }}</th><th>{{ t('toolAccess.backups.path') }}</th><th>{{ t('toolAccess.backups.modified') }}</th><th></th></tr></thead><tbody><tr v-for="backup in backups" :key="backup.Path"><td>{{ backup.Resource }}</td><td class="text-mono backup-path">{{ backup.Path }}</td><td>{{ formatModTime(backup.ModTime) }}</td><td class="right"><button class="btn btn-secondary" style="padding: 4px 9px; font-size: 11.5px;" @click="restoreBackup(backup)">{{ t('toolAccess.backups.restore') }}</button></td></tr></tbody></table></div></div>
+      <div class="modal-card wide modal-card-scroll backups-modal" role="dialog" aria-modal="true">
+        <div class="backups-modal-header">
+          <div class="backups-modal-heading">
+            <div class="backups-modal-kicker"><span class="backups-modal-kicker-dot" aria-hidden="true"></span>{{ toolLabel(backupsTool) }}</div>
+            <div class="modal-title backups-modal-title">{{ t('toolAccess.backups.title', { tool: toolLabel(backupsTool) }) }}</div>
+            <div class="section-sub backups-modal-subtitle">{{ t('toolAccess.backups.subtitle') }}</div>
+          </div>
+          <button class="btn btn-icon backups-modal-close" :aria-label="t('common.close')" @click="backupsOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="backups-modal-divider" aria-hidden="true"></div>
+        <div v-if="backupsLoading" class="backups-state backups-loading-state"><span class="backups-loading-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M6 7v12h12V7M9 7V4h6v3M9 11h6M9 15h4"/></svg></span><span>{{ t('toolAccess.backups.loading') }}</span></div>
+        <div v-else-if="!backups.length" class="backups-state backups-empty-state"><div class="backups-empty-illustration" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17.5h30v19H9z"/><path d="M12 17.5 15 11h18l3 6.5M18 24h12M18 29h7"/><path d="M34 11v-2"/></svg></div><strong>{{ t('toolAccess.backups.empty') }}</strong><span>{{ t('toolAccess.backups.subtitle') }}</span></div>
+        <div v-else class="backups-list" role="list" :aria-label="t('toolAccess.backups.title', { tool: toolLabel(backupsTool) })">
+          <div v-for="backup in backups" :key="backup.Path" class="backup-row" role="listitem">
+            <div class="backup-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v15H4z"/><path d="M8 9h8M8 13h6M8 17h4"/></svg></div>
+            <div class="backup-row-main"><div class="backup-row-resource">{{ backup.Resource }}</div><div class="text-mono backup-row-path" :title="backup.Path">{{ backup.Path }}</div></div>
+            <div class="backup-row-time">{{ formatModTime(backup.ModTime) }}</div>
+            <div class="backup-row-actions"><button class="btn backup-action backup-action-restore" @click="restoreBackup(backup)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/><path d="M12 7v5l3 2"/></svg>{{ t('toolAccess.backups.restore') }}</button></div>
+          </div>
+        </div>
+      </div>
     </div>
   </Teleport>
 </template>
@@ -396,6 +413,7 @@ onMounted(() => {
 .tool-divider { margin: 12px 0; }
 .tool-section-heading { align-items: flex-start; margin-bottom: 9px; }
 .tool-heading-actions { gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.tool-card-backups { padding: 5px 9px; font-size: 11.5px; }
 .tool-empty, .tool-page-state { padding: 18px 8px; text-align: center; color: var(--muted); font-size: 12px; }
 .tool-preset-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .tool-preset-row { display: flex; gap: 8px; align-items: center; padding: 9px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
@@ -425,7 +443,39 @@ onMounted(() => {
 .export-meta strong { font-weight: 500; overflow-wrap: anywhere; }
 .export-code-heading { margin: 0 0 6px; }
 .export-code { max-height: 400px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #1d1d1f; color: #f5f5f7; font: 11.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.backups-table { min-width: 640px; }
-.backup-path { max-width: 300px; overflow-wrap: anywhere; font-size: 11px; }
+.backups-modal { width: min(760px, 90vw); padding: 24px; background: color-mix(in srgb, var(--surface) 96%, var(--bg)); }
+.backups-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.backups-modal-heading { min-width: 0; }
+.backups-modal-kicker { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.backups-modal-kicker-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.backups-modal-title { margin-bottom: 3px; font-size: 21px; letter-spacing: -0.025em; }
+.backups-modal-subtitle { margin-top: 0; font-size: 12px; }
+.backups-modal-close { flex: 0 0 auto; margin: -4px -4px 0 0; }
+.backups-modal-divider { height: 1px; margin: 20px 0 16px; background: var(--border); opacity: .7; }
+.backups-state { display: flex; min-height: 260px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 1px dashed var(--border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--bg) 55%, transparent); color: var(--muted); text-align: center; }
+.backups-loading-state { flex-direction: row; min-height: 180px; border-style: solid; }
+.backups-loading-mark { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; color: var(--accent); background: var(--accent-soft); }
+.backups-loading-mark svg { width: 17px; height: 17px; }
+.backups-empty-state strong { color: var(--fg); font-size: 14px; font-weight: 600; }
+.backups-empty-state > span { max-width: 280px; font-size: 11.5px; }
+.backups-empty-illustration { display: grid; width: 64px; height: 64px; place-items: center; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 20px; color: var(--muted); background: color-mix(in srgb, var(--surface) 76%, var(--accent-soft)); box-shadow: var(--shadow-sm); }
+.backups-empty-illustration svg { width: 36px; height: 36px; }
+.backups-list { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+.backup-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; align-items: center; gap: 13px; min-width: 0; padding: 14px 15px; border-bottom: 1px solid var(--border); transition: background-color .15s ease; }
+.backup-row:last-child { border-bottom: none; }
+.backup-row:hover { background: color-mix(in srgb, var(--accent-soft) 42%, transparent); }
+.backup-row-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; color: var(--accent); background: var(--accent-soft); }
+.backup-row-icon svg { width: 18px; height: 18px; }
+.backup-row-main { min-width: 0; }
+.backup-row-resource { margin-bottom: 4px; color: var(--fg); font-size: 12px; font-weight: 600; }
+.backup-row-path { overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.backup-row-time { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.backup-row-actions { display: flex; align-items: center; justify-content: flex-end; }
+.backup-action { padding: 6px 10px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 11.5px; }
+.backup-action svg { width: 14px; height: 14px; }
+.backup-action-restore { color: var(--negative); background: transparent; }
+.backup-action-restore:hover { border-color: color-mix(in srgb, var(--negative) 28%, transparent); background: color-mix(in srgb, var(--negative) 10%, transparent); }
+.backup-action:active { transform: scale(.96); }
 @media (max-width: 700px) { .tool-grid { grid-template-columns: 1fr; } .tool-card-opencode { grid-column: 1 / -1; } .tool-page-error { flex-direction: column; } }
+@media (max-width: 600px) { .backups-modal { padding: 18px; } .backups-modal-title { font-size: 19px; } .backup-row { grid-template-columns: 34px minmax(0, 1fr); gap: 10px 12px; padding: 13px; } .backup-row-icon { width: 34px; height: 34px; } .backup-row-time { grid-column: 2; font-size: 11px; } .backup-row-actions { grid-column: 2; justify-content: flex-start; } }
 </style>

@@ -108,7 +108,9 @@ function defaultSettings(): model.Settings {
     },
     server: {
       port: 0,
-      bind_address: '0.0.0.0',
+      bind_address: '127.0.0.1',
+      lan_enabled: false,
+      lan_address: '',
     },
     data: {
       log_retention_days: 90,
@@ -133,6 +135,9 @@ function defaultSettings(): model.Settings {
 }
 
 const settings = ref<model.Settings>(defaultSettings())
+const lanEnabled = ref(false)
+const lanAddresses = ref<string[]>([])
+const lanAddressesLoading = ref(false)
 const selectedTheme = computed<'light' | 'dark' | 'system'>(() => {
   const theme = settings.value.appearance.theme
   if (theme === 'light' || theme === 'dark' || theme === 'system') return theme
@@ -140,6 +145,12 @@ const selectedTheme = computed<'light' | 'dark' | 'system'>(() => {
 })
 const storagePath = computed(() => settings.value.data.storage_path || '')
 const logPath = computed(() => runtimePaths.value?.log_path || '')
+const servicePort = computed(() => Number(settings.value.server.port) || 8344)
+const selectedLanAddress = computed(() => settings.value.server.lan_address || lanAddresses.value[0] || '')
+const serviceAddress = computed(() => {
+  const host = lanEnabled.value ? selectedLanAddress.value || '127.0.0.1' : '127.0.0.1'
+  return `http://${host}:${servicePort.value}`
+})
 
 // Language picker
 const languageOptions: { value: AppLocale; label: string }[] = [
@@ -161,6 +172,7 @@ const currentLanguage = computed({
 
 function applySettings(value: model.Settings) {
   settings.value = JSON.parse(JSON.stringify(value)) as model.Settings
+  lanEnabled.value = settings.value.server.lan_enabled ?? settings.value.server.bind_address !== '127.0.0.1'
   settings.value.advanced.target_breaker_threshold ||= 5
   settings.value.advanced.target_breaker_window_seconds ||= 300
   normalizeLifecycleSettings(settings.value)
@@ -173,6 +185,22 @@ async function loadSettings() {
   settingsLoaded.value = false
   const value = await fetchSettings()
   if (value) applySettings(value)
+}
+
+async function loadLocalIPv4Addresses() {
+  lanAddressesLoading.value = true
+  try {
+    lanAddresses.value = await api.getLocalIPv4Addresses()
+  } catch {
+    lanAddresses.value = []
+  } finally {
+    lanAddressesLoading.value = false
+  }
+}
+
+function onLanToggle() {
+  markSettingsDirty()
+  if (lanEnabled.value) void loadLocalIPv4Addresses()
 }
 
 async function resyncSettingsAfterFailure() {
@@ -246,6 +274,14 @@ function onMenuBarItemChange() {
 async function saveChanges() {
   if (!settingsLoaded.value) return
   normalizeBreakerSettings()
+  settings.value.server.lan_enabled = lanEnabled.value
+  if (lanEnabled.value) {
+    settings.value.server.bind_address = '0.0.0.0'
+    settings.value.server.lan_address = settings.value.server.lan_address || lanAddresses.value[0] || ''
+  } else {
+    settings.value.server.bind_address = '127.0.0.1'
+    settings.value.server.lan_address = ''
+  }
   try {
     await api.saveSettings(settings.value)
     isDirty.value = false
@@ -273,6 +309,7 @@ async function restoreDefaults() {
   try {
     const defaults = await api.resetSettings()
     settings.value = defaults
+    lanEnabled.value = false
     isDirty.value = false
     activeTheme.value = defaults.appearance.theme as any
     toast.push(t('toast.defaultsRestored'), 'success')
@@ -364,6 +401,7 @@ onMounted(async () => {
   void loadSettings()
   void loadRuntimePaths()
   void refreshProxyStatus()
+  void loadLocalIPv4Addresses()
   try {
     appInfo.value = await api.getAppInfo()
   } catch {
@@ -810,12 +848,30 @@ watch(activeTheme, (t) => {
               <div class="field-help">{{ t('settings.server.portHelp') }}</div>
             </div>
             <div class="h-divider"></div>
-            <div class="field">
-              <div class="field-label">{{ t('settings.server.bindAddress') }}</div>
-              <select class="select" style="max-width: 320px;" v-model="settings.server.bind_address" @change="markSettingsDirty">
-                <option value="127.0.0.1">{{ t('settings.server.bindLocal') }}</option>
-                <option value="0.0.0.0">{{ t('settings.server.bindAll') }}</option>
-              </select>
+            <div class="field server-lan-field">
+              <div class="row-between server-lan-toggle-row">
+                <div>
+                  <div class="field-label">{{ t('settings.server.lanEnabled') }}</div>
+                  <div class="field-help">{{ t('settings.server.lanEnabledHint') }}</div>
+                </div>
+                <label class="toggle"><input type="checkbox" v-model="lanEnabled" @change="onLanToggle"><span class="toggle-slider blue"></span></label>
+              </div>
+              <div class="server-lan-bind-row">
+                <span class="field-label">{{ t('settings.server.bindAddress') }}</span>
+                <span class="text-mono server-lan-bind-value">{{ lanEnabled ? t('settings.server.bindAll') : t('settings.server.bindLocal') }}</span>
+              </div>
+              <div v-if="lanEnabled" class="server-lan-address-row">
+                <div class="server-lan-address-label"><span class="field-label">{{ t('settings.server.lanAddress') }}</span></div>
+                <div class="server-lan-address-controls">
+                  <select class="select server-lan-select" v-model="settings.server.lan_address" @change="markSettingsDirty" :disabled="lanAddressesLoading || !lanAddresses.length">
+                    <option v-if="settings.server.lan_address && !lanAddresses.includes(settings.server.lan_address)" :value="settings.server.lan_address">{{ settings.server.lan_address }} ({{ t('settings.server.lanAddressUnavailable') }})</option>
+                    <option v-for="address in lanAddresses" :key="address" :value="address">{{ address }}</option>
+                  </select>
+                  <button class="btn btn-icon server-lan-refresh" type="button" :disabled="lanAddressesLoading" :title="t('settings.actions.retry')" :aria-label="t('settings.actions.retry')" @click="loadLocalIPv4Addresses"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 4v7h-7"/></svg></button>
+                </div>
+                <div v-if="!lanAddresses.length" class="field-help server-lan-empty">{{ t('settings.server.lanNoAddress') }}</div>
+              </div>
+              <div class="server-address-preview"><span>{{ t('settings.server.serviceAddress') }}</span><span class="text-mono">{{ serviceAddress }}</span></div>
             </div>
             <div class="h-divider"></div>
             <div class="field" style="margin-bottom: 0;">
@@ -1026,4 +1082,19 @@ watch(activeTheme, (t) => {
   color: var(--muted);
   font-size: 12.5px;
 }
+
+.server-lan-field { margin-bottom: 0; }
+.server-lan-toggle-row { align-items: flex-start; margin-bottom: 14px; }
+.server-lan-bind-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--border); }
+.server-lan-bind-value { color: var(--muted); font-size: 12px; }
+.server-lan-address-row { display: grid; gap: 7px; padding: 10px 0 0; }
+.server-lan-address-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.server-lan-address-controls { display: flex; align-items: center; gap: 6px; max-width: 320px; }
+.server-lan-select { min-width: 0; flex: 1; }
+.server-lan-refresh { width: 34px; height: 34px; border: 1px solid var(--border); background: var(--surface); }
+.server-lan-refresh svg { width: 15px; height: 15px; }
+.server-lan-empty { margin-top: 0; }
+.server-address-preview { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg)); color: var(--muted); font-size: 11.5px; }
+.server-address-preview .text-mono { overflow: hidden; color: var(--accent); text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 560px) { .server-lan-address-label, .server-address-preview { align-items: flex-start; flex-direction: column; gap: 4px; } .server-lan-address-controls { max-width: none; } }
 </style>

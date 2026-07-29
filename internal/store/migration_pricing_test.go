@@ -86,3 +86,50 @@ func TestRequestPriceMigrationSkipIfRedundantPreservesZero(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOmoSlimResourceMigrationRenamesLegacyState(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := applyMigrations(db, migrationsThrough("037_tool_access_tables")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO tool_file_state(tool, resource, path) VALUES('opencode', 'opencode-omo', '/tmp/omo.jsonc')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var resource string
+	if err := db.QueryRow(`SELECT resource FROM tool_file_state WHERE tool='opencode'`).Scan(&resource); err != nil {
+		t.Fatal(err)
+	}
+	if resource != "opencode-omo-slim" {
+		t.Fatalf("migrated resource = %q", resource)
+	}
+}
+
+func TestOmoSlimResourceMigrationSkipsWithoutLegacyState(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := applyMigrations(db, migrationsThrough("037_tool_access_tables")); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM _migrations WHERE id='038_rename_omo_slim_resource'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("migration record count = %d, want 1", count)
+	}
+}

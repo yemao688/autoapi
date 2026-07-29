@@ -371,3 +371,59 @@ func TestRestoreToolBackupRestoresPreviousContent(t *testing.T) {
 		t.Fatalf("restored content mismatch: got=%q want=%q", restored, original)
 	}
 }
+
+func TestLegacyOmoSlimBackupListsNewResourceAndRestores(t *testing.T) {
+	svc, db, homeDir := newToolConfigTestService(t)
+	omoPath := filepath.Join(homeDir, ".config", "opencode", "oh-my-opencode-slim.jsonc")
+	if err := os.MkdirAll(filepath.Dir(omoPath), 0o755); err != nil {
+		t.Fatalf("mkdir OMO Slim fixture: %v", err)
+	}
+	if err := os.WriteFile(omoPath, []byte(`{"preset":"current"}`), 0o644); err != nil {
+		t.Fatalf("write OMO Slim fixture: %v", err)
+	}
+
+	backupPath := filepath.Join(toolBackupRoot(homeDir), legacyOmoSlimBackupDir, "legacy.jsonc")
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0o755); err != nil {
+		t.Fatalf("mkdir legacy backup: %v", err)
+	}
+	legacyContent := []byte(`{"preset":"legacy"}`)
+	if err := os.WriteFile(backupPath, legacyContent, 0o644); err != nil {
+		t.Fatalf("write legacy backup: %v", err)
+	}
+
+	backups, err := svc.ListToolBackups(string(toolconfig.ToolOpencode))
+	if err != nil {
+		t.Fatalf("ListToolBackups: %v", err)
+	}
+	found := false
+	for _, backup := range backups {
+		if backup.Path == backupPath {
+			found = true
+			if backup.Resource != toolconfig.ResOmoSlimConfig {
+				t.Fatalf("legacy backup resource = %q, want %q", backup.Resource, toolconfig.ResOmoSlimConfig)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("legacy backup %q not listed: %+v", backupPath, backups)
+	}
+
+	if err := svc.RestoreToolBackup(string(toolconfig.ToolOpencode), string(toolconfig.ResOmoSlimConfig), backupPath); err != nil {
+		t.Fatalf("RestoreToolBackup: %v", err)
+	}
+	restored, err := os.ReadFile(omoPath)
+	if err != nil {
+		t.Fatalf("read restored OMO Slim config: %v", err)
+	}
+	if string(restored) != string(legacyContent) {
+		t.Fatalf("restored OMO Slim content = %q, want %q", restored, legacyContent)
+	}
+
+	fileStates, err := db.GetToolFileStates(string(toolconfig.ToolOpencode))
+	if err != nil {
+		t.Fatalf("GetToolFileStates: %v", err)
+	}
+	if len(fileStates) != 1 || fileStates[0].Resource != toolconfig.ResOmoSlimConfig {
+		t.Fatalf("unexpected restored file states: %+v", fileStates)
+	}
+}

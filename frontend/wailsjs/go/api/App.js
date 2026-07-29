@@ -114,6 +114,10 @@ export function GetDashboard() {
   return window['go']['api']['App']['GetDashboard']();
 }
 
+export function GetLocalIPv4Addresses() {
+  return window['go']['api']['App']['GetLocalIPv4Addresses']();
+}
+
 export function GetModelRule(arg1) {
   return window['go']['api']['App']['GetModelRule'](arg1);
 }
