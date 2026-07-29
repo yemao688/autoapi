@@ -1,9 +1,11 @@
 package service
 
 import (
+	"net"
 	"strings"
 	"testing"
 
+	"autoapi/internal/model"
 	"autoapi/internal/store"
 )
 
@@ -104,21 +106,22 @@ func TestResolveAPIAddress(t *testing.T) {
 	cases := []struct {
 		name    string
 		proxy   string
+		server  model.ServerSettings
 		wantPre string // prefix check, leaving IPv4 host open
 		wantSuf string // port suffix
 		wantErr bool   // true if we expect empty result
 	}{
-		{"scheme and IPv4 bind", "http://0.0.0.0:8344", "http://", ":8344", false},
-		{"no scheme IPv4 bind", "0.0.0.0:9999", "http://", ":9999", false},
-		{"IPv6 bind", "http://[::]:8123", "http://", ":8123", false},
-		{"localhost", "http://127.0.0.1:4000", "http://", ":4000", false},
-		{"empty", "", "", "", true},
-		{"no port", "http://0.0.0.0", "", "", true},
-		{"malformed", "not-a-url", "", "", true},
+		{"scheme and IPv4 bind", "http://0.0.0.0:8344", model.ServerSettings{}, "http://", ":8344", false},
+		{"no scheme IPv4 bind", "0.0.0.0:9999", model.ServerSettings{}, "http://", ":9999", false},
+		{"IPv6 bind", "http://[::]:8123", model.ServerSettings{}, "http://", ":8123", false},
+		{"localhost", "http://127.0.0.1:4000", model.ServerSettings{}, "http://", ":4000", false},
+		{"empty", "", model.ServerSettings{}, "", "", true},
+		{"no port", "http://0.0.0.0", model.ServerSettings{}, "", "", true},
+		{"malformed", "not-a-url", model.ServerSettings{}, "", "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := resolveAPIAddress(c.proxy)
+			got := resolveAPIAddress(c.proxy, c.server)
 			if c.wantErr {
 				if got != "" {
 					t.Errorf("expected empty result, got %q", got)
@@ -127,6 +130,31 @@ func TestResolveAPIAddress(t *testing.T) {
 			}
 			if !strings.HasPrefix(got, c.wantPre) || !strings.HasSuffix(got, c.wantSuf) {
 				t.Errorf("resolveAPIAddress(%q) = %q, want prefix %q and suffix %q", c.proxy, got, c.wantPre, c.wantSuf)
+			}
+		})
+	}
+}
+
+func TestResolveAPIAddressLANSelection(t *testing.T) {
+	addrs := []string{"192.168.1.20", "10.0.0.8"}
+	cases := []struct {
+		name   string
+		server model.ServerSettings
+		want   string
+	}{
+		{"disabled", model.ServerSettings{}, "http://127.0.0.1:8344"},
+		{"configured address present", model.ServerSettings{LANEnabled: true, LANAddress: "10.0.0.8"}, "http://10.0.0.8:8344"},
+		{"configured address stale", model.ServerSettings{LANEnabled: true, LANAddress: "192.168.50.9"}, "http://192.168.1.20:8344"},
+		{"no discovered address", model.ServerSettings{LANEnabled: true}, "http://127.0.0.1:8344"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := resolveAPIAddressWithAddrs("http://0.0.0.0:8344", c.server, addrs)
+			if c.name == "no discovered address" {
+				got = resolveAPIAddressWithAddrs("http://0.0.0.0:8344", c.server, nil)
+			}
+			if got != c.want {
+				t.Fatalf("resolveAPIAddressWithAddrs() = %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -151,6 +179,27 @@ func TestLocalIPv4ReturnsValid(t *testing.T) {
 	for _, p := range parts {
 		if p == "" {
 			t.Errorf("empty part in %q", addr)
+		}
+	}
+}
+
+func TestLocalIPv4AddressesSmoke(t *testing.T) {
+	addrs, err := LocalIPv4Addresses()
+	if err != nil {
+		t.Fatalf("LocalIPv4Addresses: %v", err)
+	}
+	seen := make(map[string]struct{}, len(addrs))
+	for _, addr := range addrs {
+		if _, ok := seen[addr]; ok {
+			t.Fatalf("duplicate address %q", addr)
+		}
+		seen[addr] = struct{}{}
+		ip := net.ParseIP(addr)
+		if ip == nil || ip.To4() == nil {
+			t.Fatalf("expected IPv4 address, got %q", addr)
+		}
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			t.Fatalf("unexpected local address %q", addr)
 		}
 	}
 }

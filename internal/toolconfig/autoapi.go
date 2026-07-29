@@ -5,15 +5,27 @@ import (
 	"strings"
 )
 
-// AutoapiBaseURL returns the endpoint shape expected by each supported client.
-// An empty result means relayAddr was empty or the tool is unsupported.
+// AutoapiBaseURL returns the legacy endpoint shape expected by each supported
+// client. Vendor-aware callers should use AutoapiBaseURLForVendor.
 func AutoapiBaseURL(tool Tool, relayAddr string) string {
+	return AutoapiBaseURLForVendor(tool, relayAddr, "")
+}
+
+// AutoapiBaseURLForVendor returns the endpoint shape expected by a supported
+// client and OpenCode provider vendor. An empty result means relayAddr was
+// empty or the tool is unsupported.
+func AutoapiBaseURLForVendor(tool Tool, relayAddr, vendor string) string {
 	addr := strings.TrimRight(strings.TrimSpace(relayAddr), "/")
 	if addr == "" {
 		return ""
 	}
 	switch tool {
-	case ToolOpencode, ToolCodex:
+	case ToolOpencode:
+		if NormalizeVendor(vendor) == VendorGoogleGemini {
+			return addr + "/v1beta"
+		}
+		return addr + "/v1"
+	case ToolCodex:
 		return addr + "/v1"
 	case ToolClaude:
 		return addr
@@ -24,12 +36,22 @@ func AutoapiBaseURL(tool Tool, relayAddr string) string {
 
 // BuildAutoapiPreset builds the relay preset used by an external tool. The
 // API key ID is itself the relay token, so the plaintext field is intentionally
-// set to the same value and is never decrypted here.
-func BuildAutoapiPreset(tool Tool, name, relayAddr, apiKeyID string, models []PresetModel) (PresetPlaintext, error) {
+// set to the same value and is never decrypted here. The optional vendor keeps
+// old callers source-compatible while allowing newer callers to select the
+// OpenCode provider interface.
+func BuildAutoapiPreset(tool Tool, name, relayAddr, apiKeyID string, models []PresetModel, vendors ...string) (PresetPlaintext, error) {
+	vendorInput := ""
+	if len(vendors) > 0 {
+		vendorInput = vendors[0]
+	}
+	vendor, err := normalizeAutoapiVendor(tool, vendorInput)
+	if err != nil {
+		return PresetPlaintext{}, err
+	}
 	if err := validateAutoapiBuild(tool, name, relayAddr, apiKeyID, models); err != nil {
 		return PresetPlaintext{}, err
 	}
-	baseURL := AutoapiBaseURL(tool, relayAddr)
+	baseURL := AutoapiBaseURLForVendor(tool, relayAddr, vendor)
 
 	modelCopy := append([]PresetModel(nil), models...)
 	hasDefault := false
@@ -43,10 +65,6 @@ func BuildAutoapiPreset(tool Tool, name, relayAddr, apiKeyID string, models []Pr
 		modelCopy[0].Default = true
 	}
 
-	vendor := ""
-	if tool == ToolOpencode {
-		vendor = VendorOpenAICompatible
-	}
 	return PresetPlaintext{
 		Preset: Preset{
 			Tool:       tool,
@@ -60,6 +78,21 @@ func BuildAutoapiPreset(tool Tool, name, relayAddr, apiKeyID string, models []Pr
 		},
 		APIKey: apiKeyID,
 	}, nil
+}
+
+func normalizeAutoapiVendor(tool Tool, vendor string) (string, error) {
+	vendor = strings.TrimSpace(vendor)
+	if vendor == "" {
+		if tool == ToolOpencode {
+			return VendorOpenAICompatible, nil
+		}
+		return "", nil
+	}
+	normalized := NormalizeVendor(vendor)
+	if normalized == VendorAmazonBedrock {
+		return "", fmt.Errorf("%w: vendor %q is not supported for relay presets", ErrInvalidPreset, vendor)
+	}
+	return normalized, nil
 }
 
 func validateAutoapiBuild(tool Tool, name, relayAddr, apiKeyID string, models []PresetModel) error {

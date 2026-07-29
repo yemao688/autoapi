@@ -42,10 +42,10 @@ type Resource string
 
 const (
 	ResOpencodeConfig Resource = "opencode/config"
-	// These string literals are persisted in tool_file_state and backup paths;
-	// keep them unchanged when renaming the Go constants.
+	// Resource values are persisted in tool_file_state and backup paths; pair
+	// any value change with a data migration.
 	ResOpencodeOmoSlim Resource = "opencode/omo"
-	ResOmoSlimConfig   Resource = "opencode-omo"
+	ResOmoSlimConfig   Resource = "opencode-omo-slim"
 	ResCodexConfig     Resource = "codex/config"
 	ResCodexAuth       Resource = "codex/auth"
 	ResClaudeSettings  Resource = "claude/settings"

@@ -585,6 +585,8 @@ type RoutingSettings struct {
 type ServerSettings struct {
 	Port        int    `json:"port"`         // 8344
 	BindAddress string `json:"bind_address"` // "0.0.0.0"
+	LANEnabled  bool   `json:"lan_enabled"`
+	LANAddress  string `json:"lan_address"`
 	// Endpoints lists the OpenAI-compatible paths served by the proxy.
 	// Display-only — derived from the registered chi routes at runtime.
 }

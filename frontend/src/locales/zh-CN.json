@@ -156,6 +156,12 @@
       "bindAddress": "绑定地址",
       "bindLocal": "127.0.0.1 (仅本机)",
       "bindAll": "0.0.0.0 (所有接口)",
+      "lanEnabled": "支持局域网访问",
+      "lanEnabledHint": "允许同一局域网内的设备访问本地 API 服务",
+      "lanAddress": "局域网地址",
+      "lanNoAddress": "未检测到可用的局域网地址，将使用本机地址预览",
+      "lanAddressUnavailable": "当前不可用",
+      "serviceAddress": "服务地址",
       "apiEndpoints": "API 端点",
       "copyEndpoint": "复制端点",
       "serviceStatus": "服务状态",
@@ -649,7 +655,8 @@
       "models": "{count} 个模型",
       "storedKey": "已存密钥",
       "export": "导出配置片段",
-      "backups": "备份"
+      "backups": "备份",
+      "interfaceFormat": "接口格式"
     },
     "vendors": {
       "openai-responses": "OpenAI Responses",

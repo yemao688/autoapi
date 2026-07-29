@@ -644,6 +644,19 @@ CREATE TABLE IF NOT EXISTS tool_file_state (
 );
 `,
 	},
+	{
+		ID: "038_rename_omo_slim_resource",
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) {
+			var count int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM tool_file_state WHERE tool = 'opencode' AND resource = 'opencode-omo'`).Scan(&count); err != nil {
+				return false, fmt.Errorf("check legacy OMO Slim resource state: %w", err)
+			}
+			return count == 0, nil
+		},
+		SQL: `UPDATE tool_file_state
+SET resource = 'opencode-omo-slim'
+WHERE tool = 'opencode' AND resource = 'opencode-omo';`,
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

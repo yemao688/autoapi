@@ -63,6 +63,8 @@ export function GetAppVisibilityState():Promise<string>;
 
 export function GetDashboard():Promise<model.DashboardData>;
 
+export function GetLocalIPv4Addresses():Promise<Array<string>>;
+
 export function GetModelRule(arg1:string):Promise<model.ModelRule>;
 
 export function GetModelRuleShadowComparisons():Promise<Array<model.ModelRuleShadowComparison>>;

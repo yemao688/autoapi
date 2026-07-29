@@ -368,6 +368,10 @@ export const api = {
     ensureWails()
     return wails.GetProxyStatus() as Promise<apiModels.ProxyStatus>
   },
+  getLocalIPv4Addresses: (): Promise<string[]> => {
+    ensureWails()
+    return wails.GetLocalIPv4Addresses() as Promise<string[]>
+  },
   startProxy: (): Promise<void> => {
     ensureWails()
     return wails.StartProxy() as Promise<void>

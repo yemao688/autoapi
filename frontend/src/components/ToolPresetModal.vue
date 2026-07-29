@@ -101,7 +101,10 @@ function reset() {
   kind.value = preset?.Kind === 'autoapi' ? 'autoapi' : 'direct'
   name.value = preset?.Name || ''
   providerID.value = preset?.ProviderID || ''
-  vendor.value = preset?.Vendor || 'openai-compatible'
+  const savedVendor = preset?.Vendor || 'openai-compatible'
+  vendor.value = kind.value === 'autoapi' && !['openai-responses', 'openai-compatible', 'anthropic', 'google-gemini'].includes(savedVendor)
+    ? 'openai-compatible'
+    : savedVendor
   baseURL.value = preset?.BaseURL || ''
   apiKeyID.value = preset?.APIKeyID || ''
   plaintextKey.value = ''
@@ -184,7 +187,7 @@ function buildPayload(): toolconfig.Preset {
     Kind: kind.value,
     Name: name.value.trim(),
     ProviderID: providerID.value.trim(),
-    Vendor: props.tool === 'opencode' && kind.value === 'direct' ? vendor.value.trim() : props.preset?.Vendor || '',
+    Vendor: props.tool === 'opencode' ? vendor.value.trim() : props.preset?.Vendor || '',
     BaseURL: baseURL.value.trim(),
     APIKeyEnc: props.preset?.APIKeyEnc && props.preset.APIKeyEnc !== '********' ? props.preset.APIKeyEnc : '',
     APIKeyID: kind.value === 'autoapi' ? apiKeyID.value : '',
@@ -283,6 +286,16 @@ watch(() => props.open, (open) => {
           </div>
         </template>
         <template v-else>
+          <div v-if="tool === 'opencode'" class="field">
+            <label class="field-label">{{ t('toolAccess.presets.interfaceFormat') }}</label>
+            <select v-model="vendor" class="select">
+              <option value="openai-responses">{{ t('toolAccess.vendors.openai-responses') }}</option>
+              <option value="openai-compatible">{{ t('toolAccess.vendors.openai-compatible') }}</option>
+              <option value="anthropic">{{ t('toolAccess.vendors.anthropic') }}</option>
+              <option value="google-gemini">{{ t('toolAccess.vendors.google-gemini') }}</option>
+            </select>
+            <div class="field-help">{{ t('toolAccess.preset.vendorHelp.' + (vendor || 'openai-compatible')) }}</div>
+          </div>
           <div class="field">
             <label class="field-label">{{ t('toolAccess.preset.apiKeySelector') }}</label>
             <select v-model="apiKeyID" class="select" :disabled="supportingLoading">

@@ -25,6 +25,12 @@ func TestAutoapiBaseURL(t *testing.T) {
 	if got := AutoapiBaseURL(ToolOpencode, "///"); got != "" {
 		t.Fatalf("slash-only relay address = %q, want empty", got)
 	}
+	if got := AutoapiBaseURLForVendor(ToolOpencode, "http://10.0.0.2:8344", VendorGoogleGemini); got != "http://10.0.0.2:8344/v1beta" {
+		t.Fatalf("Google Gemini endpoint = %q, want /v1beta", got)
+	}
+	if got := AutoapiBaseURLForVendor(ToolOpencode, "http://10.0.0.2:8344", VendorAnthropic); got != "http://10.0.0.2:8344/v1" {
+		t.Fatalf("Anthropic endpoint = %q, want /v1", got)
+	}
 }
 
 func TestBuildAutoapiPresetDefaultsFirstModel(t *testing.T) {
@@ -55,6 +61,22 @@ func TestBuildAutoapiPresetDefaultsFirstModel(t *testing.T) {
 			t.Fatalf("%s vendor = %q, want empty", tool, got.Vendor)
 		}
 	}
+
+	google, err := BuildAutoapiPreset(ToolOpencode, "Gemini", "http://relay:8344", "token-id", []PresetModel{{Name: "model"}}, VendorGoogleGemini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if google.Vendor != VendorGoogleGemini || google.BaseURL != "http://relay:8344/v1beta" {
+		t.Fatalf("unexpected Google Gemini relay fields: %+v", google)
+	}
+
+	legacyGoogle, err := BuildAutoapiPreset(ToolOpencode, "Gemini", "http://relay:8344", "token-id", []PresetModel{{Name: "model"}}, "@ai-sdk/google")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyGoogle.Vendor != VendorGoogleGemini || legacyGoogle.BaseURL != "http://relay:8344/v1beta" {
+		t.Fatalf("unexpected legacy Google relay fields: %+v", legacyGoogle)
+	}
 }
 
 func TestBuildAutoapiPresetValidation(t *testing.T) {
@@ -81,5 +103,12 @@ func TestBuildAutoapiPresetValidation(t *testing.T) {
 				t.Fatalf("error = %v, want ErrInvalidPreset", err)
 			}
 		})
+	}
+}
+
+func TestBuildAutoapiPresetRejectsAmazonBedrock(t *testing.T) {
+	_, err := BuildAutoapiPreset(ToolOpencode, "Autoapi", "http://relay:8344", "token-id", []PresetModel{{Name: "model"}}, VendorAmazonBedrock)
+	if !errors.Is(err, ErrInvalidPreset) {
+		t.Fatalf("error = %v, want ErrInvalidPreset", err)
 	}
 }

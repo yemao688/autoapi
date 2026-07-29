@@ -134,14 +134,12 @@ var preferredInterfaceNames = []string{
 	"en0", "wi-fi", "wifi", "ethernet", "eth0", "wlan0", "en1", "en2",
 }
 
-// localIPv4 returns the first usable non-loopback, non-link-local IPv4 address
-// on this host, preferring common physical interface names. If no suitable
-// address is found (e.g. an IPv6-only host, or no networking at all), it
-// returns "127.0.0.1" so callers can always build a valid http://host:port URL.
-func localIPv4() string {
+// localIPv4Addrs returns usable non-loopback, non-link-local IPv4 addresses,
+// preferring common physical interface names while preserving discovery order.
+func localIPv4Addrs() ([]string, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return "127.0.0.1"
+		return nil, err
 	}
 
 	prefLow := make([]string, len(preferredInterfaceNames))
@@ -149,34 +147,72 @@ func localIPv4() string {
 		prefLow[i] = strings.ToLower(p)
 	}
 
-	// First pass: collect any IPv4 from a preferred interface.
-	for _, pref := range prefLow {
-		for _, iface := range ifaces {
-			if !isCandidateInterface(iface) {
+	var result []string
+	seen := make(map[string]struct{})
+	seenIfaces := make(map[int]struct{})
+	collect := func(iface net.Interface) {
+		if !isCandidateInterface(iface) {
+			return
+		}
+		if _, ok := seenIfaces[iface.Index]; ok {
+			return
+		}
+		seenIfaces[iface.Index] = struct{}{}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch value := addr.(type) {
+			case *net.IPNet:
+				ip = value.IP
+			case *net.IPAddr:
+				ip = value.IP
+			}
+			ip4 := ip.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
 				continue
 			}
+			value := ip4.String()
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+	}
+
+	// First pass: collect IPv4 addresses from preferred interfaces.
+	for _, pref := range prefLow {
+		for _, iface := range ifaces {
 			if !strings.Contains(strings.ToLower(iface.Name), pref) {
 				continue
 			}
-			if addr := firstUsableV4(iface); addr != "" {
-				return addr
-			}
+			collect(iface)
 		}
 	}
 
-	// Second pass: any non-loopback, non-link-local, non-point-to-point IPv4.
+	// Second pass: any remaining non-loopback, non-link-local IPv4.
 	for _, iface := range ifaces {
-		if !isCandidateInterface(iface) {
-			continue
-		}
-		if iface.Flags&net.FlagPointToPoint != 0 {
-			continue
-		}
-		if addr := firstUsableV4(iface); addr != "" {
-			return addr
-		}
+		collect(iface)
 	}
 
+	return result, nil
+}
+
+// LocalIPv4Addresses exposes localIPv4Addrs to the API binding layer.
+func LocalIPv4Addresses() ([]string, error) {
+	return localIPv4Addrs()
+}
+
+// localIPv4 returns the first usable non-loopback, non-link-local IPv4 address
+// on this host. If no suitable address is found, it returns "127.0.0.1".
+func localIPv4() string {
+	addrs, err := localIPv4Addrs()
+	if err == nil && len(addrs) > 0 {
+		return addrs[0]
+	}
 	return "127.0.0.1"
 }
 
@@ -207,9 +243,18 @@ func firstUsableV4(iface net.Interface) string {
 }
 
 // resolveAPIAddress builds a client-reachable URL from the proxy's reported
-// bind URL and this host's first usable IPv4. If the proxy is not running or
-// the URL cannot be parsed, it returns an empty string.
-func resolveAPIAddress(proxyURL string) string {
+// bind URL and the saved LAN advertisement settings. If LAN advertisement is
+// disabled, it always returns loopback; stale configured addresses fall back
+// to the first currently discovered address.
+func resolveAPIAddress(proxyURL string, server model.ServerSettings) string {
+	addrs, err := localIPv4Addrs()
+	if err != nil {
+		addrs = nil
+	}
+	return resolveAPIAddressWithAddrs(proxyURL, server, addrs)
+}
+
+func resolveAPIAddressWithAddrs(proxyURL string, server model.ServerSettings, addrs []string) string {
 	proxyURL = strings.TrimSpace(proxyURL)
 	if proxyURL == "" {
 		return ""
@@ -234,7 +279,22 @@ func resolveAPIAddress(proxyURL string) string {
 		return ""
 	}
 
-	return fmt.Sprintf("%s://%s:%s", scheme, localIPv4(), port)
+	host := "127.0.0.1"
+	if server.LANEnabled {
+		selected := false
+		for _, addr := range addrs {
+			if strings.TrimSpace(server.LANAddress) == addr {
+				host = addr
+				selected = true
+				break
+			}
+		}
+		if !selected && len(addrs) > 0 {
+			host = addrs[0]
+		}
+	}
+
+	return fmt.Sprintf("%s://%s:%s", scheme, host, port)
 }
 
 // GetSystemHealth returns live runtime + proxy metrics for the dashboard.
@@ -255,7 +315,15 @@ func (s *Service) GetSystemHealth() (*model.ServiceHealth, error) {
 
 	apiAddr := ""
 	if status == "running" {
-		apiAddr = resolveAPIAddress(proxyURL)
+		settings, err := s.store.GetSettings()
+		if err != nil {
+			return nil, fmt.Errorf("service: get settings: %w", err)
+		}
+		var server model.ServerSettings
+		if settings != nil {
+			server = settings.Server
+		}
+		apiAddr = resolveAPIAddress(proxyURL, server)
 	}
 
 	return &model.ServiceHealth{

@@ -141,6 +141,8 @@ func (s *Store) defaultSettings() model.Settings {
 		Server: model.ServerSettings{
 			Port:        s.defaultPort,
 			BindAddress: "0.0.0.0",
+			LANEnabled:  false,
+			LANAddress:  "",
 		},
 		Data: model.DataSettings{
 			LogRetentionDays: 90,
