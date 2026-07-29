@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"autoapi/internal/config"
 	"autoapi/internal/model"
 	"autoapi/internal/toolconfig"
 )
@@ -902,9 +903,6 @@ func (s *Service) presetPlaintext(p toolconfig.Preset) (toolconfig.PresetPlainte
 		if !found {
 			return toolconfig.PresetPlaintext{}, fmt.Errorf("service: 请重新选择访问密钥")
 		}
-		if s.proxy == nil || !s.proxy.IsRunning() {
-			return toolconfig.PresetPlaintext{}, fmt.Errorf("service: relay is not running")
-		}
 		settings, err := s.store.GetSettings()
 		if err != nil {
 			return toolconfig.PresetPlaintext{}, fmt.Errorf("service: get settings: %w", err)
@@ -913,7 +911,20 @@ func (s *Service) presetPlaintext(p toolconfig.Preset) (toolconfig.PresetPlainte
 		if settings != nil {
 			serverSettings = settings.Server
 		}
-		relayAddr := resolveAPIAddress(s.proxy.URL(), serverSettings)
+		baseURL := ""
+		if s.proxy != nil && s.proxy.IsRunning() {
+			baseURL = s.proxy.URL()
+		} else {
+			port := serverSettings.Port
+			if port <= 0 {
+				port = config.Current().DefaultPort
+				if port <= 0 {
+					port = 8344
+				}
+			}
+			baseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+		}
+		relayAddr := resolveAPIAddress(baseURL, serverSettings)
 		if relayAddr == "" {
 			return toolconfig.PresetPlaintext{}, fmt.Errorf("service: relay address is unavailable")
 		}

@@ -194,6 +194,8 @@ type toolAccessService interface {
 	GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error)
 	PreviewOpencodeConfigChange(service.OpencodeConfigPlan) (service.OmoSlimPreview, error)
 	ApplyOpencodeConfigChange(service.OpencodeConfigPlan, bool) error
+	PreviewToolConfigChange(string, service.ToolConfigPlan) ([]service.ToolFilePreview, error)
+	ApplyToolConfigChange(string, service.ToolConfigPlan, bool) error
 	ListToolBackups(string) ([]service.ToolBackupInfo, error)
 	RestoreToolBackup(string, string, string) error
 }
@@ -1212,6 +1214,22 @@ func (a *App) ApplyOpencodeConfigChange(plan service.OpencodeConfigPlan, allowDr
 		return err
 	}
 	return svc.ApplyOpencodeConfigChange(plan, allowDrift)
+}
+
+func (a *App) PreviewToolConfigChange(tool string, plan service.ToolConfigPlan) ([]service.ToolFilePreview, error) {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return nil, err
+	}
+	return svc.PreviewToolConfigChange(tool, plan)
+}
+
+func (a *App) ApplyToolConfigChange(tool string, plan service.ToolConfigPlan, allowDrift bool) error {
+	svc, err := a.toolAccess()
+	if err != nil {
+		return err
+	}
+	return svc.ApplyToolConfigChange(tool, plan, allowDrift)
 }
 
 func (a *App) ListToolBackups(tool string) ([]service.ToolBackupInfo, error) {

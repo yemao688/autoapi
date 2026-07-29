@@ -62,10 +62,7 @@ func (CodexAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCodexConfigShape(before, providerID); err != nil {
-		return nil, err
-	}
-	after, err := spliceCodexConfig(before, providerID, p.Name, p.BaseURL, presetDefaultModel(p.Models))
+	after, _, err := spliceCodexUpsert(before, nil, p)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +79,7 @@ func (CodexAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error) 
 	if err != nil {
 		return nil, err
 	}
-	authAfter, err := patchCodexAuth(authBefore, p.APIKey)
+	_, authAfter, err := spliceCodexUpsert(before, authBefore, p)
 	if err != nil {
 		return nil, err
 	}
@@ -105,47 +102,9 @@ func (CodexAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) 
 	if before == nil {
 		return nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
 	}
-	doc, err := readTOMLBytes(before)
+	after, _, err := spliceCodexRemove(before, nil, providerID)
 	if err != nil {
 		return nil, err
-	}
-	providersValue, exists := doc["model_providers"]
-	if !exists {
-		return nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
-	}
-	providers, ok := tomlMap(providersValue)
-	if !ok {
-		return nil, fmt.Errorf("model_providers is not a table: %w", ErrUnsafeShape)
-	}
-	entryValue, exists := providers[providerID]
-	if !exists {
-		return nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
-	}
-	if _, ok := tomlMap(entryValue); !ok {
-		return nil, fmt.Errorf("model_providers.%s is not a table: %w", providerID, ErrUnsafeShape)
-	}
-	if pointer, exists := doc["model_provider"]; exists {
-		if _, ok := pointer.(string); !ok {
-			return nil, fmt.Errorf("model_provider is not a string: %w", ErrUnsafeShape)
-		}
-	}
-	after, err := removeCodexProvider(before, providerID, tomlString(doc["model_provider"]) == providerID)
-	if err != nil {
-		return nil, err
-	}
-	afterDoc, err := readTOMLBytes(after)
-	if err != nil {
-		return nil, fmt.Errorf("reparse removed Codex provider: %w", err)
-	}
-	if afterProvidersValue, exists := afterDoc["model_providers"]; exists {
-		if afterProviders, ok := tomlMap(afterProvidersValue); !ok {
-			return nil, fmt.Errorf("removed Codex model_providers is not a table: %w", ErrUnsafeShape)
-		} else if _, stillPresent := afterProviders[providerID]; stillPresent {
-			return nil, fmt.Errorf("removed Codex provider %q remains: %w", providerID, ErrUnsafeShape)
-		}
-	}
-	if tomlString(afterDoc["model_provider"]) == providerID {
-		return nil, fmt.Errorf("removed Codex model_provider remains: %w", ErrUnsafeShape)
 	}
 	configChange := changeForSnapshot(ResCodexConfig, resolvedConfigPath, false, before)
 	configChange.After = after
@@ -157,11 +116,11 @@ func (CodexAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) 
 		return nil, err
 	}
 	if authBefore != nil {
-		authAfter, changed, err := removeCodexAuthKey(authBefore)
+		_, authAfter, err := spliceCodexRemove(before, authBefore, providerID)
 		if err != nil {
 			return nil, err
 		}
-		if changed {
+		if !bytes.Equal(authAfter, authBefore) {
 			authChange := changeForSnapshot(ResCodexAuth, resolvedAuthPath, true, authBefore)
 			authChange.After = authAfter
 			changes = append(changes, authChange)
@@ -759,6 +718,124 @@ func spliceCodexConfig(data []byte, providerID, name, baseURL, model string) ([]
 		return nil, fmt.Errorf("spliced Codex config has unexpected auth setting: %w", ErrUnsafeShape)
 	}
 	return result, nil
+}
+
+// spliceCodexUpsert applies one provider mutation to already captured config
+// and auth buffers. A nil auth buffer means that auth.json is absent.
+func spliceCodexUpsert(configBytes, authBytes []byte, p PresetPlaintext) ([]byte, []byte, error) {
+	if err := validatePreset(p); err != nil {
+		return nil, nil, err
+	}
+	providerID := providerKey(p.Preset)
+	if err := validateCodexProviderID(providerID); err != nil {
+		return nil, nil, err
+	}
+	if err := validateCodexConfigShape(configBytes, providerID); err != nil {
+		return nil, nil, err
+	}
+	configAfter, err := spliceCodexConfig(configBytes, providerID, p.Name, p.BaseURL, presetDefaultModel(p.Models))
+	if err != nil {
+		return nil, nil, err
+	}
+	if p.APIKey == "" {
+		return configAfter, authBytes, nil
+	}
+	authAfter, err := patchCodexAuth(authBytes, p.APIKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return configAfter, authAfter, nil
+}
+
+// spliceCodexRemove removes one provider and the shared Codex auth key from
+// already captured config and auth buffers.
+func spliceCodexRemove(configBytes, authBytes []byte, providerID string) ([]byte, []byte, error) {
+	if err := validateCodexProviderID(providerID); err != nil {
+		return nil, nil, err
+	}
+	doc, err := readTOMLBytes(configBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	providersValue, exists := doc["model_providers"]
+	if !exists {
+		return nil, nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	providers, ok := tomlMap(providersValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("model_providers is not a table: %w", ErrUnsafeShape)
+	}
+	entryValue, exists := providers[providerID]
+	if !exists {
+		return nil, nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	if _, ok := tomlMap(entryValue); !ok {
+		return nil, nil, fmt.Errorf("model_providers.%s is not a table: %w", providerID, ErrUnsafeShape)
+	}
+	if pointer, exists := doc["model_provider"]; exists {
+		if _, ok := pointer.(string); !ok {
+			return nil, nil, fmt.Errorf("model_provider is not a string: %w", ErrUnsafeShape)
+		}
+	}
+	configAfter, err := removeCodexProvider(configBytes, providerID, tomlString(doc["model_provider"]) == providerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	afterDoc, err := readTOMLBytes(configAfter)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reparse removed Codex provider: %w", err)
+	}
+	if afterProvidersValue, exists := afterDoc["model_providers"]; exists {
+		if afterProviders, ok := tomlMap(afterProvidersValue); !ok {
+			return nil, nil, fmt.Errorf("removed Codex model_providers is not a table: %w", ErrUnsafeShape)
+		} else if _, stillPresent := afterProviders[providerID]; stillPresent {
+			return nil, nil, fmt.Errorf("removed Codex provider %q remains: %w", providerID, ErrUnsafeShape)
+		}
+	}
+	if tomlString(afterDoc["model_provider"]) == providerID {
+		return nil, nil, fmt.Errorf("removed Codex model_provider remains: %w", ErrUnsafeShape)
+	}
+	if authBytes == nil {
+		return configAfter, authBytes, nil
+	}
+	authAfter, changed, err := removeCodexAuthKey(authBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !changed {
+		authAfter = authBytes
+	}
+	return configAfter, authAfter, nil
+}
+
+// spliceCodexStagedRemove is tolerant of an already absent provider. The
+// staged workbench uses that behavior for both park and remove so parked DB
+// rows can be edited or deleted without requiring a live file entry.
+func spliceCodexStagedRemove(configBytes, authBytes []byte, providerID string) ([]byte, []byte, error) {
+	if err := validateCodexProviderID(providerID); err != nil {
+		return nil, nil, err
+	}
+	doc, err := readTOMLBytes(configBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	providersValue, exists := doc["model_providers"]
+	if !exists {
+		return configBytes, authBytes, nil
+	}
+	providers, ok := tomlMap(providersValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("model_providers is not a table: %w", ErrUnsafeShape)
+	}
+	if _, exists := providers[providerID]; !exists {
+		if pointer, exists := doc["model_provider"]; exists {
+			if _, ok := pointer.(string); !ok {
+				return nil, nil, fmt.Errorf("model_provider is not a string: %w", ErrUnsafeShape)
+			}
+		}
+		return configBytes, authBytes, nil
+	}
+	return spliceCodexRemove(configBytes, authBytes, providerID)
 }
 
 func removeCodexProvider(data []byte, providerID string, removePointer bool) ([]byte, error) {
