@@ -784,11 +784,11 @@
       "baseURLPlaceholder": "https://api.example.com/v1",
       "vendor": "API format",
       "vendorHelp": {
-        "openai-responses": "Uses the Responses API (/v1/responses); writes @ai-sdk/openai",
-        "openai-compatible": "Uses Chat Completions (/v1/chat/completions); writes @ai-sdk/openai-compatible",
-        "anthropic": "Uses the Anthropic Messages API (/v1/messages); writes @ai-sdk/anthropic",
-        "amazon-bedrock": "Writes @ai-sdk/amazon-bedrock; the key is used as a Bearer token, otherwise AWS environment credentials are required",
-        "google-gemini": "Uses the Gemini API; writes @ai-sdk/google"
+        "openai-responses": "Uses the Responses API (/v1/responses); writes {'@'}ai-sdk/openai",
+        "openai-compatible": "Uses Chat Completions (/v1/chat/completions); writes {'@'}ai-sdk/openai-compatible",
+        "anthropic": "Uses the Anthropic Messages API (/v1/messages); writes {'@'}ai-sdk/anthropic",
+        "amazon-bedrock": "Writes {'@'}ai-sdk/amazon-bedrock; the key is used as a Bearer token, otherwise AWS environment credentials are required",
+        "google-gemini": "Uses the Gemini API; writes {'@'}ai-sdk/google"
       },
       "providerIDLocked": "An enabled provider's ID can't be changed; disable it first.",
       "apiKey": "API key",
@@ -890,8 +890,8 @@
       "prompt": "Prompt",
       "promptPlaceholder": "Optional agent prompt",
       "orchestratorPrompt": "Orchestrator prompt",
-      "orchestratorPromptPlaceholder": "Must start with @agent name",
-      "orchestratorPromptHelp": "Must start with @{name}.",
+      "orchestratorPromptPlaceholder": "Must start with {'@'}agent name",
+      "orchestratorPromptHelp": "Must start with {'@'}{name}.",
       "orchestratorPromptWarning": "The prompt must start with the current agent name.",
       "deleteAgentTitle": "Delete custom agent",
       "deleteAgentMessage": "Delete “{name}”? Saving will remove this agent.",
