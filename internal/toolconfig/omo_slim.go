@@ -303,7 +303,10 @@ func PlanOmoSlimChange(homeDir string, ch OmoSlimChange, validModels []string) (
 	}
 
 	change := changeForSnapshot(ResOmoSlimConfig, path, false, before)
-	change.After = doc.Pack()
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
 	checks, err := omoSlimOpenCodeChecks(homeDir)
 	if err != nil {
 		return nil, err

@@ -11,7 +11,7 @@ export function AddProviderModels(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function ApplyOmoSlimConfig(arg1:toolconfig.OmoSlimChange,arg2:boolean):Promise<void>;
 
-export function ApplyOpencodeGlobalChange(arg1:toolconfig.OpencodeGlobalSettings,arg2:boolean):Promise<void>;
+export function ApplyOpencodeConfigChange(arg1:service.OpencodeConfigPlan,arg2:boolean):Promise<void>;
 
 export function CancelModelTest(arg1:string):Promise<boolean>;
 
@@ -131,7 +131,7 @@ export function OpenStorageFolder():Promise<void>;
 
 export function PingLogEvent():Promise<void>;
 
-export function PreviewOpencodeGlobalChange(arg1:toolconfig.OpencodeGlobalSettings):Promise<service.OmoSlimPreview>;
+export function PreviewOpencodeConfigChange(arg1:service.OpencodeConfigPlan):Promise<service.OmoSlimPreview>;
 
 export function PreviewToolOmoSlimChange(arg1:toolconfig.OmoSlimChange):Promise<service.OmoSlimPreview>;
 

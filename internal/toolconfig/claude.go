@@ -81,7 +81,10 @@ func (ClaudeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error)
 	}
 
 	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
-	change.After = doc.Pack()
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
 	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
 }
 
@@ -139,7 +142,10 @@ func (ClaudeAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error)
 		return nil, err
 	}
 	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
-	change.After = doc.Pack()
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
 	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
 }
 

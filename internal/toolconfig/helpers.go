@@ -223,6 +223,30 @@ func jsonValue(value any) (hujson.Value, error) {
 	return hujson.Parse(b)
 }
 
+// packFormatted serializes a hujson document and applies hujson's stable
+// two-space formatter while retaining comments and HuJSON syntax.
+func packFormatted(doc hujson.Value) ([]byte, error) {
+	formatted, err := hujson.Format(doc.Pack())
+	if err != nil {
+		return nil, fmt.Errorf("format JSON document: %w", err)
+	}
+	return twoSpaceIndent(formatted), nil
+}
+
+func twoSpaceIndent(data []byte) []byte {
+	result := make([]byte, 0, len(data))
+	lineStart := true
+	for _, char := range data {
+		if lineStart && char == '\t' {
+			result = append(result, ' ', ' ')
+			continue
+		}
+		result = append(result, char)
+		lineStart = char == '\n'
+	}
+	return result
+}
+
 func readJSONDocument(path string) (hujson.Value, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

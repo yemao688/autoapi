@@ -192,8 +192,8 @@ type toolAccessService interface {
 	ApplyOmoSlimConfig(toolconfig.OmoSlimChange, bool) error
 	PreviewToolOmoSlimChange(toolconfig.OmoSlimChange) (service.OmoSlimPreview, error)
 	GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, error)
-	PreviewOpencodeGlobalChange(toolconfig.OpencodeGlobalSettings) (service.OmoSlimPreview, error)
-	ApplyOpencodeGlobalChange(toolconfig.OpencodeGlobalSettings, bool) error
+	PreviewOpencodeConfigChange(service.OpencodeConfigPlan) (service.OmoSlimPreview, error)
+	ApplyOpencodeConfigChange(service.OpencodeConfigPlan, bool) error
 	ListToolBackups(string) ([]service.ToolBackupInfo, error)
 	RestoreToolBackup(string, string, string) error
 }
@@ -1192,20 +1192,20 @@ func (a *App) GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings, er
 	return svc.GetOpencodeGlobalSettings()
 }
 
-func (a *App) PreviewOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings) (service.OmoSlimPreview, error) {
+func (a *App) PreviewOpencodeConfigChange(plan service.OpencodeConfigPlan) (service.OmoSlimPreview, error) {
 	svc, err := a.toolAccess()
 	if err != nil {
 		return service.OmoSlimPreview{}, err
 	}
-	return svc.PreviewOpencodeGlobalChange(settings)
+	return svc.PreviewOpencodeConfigChange(plan)
 }
 
-func (a *App) ApplyOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings, allowDrift bool) error {
+func (a *App) ApplyOpencodeConfigChange(plan service.OpencodeConfigPlan, allowDrift bool) error {
 	svc, err := a.toolAccess()
 	if err != nil {
 		return err
 	}
-	return svc.ApplyOpencodeGlobalChange(settings, allowDrift)
+	return svc.ApplyOpencodeConfigChange(plan, allowDrift)
 }
 
 func (a *App) ListToolBackups(tool string) ([]service.ToolBackupInfo, error) {

@@ -71,9 +71,6 @@ func ReadOpencodeGlobalSettings(homeDir string) (OpencodeGlobalSettings, error) 
 // PlanOpencodeGlobalChange renders only the five curated top-level leaves.
 // Existing root comments and all other keys remain in the hujson document.
 func PlanOpencodeGlobalChange(homeDir string, settings OpencodeGlobalSettings) (*ChangeSet, error) {
-	if settings.Share != "" && settings.Share != "manual" && settings.Share != "auto" && settings.Share != "disabled" {
-		return nil, fmt.Errorf("%w: invalid opencode share value %q", ErrInvalidPreset, settings.Share)
-	}
 	configPath, before, err := snapshotFile(resolvedOpenCodePath(homeDir), absoluteHomeDir(homeDir))
 	if err != nil {
 		return nil, err
@@ -86,13 +83,38 @@ func PlanOpencodeGlobalChange(homeDir string, settings OpencodeGlobalSettings) (
 	if err != nil {
 		return nil, fmt.Errorf("parse opencode config: %w", err)
 	}
-	if err := requireUniqueObjectMembers(root); err != nil {
-		return nil, err
-	}
-	if err := requireUniqueKeys(root, "model", "small_model", "theme", "share", "autoupdate"); err != nil {
+	if err := applyOpencodeGlobalLeaves(root, settings); err != nil {
 		return nil, err
 	}
 
+	change := changeForSnapshot(ResOpencodeConfig, configPath, false, before)
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
+	return &ChangeSet{
+		Tool:    ToolOpencode,
+		Changes: []FileChange{change},
+	}, nil
+}
+
+func validateOpencodeGlobalSettings(settings OpencodeGlobalSettings) error {
+	if settings.Share != "" && settings.Share != "manual" && settings.Share != "auto" && settings.Share != "disabled" {
+		return fmt.Errorf("%w: invalid opencode share value %q", ErrInvalidPreset, settings.Share)
+	}
+	return nil
+}
+
+func applyOpencodeGlobalLeaves(root *hujson.Object, settings OpencodeGlobalSettings) error {
+	if err := validateOpencodeGlobalSettings(settings); err != nil {
+		return err
+	}
+	if err := requireUniqueObjectMembers(root); err != nil {
+		return err
+	}
+	if err := requireUniqueKeys(root, "model", "small_model", "theme", "share", "autoupdate"); err != nil {
+		return err
+	}
 	for _, field := range []struct {
 		name  string
 		value string
@@ -104,32 +126,24 @@ func PlanOpencodeGlobalChange(homeDir string, settings OpencodeGlobalSettings) (
 	} {
 		if field.value == "" {
 			if err := removeObjectMember(root, field.name); err != nil {
-				return nil, err
+				return err
 			}
 			continue
 		}
 		value, err := jsonValue(field.value)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err := setObjectMember(root, field.name, value); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if settings.Autoupdate == nil {
-		if err := removeObjectMember(root, "autoupdate"); err != nil {
-			return nil, err
-		}
-	} else if value, err := jsonValue(*settings.Autoupdate); err != nil {
-		return nil, err
-	} else if err := setObjectMember(root, "autoupdate", value); err != nil {
-		return nil, err
+		return removeObjectMember(root, "autoupdate")
 	}
-
-	change := changeForSnapshot(ResOpencodeConfig, configPath, false, before)
-	change.After = doc.Pack()
-	return &ChangeSet{
-		Tool:    ToolOpencode,
-		Changes: []FileChange{change},
-	}, nil
+	value, err := jsonValue(*settings.Autoupdate)
+	if err != nil {
+		return err
+	}
+	return setObjectMember(root, "autoupdate", value)
 }

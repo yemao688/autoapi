@@ -658,47 +658,6 @@ func (s *Service) GetOpencodeGlobalSettings() (toolconfig.OpencodeGlobalSettings
 	return toolconfig.ReadOpencodeGlobalSettings(homeDir)
 }
 
-// PreviewOpencodeGlobalChange renders a global opencode change without writing
-// anything, using the same before/after confirmation payload as OMO Slim.
-func (s *Service) PreviewOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings) (OmoSlimPreview, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return OmoSlimPreview{}, fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	changeSet, err := toolconfig.PlanOpencodeGlobalChange(homeDir, settings)
-	if err != nil {
-		return OmoSlimPreview{}, err
-	}
-	if len(changeSet.Changes) == 0 {
-		return OmoSlimPreview{}, fmt.Errorf("service: opencode global plan produced no changes")
-	}
-	change := changeSet.Changes[0]
-	return OmoSlimPreview{
-		Path:   change.Path,
-		Before: string(change.Before),
-		After:  string(change.After),
-	}, nil
-}
-
-// ApplyOpencodeGlobalChange commits a confirmed global opencode change and
-// records it as an opencode config apply with no active provider preset.
-func (s *Service) ApplyOpencodeGlobalChange(settings toolconfig.OpencodeGlobalSettings, allowDrift bool) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("service: resolve home dir: %w", err)
-	}
-	changeSet, err := toolconfig.PlanOpencodeGlobalChange(homeDir, settings)
-	if err != nil {
-		return err
-	}
-	if len(changeSet.Changes) == 0 {
-		return fmt.Errorf("service: opencode global plan produced no changes")
-	}
-	configPath := changeSet.Changes[0].Path
-	_, err = s.commitToolChangeSet(toolconfig.ToolOpencode, changeSet, allowDrift, 0, configPath)
-	return err
-}
-
 // OpencodeLiveState is the on-disk snapshot shown on the opencode card: the
 // effective model pointer plus a compact OMO Slim overview. It is read live on
 // every call and intentionally bypasses the DB-tracked state so drift
@@ -763,10 +722,12 @@ func (s *Service) ApplyOmoSlimConfig(change toolconfig.OmoSlimChange, allowDrift
 	return err
 }
 
-// ListToolBackups lists backups below the per-tool resource directories.
+// ListToolBackups lists both legacy central backups and timestamped source
+// siblings for every resource owned by the tool.
 func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 	toolID := toolconfig.Tool(tool)
-	if _, err := adapterFor(toolID); err != nil {
+	adapter, err := adapterFor(toolID)
+	if err != nil {
 		return nil, err
 	}
 	homeDir, err := os.UserHomeDir()
@@ -775,6 +736,7 @@ func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 	}
 	root := toolBackupRoot(homeDir)
 	entries := make([]ToolBackupInfo, 0)
+	seen := make(map[string]struct{})
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if os.IsNotExist(walkErr) {
@@ -797,15 +759,53 @@ func (s *Service) ListToolBackups(tool string) ([]ToolBackupInfo, error) {
 		if err != nil {
 			return err
 		}
-		entries = append(entries, ToolBackupInfo{Resource: resource, Path: path, ModTime: info.ModTime()})
+		if _, exists := seen[path]; !exists {
+			seen[path] = struct{}{}
+			entries = append(entries, ToolBackupInfo{Resource: resource, Path: path, ModTime: info.ModTime()})
+		}
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("service: list %s tool backups: %w", tool, err)
 	}
+	for _, resource := range backupResourcesForTool(toolID) {
+		targetPath, targetErr := s.targetPathForResource(toolID, resource, homeDir, adapter)
+		if targetErr != nil {
+			continue
+		}
+		targetPath = resolveBackupTargetPath(targetPath)
+		dirEntries, readErr := os.ReadDir(filepath.Dir(targetPath))
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return nil, fmt.Errorf("service: list %s source backups: %w", tool, readErr)
+		}
+		for _, entry := range dirEntries {
+			if entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(filepath.Dir(targetPath), entry.Name())
+			if !toolconfig.IsSourceBackup(targetPath, path) {
+				continue
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return nil, infoErr
+			}
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			entries = append(entries, ToolBackupInfo{Resource: resource, Path: path, ModTime: info.ModTime()})
+		}
+	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Resource != entries[j].Resource {
 			return entries[i].Resource < entries[j].Resource
+		}
+		if !entries[i].ModTime.Equal(entries[j].ModTime) {
+			return entries[i].ModTime.After(entries[j].ModTime)
 		}
 		return entries[i].Path < entries[j].Path
 	})
@@ -827,17 +827,17 @@ func (s *Service) RestoreToolBackup(tool, resource, backupPath string) error {
 	if err != nil {
 		return fmt.Errorf("service: resolve home dir: %w", err)
 	}
+	targetPath, err := s.targetPathForResource(toolID, toolconfig.Resource(resource), homeDir, adapter)
+	if err != nil {
+		return err
+	}
 	backupRoot := toolBackupRoot(homeDir)
-	if err := validateBackupPath(backupRoot, toolconfig.Resource(resource), backupPath); err != nil {
+	if err := validateBackupPath(backupRoot, toolconfig.Resource(resource), backupPath, targetPath); err != nil {
 		return err
 	}
 	after, err := os.ReadFile(backupPath)
 	if err != nil {
 		return fmt.Errorf("service: read tool backup: %w", err)
-	}
-	targetPath, err := s.targetPathForResource(toolID, toolconfig.Resource(resource), homeDir, adapter)
-	if err != nil {
-		return err
 	}
 	before, err := os.ReadFile(targetPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -865,9 +865,11 @@ func (s *Service) RestoreToolBackup(tool, resource, backupPath string) error {
 		Changes: []toolconfig.FileChange{{
 			Resource:   toolconfig.Resource(resource),
 			Path:       targetPath,
+			Secret:     toolconfig.Resource(resource) == toolconfig.ResCodexAuth,
 			Before:     before,
 			BeforeHash: beforeHash,
 			After:      after,
+			Mode:       0o644,
 		}},
 	}
 	_, err = s.commitToolChangeSet(toolID, changeSet, true, state.ActivePresetID, state.ConfigPath)
@@ -1011,15 +1013,15 @@ func (s *Service) targetPathForResource(tool toolconfig.Tool, resource toolconfi
 		if path == "" {
 			return "", fmt.Errorf("service: no path for resource %s", resource)
 		}
-		return path, nil
+		return resolveBackupTargetPath(path), nil
 	case toolconfig.ResOpencodeOmoSlim, toolconfig.ResOmoSlimConfig:
 		if path, ok := toolconfig.DetectOmoSlimConfig(homeDir); ok {
-			return path, nil
+			return resolveBackupTargetPath(path), nil
 		}
 	case toolconfig.ResCodexAuth:
 		status := adapter.Detect(homeDir)
 		if path := status.ExtraPaths["auth_json"]; path != "" {
-			return path, nil
+			return resolveBackupTargetPath(path), nil
 		}
 	}
 	return "", fmt.Errorf("service: no target path for resource %s", resource)
@@ -1071,7 +1073,7 @@ func resourceBelongsToTool(tool toolconfig.Tool, resource toolconfig.Resource) b
 	return tool == toolconfig.ToolOpencode && resource == toolconfig.ResOmoSlimConfig
 }
 
-func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupPath string) error {
+func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupPath string, targets ...string) error {
 	resourceDir := filepath.Join(backupRoot, filepath.FromSlash(string(resource)))
 	rootAbs, err := filepath.Abs(resourceDir)
 	if err != nil {
@@ -1081,10 +1083,6 @@ func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupP
 	if err != nil {
 		return fmt.Errorf("service: resolve backup path: %w", err)
 	}
-	rel, err := filepath.Rel(rootAbs, backupAbs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return fmt.Errorf("service: backup path is outside resource directory")
-	}
 	info, err := os.Stat(backupAbs)
 	if err != nil {
 		return fmt.Errorf("service: stat backup path: %w", err)
@@ -1092,7 +1090,38 @@ func validateBackupPath(backupRoot string, resource toolconfig.Resource, backupP
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("service: backup path is not a regular file")
 	}
+	rel, err := filepath.Rel(rootAbs, backupAbs)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+		return nil
+	}
+	if len(targets) == 0 || !toolconfig.IsSourceBackup(resolveBackupTargetPath(targets[0]), backupAbs) {
+		return fmt.Errorf("service: backup path is outside resource directory")
+	}
 	return nil
+}
+
+func backupResourcesForTool(tool toolconfig.Tool) []toolconfig.Resource {
+	switch tool {
+	case toolconfig.ToolOpencode:
+		return []toolconfig.Resource{toolconfig.ResOpencodeConfig, toolconfig.ResOmoSlimConfig, toolconfig.ResOpencodeOmoSlim}
+	case toolconfig.ToolCodex:
+		return []toolconfig.Resource{toolconfig.ResCodexConfig, toolconfig.ResCodexAuth}
+	case toolconfig.ToolClaude:
+		return []toolconfig.Resource{toolconfig.ResClaudeSettings}
+	default:
+		return nil
+	}
+}
+
+func resolveBackupTargetPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	if resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(filepath.Clean(resolvedDir), filepath.Base(path))
+	}
+	return path
 }
 
 func adapterFor(tool toolconfig.Tool) (toolconfig.Adapter, error) {

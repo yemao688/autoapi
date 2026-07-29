@@ -842,7 +842,11 @@ func removeCodexAuthKey(before []byte) ([]byte, bool, error) {
 	if err := removeObjectMember(root, "OPENAI_API_KEY"); err != nil {
 		return nil, false, err
 	}
-	return doc.Pack(), true, nil
+	formatted, err := packFormatted(doc)
+	if err != nil {
+		return nil, false, err
+	}
+	return formatted, true, nil
 }
 
 func patchCodexAuth(before []byte, apiKey string) ([]byte, error) {
@@ -864,5 +868,5 @@ func patchCodexAuth(before []byte, apiKey string) ([]byte, error) {
 	if err := setObjectMember(root, "OPENAI_API_KEY", value); err != nil {
 		return nil, err
 	}
-	return doc.Pack(), nil
+	return packFormatted(doc)
 }

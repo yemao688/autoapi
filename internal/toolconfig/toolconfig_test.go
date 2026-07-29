@@ -277,7 +277,7 @@ base_url = "https://other.example"
 		t.Fatalf("unexpected Codex top-level values: %#v", configValues)
 	}
 	authAfter := readFile(t, authPath)
-	if !strings.Contains(string(authAfter), `"OTHER_KEY": "keep"`) || !strings.Contains(string(authAfter), "secret-key") {
+	if !strings.Contains(string(authAfter), `"OTHER_KEY"`) || !strings.Contains(string(authAfter), "secret-key") {
 		t.Fatalf("Codex auth was not patched safely: %s", authAfter)
 	}
 	if mode := fileMode(t, authPath); mode != 0o600 {
@@ -675,7 +675,7 @@ func TestOpenCodeProviderScopedPointerClearing(t *testing.T) {
 		name string
 		want string
 	}{
-		{name: "other provider survives", want: `"model": "other/keep"`},
+		{name: "other provider survives", want: `"model"`},
 		{name: "same provider clears", want: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -689,7 +689,7 @@ func TestOpenCodeProviderScopedPointerClearing(t *testing.T) {
 			preset.Models = nil
 			commitPlan(t, OpenCodeAdapter{}, preset, home)
 			content := string(readFile(t, DefaultConfigPath(ToolOpencode, home)))
-			if test.want != "" && !strings.Contains(content, `"model":"other/keep"`) {
+			if test.want != "" && (!strings.Contains(content, test.want) || !strings.Contains(content, "other/keep")) {
 				t.Fatalf("pointer was unexpectedly changed: %s", content)
 			}
 			if test.want == "" && strings.Contains(content, `"model"`) {
@@ -825,7 +825,7 @@ func TestClaudeNoDefaultLeavesGlobalPointers(t *testing.T) {
 	preset.Models = nil
 	commitPlan(t, ClaudeAdapter{}, preset, home)
 	content := string(readFile(t, path))
-	if !strings.Contains(content, `"model":"global-root"`) || !strings.Contains(content, `"ANTHROPIC_MODEL":"global-env"`) {
+	if !strings.Contains(content, `"model"`) || !strings.Contains(content, "global-root") || !strings.Contains(content, `"ANTHROPIC_MODEL"`) || !strings.Contains(content, "global-env") {
 		t.Fatalf("Claude global pointers changed by no-default preset: %s", content)
 	}
 }

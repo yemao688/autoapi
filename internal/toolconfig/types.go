@@ -291,5 +291,7 @@ var (
 //   - claude:   ~/.claude/settings.json
 //
 // HashFile (drift.go) computes the sha256 hex of a file; "" when absent.
-// BackupFile (backup.go) copies a file under <backupRoot>/<resource>/ and
-// prunes; secret backups are written 0600.
+// BackupFile (backup.go) copies a file next to the source with a localtime
+// timestamped sibling name and prunes source-directory backups; secret
+// backups are written 0600. CommitOpts.BackupRoot remains for compatibility
+// with the legacy central backup tree and validation of existing restores.

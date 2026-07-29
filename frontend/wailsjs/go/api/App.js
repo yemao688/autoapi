@@ -10,8 +10,8 @@ export function ApplyOmoSlimConfig(arg1, arg2) {
   return window['go']['api']['App']['ApplyOmoSlimConfig'](arg1, arg2);
 }
 
-export function ApplyOpencodeGlobalChange(arg1, arg2) {
-  return window['go']['api']['App']['ApplyOpencodeGlobalChange'](arg1, arg2);
+export function ApplyOpencodeConfigChange(arg1, arg2) {
+  return window['go']['api']['App']['ApplyOpencodeConfigChange'](arg1, arg2);
 }
 
 export function CancelModelTest(arg1) {
@@ -250,8 +250,8 @@ export function PingLogEvent() {
   return window['go']['api']['App']['PingLogEvent']();
 }
 
-export function PreviewOpencodeGlobalChange(arg1) {
-  return window['go']['api']['App']['PreviewOpencodeGlobalChange'](arg1);
+export function PreviewOpencodeConfigChange(arg1) {
+  return window['go']['api']['App']['PreviewOpencodeConfigChange'](arg1);
 }
 
 export function PreviewToolOmoSlimChange(arg1) {

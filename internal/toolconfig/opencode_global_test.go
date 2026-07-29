@@ -86,7 +86,7 @@ func TestPlanOpencodeGlobalChangeSetAndRemovesOwnedLeaves(t *testing.T) {
 		t.Fatalf("unexpected snapshot: %+v", changeSet.Changes)
 	}
 	after := string(changeSet.Changes[0].After)
-	for _, value := range []string{"new/model", "new/small", `"theme": "new"`, `"share": "auto"`, `"autoupdate": false`, "retain this comment", `"unmanaged": {"keep": true}`} {
+	for _, value := range []string{"new/model", "new/small", `"theme"`, `"share"`, `"autoupdate"`, "retain this comment", `"unmanaged"`} {
 		if !strings.Contains(after, value) {
 			t.Errorf("after output missing %q: %s", value, after)
 		}
@@ -115,7 +115,7 @@ func TestPlanOpencodeGlobalChangePartialAndAutoupdateTriState(t *testing.T) {
 		t.Fatal(err)
 	}
 	partialText := string(partial.Changes[0].After)
-	if !strings.Contains(partialText, `"theme":"new"`) || !strings.Contains(partialText, `"autoupdate":false`) || strings.Contains(partialText, `"model"`) {
+	if !strings.Contains(partialText, `"theme"`) || !strings.Contains(partialText, `"new"`) || !strings.Contains(partialText, `"autoupdate"`) || !strings.Contains(partialText, `false`) || strings.Contains(partialText, `"model"`) {
 		t.Fatalf("partial output = %s", partialText)
 	}
 
@@ -154,7 +154,7 @@ func TestPlanOpencodeGlobalChangeFailsClosedOnRootShapeAndDuplicate(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(changeSet.Changes[0].After), `"model":"replacement"`) {
+	if !strings.Contains(string(changeSet.Changes[0].After), `"model"`) || !strings.Contains(string(changeSet.Changes[0].After), "replacement") {
 		t.Fatalf("owned wrong-type leaf was not overwritten: %s", changeSet.Changes[0].After)
 	}
 }

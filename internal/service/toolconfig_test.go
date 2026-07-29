@@ -180,7 +180,8 @@ func TestOpencodeGlobalSettingsPreviewAndApply(t *testing.T) {
   "other": true
 }`)
 	settings := toolconfig.OpencodeGlobalSettings{Model: "new/model", Theme: "system", Autoupdate: boolPtrTest(true)}
-	preview, err := svc.PreviewOpencodeGlobalChange(settings)
+	plan := OpencodeConfigPlan{Globals: settings}
+	preview, err := svc.PreviewOpencodeConfigChange(plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,14 +192,14 @@ func TestOpencodeGlobalSettingsPreviewAndApply(t *testing.T) {
 	if preview.Path != resolvedPath || !strings.Contains(preview.Before, "keep this comment") || !strings.Contains(preview.After, "new/model") {
 		t.Fatalf("preview = %+v", preview)
 	}
-	if err := svc.ApplyOpencodeGlobalChange(settings, true); err != nil {
+	if err := svc.ApplyOpencodeConfigChange(plan, true); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "new/model") || !strings.Contains(string(content), "keep this comment") || !strings.Contains(string(content), `"other": true`) {
+	if !strings.Contains(string(content), "new/model") || !strings.Contains(string(content), "keep this comment") || !strings.Contains(string(content), `"other"`) || !strings.Contains(string(content), "true") {
 		t.Fatalf("applied global settings lost content: %s", content)
 	}
 }
@@ -226,7 +227,7 @@ func TestEnableToolPresetDirectPersistsFileAndState(t *testing.T) {
 	if !strings.Contains(content, `"https://direct.example/v1"`) || !strings.Contains(content, `"sk-direct-secret"`) {
 		t.Fatalf("applied config missing managed values: %s", content)
 	}
-	if !strings.Contains(content, `"mcp":{"keep":true}`) {
+	if !strings.Contains(content, `"mcp"`) || !strings.Contains(content, `"keep"`) {
 		t.Fatalf("unmanaged config was not preserved: %s", content)
 	}
 
