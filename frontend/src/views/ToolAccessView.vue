@@ -40,6 +40,7 @@ const exportSnippet = ref<toolconfig.Snippet | null>(null)
 
 const backupsOpen = ref(false)
 const backupsTool = ref<ToolName>('opencode')
+const backupsResource = ref('')
 const backups = ref<service.ToolBackupInfo[]>([])
 const backupsLoading = ref(false)
 
@@ -218,13 +219,15 @@ async function copySnippet() {
   }
 }
 
-async function openBackups(tool: ToolName) {
+async function openBackups(tool: ToolName, resource = '') {
   backupsTool.value = tool
+  backupsResource.value = resource
   backupsOpen.value = true
   backupsLoading.value = true
   backups.value = []
   try {
-    backups.value = await api.listToolBackups(tool)
+    const rows = await api.listToolBackups(tool)
+    backups.value = resource ? rows.filter((backup) => backup.Resource === resource) : rows
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
   } finally {
@@ -248,7 +251,7 @@ async function restoreBackup(backup: service.ToolBackupInfo) {
   try {
     await api.restoreToolBackup(backupsTool.value, backup.Resource, backup.Path)
     toast.push(t('toolAccess.toast.backupRestored'), 'success')
-    await openBackups(backupsTool.value)
+    await openBackups(backupsTool.value, backupsResource.value)
     await refresh()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
@@ -296,9 +299,11 @@ onMounted(() => {
           <div class="tool-path-block">
             <div class="tool-path-label">{{ t('toolAccess.status.configPath') }}</div>
             <div class="text-mono tool-path" :title="pathText(statusFor(card.tool)?.ConfigPath || '')">{{ pathText(statusFor(card.tool)?.ConfigPath || '') }}</div>
-            <div v-for="(path, key) in (statusFor(card.tool)?.ExtraPaths || {})" v-show="path" :key="key" class="tool-extra-path">
-              <span>{{ extraPathLabel(key) }}</span><span class="text-mono" :title="path">{{ path }}</span>
-            </div>
+            <template v-for="(path, key) in (statusFor(card.tool)?.ExtraPaths || {})" :key="key">
+              <div v-if="path && !(card.tool === 'opencode' && key === 'omo_slim_config')" class="tool-extra-path">
+                <span>{{ extraPathLabel(key) }}</span><span class="text-mono" :title="path">{{ path }}</span>
+              </div>
+            </template>
           </div>
 
           <div v-if="card.tool === 'opencode'" class="row-between tool-live-line">
@@ -309,7 +314,7 @@ onMounted(() => {
           <div class="h-divider tool-divider"></div>
           <div class="row-between tool-section-heading">
             <div><div class="section-title" style="font-size: 15px;">{{ t('toolAccess.presets.title') }}</div><div class="section-sub">{{ t('toolAccess.presets.count', { count: presetsFor(card.tool).length }) }}</div></div>
-            <div class="row tool-heading-actions"><button v-if="card.tool === 'opencode'" class="btn btn-primary" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.manage') }}</button><button class="btn btn-secondary" style="padding: 5px 9px; font-size: 11.5px;" @click="card.tool === 'opencode' ? openOpencodeWorkbench() : openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
+            <div class="row tool-heading-actions"><button v-if="card.tool === 'opencode'" class="btn btn-primary" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-secondary" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
           </div>
 
           <div v-if="!presetsFor(card.tool).length" class="tool-empty">{{ t('toolAccess.presets.empty') }}</div>
@@ -319,10 +324,10 @@ onMounted(() => {
                 <div class="row" style="gap: 6px; flex-wrap: wrap;"><strong>{{ view.Preset.Name }}</strong><span v-if="view.Enabled" class="badge success">{{ t('toolAccess.presets.enabled') }}</span><span v-else class="badge">{{ t('toolAccess.presets.disabled') }}</span><span class="badge" :class="view.Preset.Kind === 'autoapi' ? 'info' : ''">{{ view.Preset.Kind === 'autoapi' ? t('toolAccess.presets.autoapi') : t('toolAccess.presets.direct') }}</span></div>
                 <div class="tool-preset-meta"><template v-if="card.tool === 'opencode' && view.Preset.Kind === 'direct' && view.Preset.Vendor"><span>{{ t('toolAccess.vendors.' + view.Preset.Vendor) }}</span><span>·</span></template><span>{{ view.Preset.Kind === 'autoapi' ? t('toolAccess.presets.relay') : view.Preset.BaseURL }}</span><span>·</span><span>{{ t('toolAccess.presets.models', { count: view.Preset.Models?.length || 0 }) }}</span><span v-if="view.Preset.APIKeyEnc" class="key-hint">· {{ t('toolAccess.presets.storedKey') }}</span></div>
               </div>
-              <div class="row tool-preset-actions">
+              <div v-if="card.tool !== 'opencode'" class="row tool-preset-actions">
                 <button v-if="view.Enabled" class="btn btn-secondary" style="padding: 4px 9px; font-size: 11px;" @click="disableProvider(card.tool, view)">{{ t('toolAccess.presets.disable') }}</button>
                 <button v-else class="btn btn-primary" style="padding: 4px 9px; font-size: 11px;" :disabled="mutationBusy || !statusFor(card.tool)?.Installed" :title="!statusFor(card.tool)?.Installed ? t('toolAccess.presets.installHint') : ''" @click="enableProvider(view)">{{ t('toolAccess.presets.enable') }}</button>
-                <button class="btn btn-icon" :title="t('common.edit')" :aria-label="t('common.edit')" @click="card.tool === 'opencode' ? openOpencodeWorkbench(view) : openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+                <button class="btn btn-icon" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
                 <button v-if="view.InDB" class="btn btn-icon" :title="t('toolAccess.presets.export')" :aria-label="t('toolAccess.presets.export')" @click="openExport(view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg></button>
                 <button v-if="!view.Enabled" class="btn btn-icon danger-icon" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deletePreset(view.Preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
               </div>
@@ -336,8 +341,9 @@ onMounted(() => {
                 <div v-if="opencodeLive?.OmoSlimConfigured" class="omo-slim-card-summary">{{ t('toolAccess.omoSlim.activeSummary', { preset: opencodeLive.OmoSlimActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoSlimAgentCount, disabled: opencodeLive.OmoSlimDisabledCount }) }}</div>
                 <div v-else class="omo-slim-card-summary muted">{{ t('toolAccess.omoSlim.notConfigured') }}</div>
               </div>
-              <button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button>
+              <div class="row omo-slim-card-actions"><button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button><button class="btn btn-ghost" style="padding: 5px 8px; font-size: 11.5px;" @click="openBackups('opencode', 'opencode-omo')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3"/></svg>{{ t('toolAccess.omoSlim.backups') }}</button></div>
             </div>
+            <div class="text-mono omo-slim-card-path" :title="statusFor('opencode')?.ExtraPaths?.omo_slim_config || ''">{{ pathText(statusFor('opencode')?.ExtraPaths?.omo_slim_config || '') }}</div>
           </div>
 
           <div class="row tool-card-actions">
@@ -349,7 +355,7 @@ onMounted(() => {
   </div>
 
   <ToolPresetModal :open="presetModalOpen" :tool="presetModalTool" :preset="editingPreset" :enabled="editingEnabled" :api-keys="apiKeys" :model-rules="modelRules" :supporting-loading="supportingLoading" @close="closePresetModal" @saved="closePresetModal(); refresh()" />
-  <OpencodeWorkbenchModal :open="opencodeWorkbenchOpen" :initial-provider-i-d="opencodeWorkbenchProviderID" @close="closeOpencodeWorkbench" @changed="refresh" @export="openExport" />
+  <OpencodeWorkbenchModal :open="opencodeWorkbenchOpen" :initial-provider-i-d="opencodeWorkbenchProviderID" @close="closeOpencodeWorkbench" @changed="refresh" />
   <OmoSlimModal :open="omoSlimOpen" @close="omoSlimOpen = false" @applied="refresh" />
 
   <Teleport to="body">
@@ -364,9 +370,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.tool-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .tool-card { padding: 16px; min-width: 0; }
-.tool-card-opencode { grid-column: span 2; }
+.tool-card-opencode { grid-column: 1 / -1; }
 .tool-card-heading { align-items: flex-start; margin-bottom: 14px; }
 .tool-icon { color: white; background: var(--graphite); text-transform: uppercase; }
 .tool-icon.opencode { background: var(--accent); }
@@ -401,6 +407,8 @@ onMounted(() => {
 .tool-card-actions .btn-ghost { font-size: 11.5px; }
 .omo-slim-card-block { margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
 .omo-slim-card-heading { align-items: center; gap: 12px; }
+.omo-slim-card-actions { flex: 0 0 auto; gap: 4px; }
+.omo-slim-card-path { margin-top: 9px; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .omo-slim-card-label { font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
 .omo-slim-card-summary { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .omo-slim-card-summary.muted { color: var(--muted); }
@@ -413,6 +421,5 @@ onMounted(() => {
 .export-code { max-height: 400px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #1d1d1f; color: #f5f5f7; font: 11.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .backups-table { min-width: 640px; }
 .backup-path { max-width: 300px; overflow-wrap: anywhere; font-size: 11px; }
-@media (max-width: 1050px) { .tool-grid { grid-template-columns: 1fr 1fr; } .tool-card-opencode { grid-column: span 1; } }
-@media (max-width: 700px) { .tool-grid { grid-template-columns: 1fr; } .tool-page-error { flex-direction: column; } }
+@media (max-width: 700px) { .tool-grid { grid-template-columns: 1fr; } .tool-card-opencode { grid-column: 1 / -1; } .tool-page-error { flex-direction: column; } }
 </style>

@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@/api/bridge'
 import AutoComplete from '@/components/AutoComplete.vue'
+import DiffPreview from '@/components/DiffPreview.vue'
 import TriStateTagEditor from '@/components/omo-slim/TriStateTagEditor.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
@@ -711,7 +712,7 @@ watch(() => props.open, (open) => {
       <div class="modal-card omo-slim-preview-modal">
         <div class="row-between modal-heading"><div><div class="modal-title">{{ t('toolAccess.omoSlim.previewTitle') }}</div><div class="section-sub text-mono omo-slim-path">{{ previewData.Path }}</div></div><button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="previewOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
         <div class="omo-slim-preview-note">{{ t('toolAccess.omoSlim.previewBackupNote') }}</div>
-        <div class="field"><label class="field-label">{{ t('toolAccess.omoSlim.previewAfter') }}</label><pre class="omo-slim-after-code">{{ previewData.After }}</pre></div>
+        <DiffPreview class="omo-slim-diff-preview" :before="previewData.Before" :after="previewData.After" />
         <div class="row omo-slim-preview-actions"><button class="btn btn-secondary" :disabled="saving" @click="previewOpen = false">{{ t('toolAccess.omoSlim.cancelPreview') }}</button><button class="btn btn-primary" :disabled="saving" @click="confirmWrite()">{{ saving ? t('common.processing') : t('toolAccess.omoSlim.confirmWrite') }}</button></div>
       </div>
     </div>
@@ -782,19 +783,21 @@ watch(() => props.open, (open) => {
 .tool-inline-error { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--radius-sm); background: rgba(217, 48, 37, .08); color: var(--negative); font-size: 12px; }
 .tool-inline-error .btn { align-self: flex-start; color: var(--fg); }
 .omo-slim-preview-overlay { isolation: isolate; }
-.omo-slim-preview-modal { width: min(860px, 88vw); max-height: 82vh; display: flex; flex-direction: column; overflow: hidden; }
+.omo-slim-preview-modal { width: min(920px, 90vw); height: min(84vh, 820px); max-height: 84vh; display: flex; flex-direction: column; overflow: hidden; }
 .omo-slim-preview-modal .modal-heading { flex: 0 0 auto; align-items: flex-start; margin-bottom: 15px; }
 .omo-slim-preview-note { flex: 0 0 auto; margin-bottom: 12px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border)); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--muted); font-size: 12px; }
-.omo-slim-after-code { min-height: 240px; max-height: 53vh; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: 11px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.omo-slim-diff-preview { min-height: 0; flex: 1 1 auto; }
 .omo-slim-preview-actions { justify-content: flex-end; margin-top: 14px; flex: 0 0 auto; }
 @media (max-width: 900px) {
   .omo-slim-workbench { width: 96vw; height: 90vh; }
+  .omo-slim-preview-modal { width: 94vw; height: 84vh; }
   .omo-slim-workbench-body { grid-template-columns: 220px minmax(0, 1fr); }
   .omo-slim-editor { padding: 17px; }
   .omo-slim-editor-section, .omo-slim-textarea-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 680px) {
   .omo-slim-workbench { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+  .omo-slim-preview-modal { width: 100%; height: 100%; max-height: none; border-radius: 0; }
   .omo-slim-workbench-body { grid-template-columns: 1fr; overflow: auto; }
   .omo-slim-sidebar { max-height: 250px; border-right: none; border-bottom: 1px solid var(--border); }
   .omo-slim-editor-grid { grid-template-columns: 1fr; }

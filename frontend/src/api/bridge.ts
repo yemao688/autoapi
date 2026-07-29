@@ -202,13 +202,13 @@ export const api = {
     ensureWails()
     return wails.GetOpencodeGlobalSettings() as Promise<toolconfig.OpencodeGlobalSettings>
   },
-  previewOpencodeGlobalChange: (settings: toolconfig.OpencodeGlobalSettings): Promise<service.OmoSlimPreview> => {
+  previewOpencodeConfigChange: (plan: service.OpencodeConfigPlan): Promise<service.OmoSlimPreview> => {
     ensureWails()
-    return wails.PreviewOpencodeGlobalChange(settings) as Promise<service.OmoSlimPreview>
+    return wails.PreviewOpencodeConfigChange(plan) as Promise<service.OmoSlimPreview>
   },
-  applyOpencodeGlobalChange: (settings: toolconfig.OpencodeGlobalSettings, allowDrift: boolean): Promise<void> => {
+  applyOpencodeConfigChange: (plan: service.OpencodeConfigPlan, allowDrift: boolean): Promise<void> => {
     ensureWails()
-    return wails.ApplyOpencodeGlobalChange(settings, allowDrift) as Promise<void>
+    return wails.ApplyOpencodeConfigChange(plan, allowDrift) as Promise<void>
   },
   listToolBackups: (tool: string): Promise<service.ToolBackupInfo[]> => {
     ensureWails()
