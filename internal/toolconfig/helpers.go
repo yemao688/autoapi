@@ -44,6 +44,11 @@ func providerKey(p Preset) string {
 	return key
 }
 
+// ProviderKey returns the config-file provider key for a preset.
+func ProviderKey(p Preset) string {
+	return providerKey(p)
+}
+
 func validatePreset(p PresetPlaintext) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("%w: name is empty", ErrInvalidPreset)
@@ -216,6 +221,30 @@ func jsonValue(value any) (hujson.Value, error) {
 		return hujson.Value{}, err
 	}
 	return hujson.Parse(b)
+}
+
+// packFormatted serializes a hujson document and applies hujson's stable
+// two-space formatter while retaining comments and HuJSON syntax.
+func packFormatted(doc hujson.Value) ([]byte, error) {
+	formatted, err := hujson.Format(doc.Pack())
+	if err != nil {
+		return nil, fmt.Errorf("format JSON document: %w", err)
+	}
+	return twoSpaceIndent(formatted), nil
+}
+
+func twoSpaceIndent(data []byte) []byte {
+	result := make([]byte, 0, len(data))
+	lineStart := true
+	for _, char := range data {
+		if lineStart && char == '\t' {
+			result = append(result, ' ', ' ')
+			continue
+		}
+		result = append(result, char)
+		lineStart = char == '\n'
+	}
+	return result
 }
 
 func readJSONDocument(path string) (hujson.Value, error) {
@@ -448,6 +477,17 @@ func removeObjectMember(object *hujson.Object, name string) error {
 		return err
 	}
 	if index >= 0 {
+		// A member's Name.BeforeExtra carries comments written immediately
+		// before its key. Move that trivia to the next surviving member (or
+		// the object's trailing trivia) so removal never drops unmanaged text.
+		before := append([]byte(nil), object.Members[index].Name.BeforeExtra...)
+		if index+1 < len(object.Members) {
+			next := append([]byte(nil), before...)
+			next = append(next, object.Members[index+1].Name.BeforeExtra...)
+			object.Members[index+1].Name.BeforeExtra = next
+		} else {
+			object.AfterExtra = append(before, object.AfterExtra...)
+		}
 		object.Members = append(object.Members[:index], object.Members[index+1:]...)
 	}
 	return nil

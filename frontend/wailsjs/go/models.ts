@@ -1701,33 +1701,11 @@ export namespace service {
 	        this.Missing = source["Missing"];
 	    }
 	}
-	export class ImportCandidate {
-	    ProviderID: string;
-	    BaseURL: string;
-	    HasKey: boolean;
-	    Models: string[];
-	    AlreadyImported: boolean;
-	    SuggestedName: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImportCandidate(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ProviderID = source["ProviderID"];
-	        this.BaseURL = source["BaseURL"];
-	        this.HasKey = source["HasKey"];
-	        this.Models = source["Models"];
-	        this.AlreadyImported = source["AlreadyImported"];
-	        this.SuggestedName = source["SuggestedName"];
-	    }
-	}
-	export class OmoConfigView {
+	export class OmoSlimConfigView {
 	    Path: string;
 	    ActivePreset: string;
-	    Agents: Record<string, toolconfig.OmoAgent>;
-	    CustomAgents: Record<string, toolconfig.OmoCustomAgent>;
+	    Agents: Record<string, toolconfig.OmoSlimAgent>;
+	    CustomAgents: Record<string, toolconfig.OmoSlimCustomAgent>;
 	    DisabledAgents: string[];
 	    DisabledSkills: string[];
 	    DisabledMcps: string[];
@@ -1739,15 +1717,15 @@ export namespace service {
 	    KnownMcps: string[];
 	
 	    static createFrom(source: any = {}) {
-	        return new OmoConfigView(source);
+	        return new OmoSlimConfigView(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Path = source["Path"];
 	        this.ActivePreset = source["ActivePreset"];
-	        this.Agents = this.convertValues(source["Agents"], toolconfig.OmoAgent, true);
-	        this.CustomAgents = this.convertValues(source["CustomAgents"], toolconfig.OmoCustomAgent, true);
+	        this.Agents = this.convertValues(source["Agents"], toolconfig.OmoSlimAgent, true);
+	        this.CustomAgents = this.convertValues(source["CustomAgents"], toolconfig.OmoSlimCustomAgent, true);
 	        this.DisabledAgents = source["DisabledAgents"];
 	        this.DisabledSkills = source["DisabledSkills"];
 	        this.DisabledMcps = source["DisabledMcps"];
@@ -1777,13 +1755,13 @@ export namespace service {
 		    return a;
 		}
 	}
-	export class OmoPreview {
+	export class OmoSlimPreview {
 	    Path: string;
 	    Before: string;
 	    After: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new OmoPreview(source);
+	        return new OmoSlimPreview(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -1793,12 +1771,78 @@ export namespace service {
 	        this.After = source["After"];
 	    }
 	}
+	export class OpencodeProviderPlan {
+	    Action: string;
+	    Preset: toolconfig.Preset;
+	    PlaintextKey: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeProviderPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Action = source["Action"];
+	        this.Preset = this.convertValues(source["Preset"], toolconfig.Preset);
+	        this.PlaintextKey = source["PlaintextKey"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OpencodeConfigPlan {
+	    Providers: OpencodeProviderPlan[];
+	    Globals: toolconfig.OpencodeGlobalSettings;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeConfigPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Providers = this.convertValues(source["Providers"], OpencodeProviderPlan);
+	        this.Globals = this.convertValues(source["Globals"], toolconfig.OpencodeGlobalSettings);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class OpencodeLiveState {
 	    Model: string;
-	    OmoConfigured: boolean;
-	    OmoActivePreset: string;
-	    OmoAgentCount: number;
-	    OmoDisabledCount: number;
+	    OmoSlimConfigured: boolean;
+	    OmoSlimActivePreset: string;
+	    OmoSlimAgentCount: number;
+	    OmoSlimDisabledCount: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new OpencodeLiveState(source);
@@ -1807,12 +1851,13 @@ export namespace service {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Model = source["Model"];
-	        this.OmoConfigured = source["OmoConfigured"];
-	        this.OmoActivePreset = source["OmoActivePreset"];
-	        this.OmoAgentCount = source["OmoAgentCount"];
-	        this.OmoDisabledCount = source["OmoDisabledCount"];
+	        this.OmoSlimConfigured = source["OmoSlimConfigured"];
+	        this.OmoSlimActivePreset = source["OmoSlimActivePreset"];
+	        this.OmoSlimAgentCount = source["OmoSlimAgentCount"];
+	        this.OmoSlimDisabledCount = source["OmoSlimDisabledCount"];
 	    }
 	}
+	
 	export class ToolApplyResult {
 	    Tool: string;
 	    ConfigPath: string;
@@ -1868,6 +1913,40 @@ export namespace service {
 		    return a;
 		}
 	}
+	export class ToolProviderView {
+	    Preset: toolconfig.Preset;
+	    Enabled: boolean;
+	    InDB: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolProviderView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Preset = this.convertValues(source["Preset"], toolconfig.Preset);
+	        this.Enabled = source["Enabled"];
+	        this.InDB = source["InDB"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
@@ -1887,7 +1966,7 @@ export namespace toolconfig {
 	        this.output = source["output"];
 	    }
 	}
-	export class OmoAgent {
+	export class OmoSlimAgent {
 	    model: string;
 	    variant: string;
 	    displayName: string;
@@ -1895,7 +1974,7 @@ export namespace toolconfig {
 	    mcps?: string[];
 	
 	    static createFrom(source: any = {}) {
-	        return new OmoAgent(source);
+	        return new OmoSlimAgent(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -1907,7 +1986,43 @@ export namespace toolconfig {
 	        this.mcps = source["mcps"];
 	    }
 	}
-	export class OmoCustomAgent {
+	export class OmoSlimPresetOp {
+	    Operation: string;
+	    Name: string;
+	    NewName: string;
+	    Agents: Record<string, OmoSlimAgent>;
+	
+	    static createFrom(source: any = {}) {
+	        return new OmoSlimPresetOp(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Operation = source["Operation"];
+	        this.Name = source["Name"];
+	        this.NewName = source["NewName"];
+	        this.Agents = this.convertValues(source["Agents"], OmoSlimAgent, true);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OmoSlimCustomAgent {
 	    model: string;
 	    variant: string;
 	    displayName: string;
@@ -1917,7 +2032,7 @@ export namespace toolconfig {
 	    orchestratorPrompt: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new OmoCustomAgent(source);
+	        return new OmoSlimCustomAgent(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -1931,26 +2046,28 @@ export namespace toolconfig {
 	        this.orchestratorPrompt = source["orchestratorPrompt"];
 	    }
 	}
-	export class OmoChange {
+	export class OmoSlimChange {
 	    ActivePreset?: string;
-	    Agents: Record<string, OmoAgent>;
-	    CustomAgents: Record<string, OmoCustomAgent>;
+	    Agents: Record<string, OmoSlimAgent>;
+	    CustomAgents: Record<string, OmoSlimCustomAgent>;
 	    DisabledAgents: string[];
 	    DisabledSkills: string[];
 	    DisabledMcps: string[];
+	    PresetOps: OmoSlimPresetOp[];
 	
 	    static createFrom(source: any = {}) {
-	        return new OmoChange(source);
+	        return new OmoSlimChange(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ActivePreset = source["ActivePreset"];
-	        this.Agents = this.convertValues(source["Agents"], OmoAgent, true);
-	        this.CustomAgents = this.convertValues(source["CustomAgents"], OmoCustomAgent, true);
+	        this.Agents = this.convertValues(source["Agents"], OmoSlimAgent, true);
+	        this.CustomAgents = this.convertValues(source["CustomAgents"], OmoSlimCustomAgent, true);
 	        this.DisabledAgents = source["DisabledAgents"];
 	        this.DisabledSkills = source["DisabledSkills"];
 	        this.DisabledMcps = source["DisabledMcps"];
+	        this.PresetOps = this.convertValues(source["PresetOps"], OmoSlimPresetOp);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1972,6 +2089,27 @@ export namespace toolconfig {
 		}
 	}
 	
+	
+	export class OpencodeGlobalSettings {
+	    Model: string;
+	    SmallModel: string;
+	    Theme: string;
+	    Share: string;
+	    Autoupdate?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpencodeGlobalSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Model = source["Model"];
+	        this.SmallModel = source["SmallModel"];
+	        this.Theme = source["Theme"];
+	        this.Share = source["Share"];
+	        this.Autoupdate = source["Autoupdate"];
+	    }
+	}
 	export class PresetVariant {
 	    reasoningEffort?: string;
 	    reasoningSummary?: string;

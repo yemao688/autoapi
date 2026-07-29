@@ -92,6 +92,84 @@ func (CodexAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error) 
 	return &ChangeSet{Tool: ToolCodex, Changes: changes}, nil
 }
 
+func (CodexAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) {
+	if err := validateCodexProviderID(providerID); err != nil {
+		return nil, err
+	}
+	homeDir = absoluteHomeDir(homeDir)
+	configPath := DefaultConfigPath(ToolCodex, homeDir)
+	resolvedConfigPath, before, err := snapshotFile(configPath, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if before == nil {
+		return nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	doc, err := readTOMLBytes(before)
+	if err != nil {
+		return nil, err
+	}
+	providersValue, exists := doc["model_providers"]
+	if !exists {
+		return nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	providers, ok := tomlMap(providersValue)
+	if !ok {
+		return nil, fmt.Errorf("model_providers is not a table: %w", ErrUnsafeShape)
+	}
+	entryValue, exists := providers[providerID]
+	if !exists {
+		return nil, fmt.Errorf("Codex provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	if _, ok := tomlMap(entryValue); !ok {
+		return nil, fmt.Errorf("model_providers.%s is not a table: %w", providerID, ErrUnsafeShape)
+	}
+	if pointer, exists := doc["model_provider"]; exists {
+		if _, ok := pointer.(string); !ok {
+			return nil, fmt.Errorf("model_provider is not a string: %w", ErrUnsafeShape)
+		}
+	}
+	after, err := removeCodexProvider(before, providerID, tomlString(doc["model_provider"]) == providerID)
+	if err != nil {
+		return nil, err
+	}
+	afterDoc, err := readTOMLBytes(after)
+	if err != nil {
+		return nil, fmt.Errorf("reparse removed Codex provider: %w", err)
+	}
+	if afterProvidersValue, exists := afterDoc["model_providers"]; exists {
+		if afterProviders, ok := tomlMap(afterProvidersValue); !ok {
+			return nil, fmt.Errorf("removed Codex model_providers is not a table: %w", ErrUnsafeShape)
+		} else if _, stillPresent := afterProviders[providerID]; stillPresent {
+			return nil, fmt.Errorf("removed Codex provider %q remains: %w", providerID, ErrUnsafeShape)
+		}
+	}
+	if tomlString(afterDoc["model_provider"]) == providerID {
+		return nil, fmt.Errorf("removed Codex model_provider remains: %w", ErrUnsafeShape)
+	}
+	configChange := changeForSnapshot(ResCodexConfig, resolvedConfigPath, false, before)
+	configChange.After = after
+	changes := []FileChange{configChange}
+
+	authPath := filepath.Join(homeDir, ".codex", "auth.json")
+	resolvedAuthPath, authBefore, err := snapshotFile(authPath, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if authBefore != nil {
+		authAfter, changed, err := removeCodexAuthKey(authBefore)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			authChange := changeForSnapshot(ResCodexAuth, resolvedAuthPath, true, authBefore)
+			authChange.After = authAfter
+			changes = append(changes, authChange)
+		}
+	}
+	return &ChangeSet{Tool: ToolCodex, Changes: changes}, nil
+}
+
 func (CodexAdapter) ReadManaged(homeDir, providerID string) (ManagedSection, error) {
 	if providerID == "" {
 		return ManagedSection{}, fmt.Errorf("%w: provider ID is required", ErrInvalidPreset)
@@ -247,6 +325,7 @@ func (CodexAdapter) ReadManagedRaw(homeDir, providerID string) (RawManagedSectio
 	section := RawManagedSection{
 		Present:    true,
 		ProviderID: providerID,
+		Name:       tomlString(entry["name"]),
 		BaseURL:    tomlString(entry["base_url"]),
 		Model:      tomlString(doc["model"]),
 	}
@@ -682,6 +761,94 @@ func spliceCodexConfig(data []byte, providerID, name, baseURL, model string) ([]
 	return result, nil
 }
 
+func removeCodexProvider(data []byte, providerID string, removePointer bool) ([]byte, error) {
+	lines := splitCodexLines(data)
+	firstTable := len(lines)
+	for i, line := range lines {
+		if strings.HasPrefix(tomlHeader(line.content), "[") {
+			firstTable = i
+			break
+		}
+	}
+	seenPointer := false
+	filteredTop := make([]codexLine, 0, len(lines))
+	for i, line := range lines {
+		if i < firstTable {
+			if key, ok := tomlLineKey(line.content); ok && key == "model_provider" {
+				if seenPointer {
+					return nil, fmt.Errorf("duplicate top-level TOML key %q: %w", key, ErrUnsafeShape)
+				}
+				seenPointer = true
+				if removePointer {
+					if comment := tomlCommentSuffix(line.content); len(comment) > 0 {
+						filteredTop = append(filteredTop, codexLine{content: bytes.TrimSpace(comment), ending: line.ending})
+					}
+					continue
+				}
+			}
+		}
+		filteredTop = append(filteredTop, line)
+	}
+	lines = filteredTop
+	header := codexTableHeader(providerID)
+	headerIndex := -1
+	for i, line := range lines {
+		lineHeader := tomlHeader(line.content)
+		if lineHeader == "[[model_providers."+providerID+"]]" {
+			return nil, fmt.Errorf("model_providers.%s is an array: %w", providerID, ErrUnsafeShape)
+		}
+		if lineHeader == header {
+			headerIndex = i
+			break
+		}
+	}
+	if headerIndex < 0 {
+		return nil, fmt.Errorf("model_providers.%s table not found: %w", providerID, ErrUnsafeShape)
+	}
+	end := len(lines)
+	nestedPrefix := "[model_providers." + providerID + "."
+	for i := headerIndex + 1; i < len(lines); i++ {
+		lineHeader := tomlHeader(lines[i].content)
+		if !strings.HasPrefix(lineHeader, "[") {
+			continue
+		}
+		if strings.HasPrefix(lineHeader, nestedPrefix) {
+			continue
+		}
+		end = i
+		break
+	}
+	result := make([]codexLine, 0, len(lines)-(end-headerIndex))
+	result = append(result, lines[:headerIndex]...)
+	result = append(result, lines[end:]...)
+	return joinCodexLines(result), nil
+}
+
+func removeCodexAuthKey(before []byte) ([]byte, bool, error) {
+	doc, err := parseJSONBytes(before)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse Codex auth: %w", err)
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse Codex auth: %w", err)
+	}
+	if err := requireUniqueKeys(root, "OPENAI_API_KEY"); err != nil {
+		return nil, false, err
+	}
+	if objectMemberValue(root, "OPENAI_API_KEY") == nil {
+		return nil, false, nil
+	}
+	if err := removeObjectMember(root, "OPENAI_API_KEY"); err != nil {
+		return nil, false, err
+	}
+	formatted, err := packFormatted(doc)
+	if err != nil {
+		return nil, false, err
+	}
+	return formatted, true, nil
+}
+
 func patchCodexAuth(before []byte, apiKey string) ([]byte, error) {
 	doc, err := parseJSONBytes(before)
 	if err != nil {
@@ -701,5 +868,5 @@ func patchCodexAuth(before []byte, apiKey string) ([]byte, error) {
 	if err := setObjectMember(root, "OPENAI_API_KEY", value); err != nil {
 		return nil, err
 	}
-	return doc.Pack(), nil
+	return packFormatted(doc)
 }

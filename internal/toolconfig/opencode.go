@@ -78,10 +78,7 @@ func buildOpenCodeModels(models []PresetModel) (map[string]openCodeModel, string
 }
 
 func openCodeVendor(vendor string) string {
-	if vendor == "@ai-sdk/openai" || vendor == "@ai-sdk/openai-compatible" {
-		return vendor
-	}
-	return "@ai-sdk/openai-compatible"
+	return OpenCodeNpmPackage(vendor)
 }
 
 // resolvedOpenCodePath returns the effective opencode config path
@@ -92,11 +89,165 @@ func resolvedOpenCodePath(homeDir string) string {
 	return path
 }
 
-func (OpenCodeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error) {
+func validateOpenCodeEntry(entry *hujson.Object) error {
+	if err := requireUniqueKeys(entry, "npm", "name", "options", "models"); err != nil {
+		return err
+	}
+	if modelsValue := objectMemberValue(entry, "models"); modelsValue != nil {
+		modelsObject, ok := modelsValue.Value.(*hujson.Object)
+		if !ok {
+			return fmt.Errorf("managed JSON key %q is not an object: %w", "models", ErrUnsafeShape)
+		}
+		if err := requireUniqueObjectMembers(modelsObject); err != nil {
+			return err
+		}
+	}
+	if options, present, err := requireObjectMember(entry, "options"); err != nil {
+		return err
+	} else if present {
+		if err := requireUniqueKeys(options, "baseURL", "apiKey"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func upsertOpenCodeProvider(root *hujson.Object, p PresetPlaintext) error {
 	if err := validatePreset(p); err != nil {
-		return nil, err
+		return err
 	}
 	providerID := providerKey(p.Preset)
+	providers, present, err := requireObjectMember(root, "provider")
+	if err != nil {
+		return err
+	}
+	if !present {
+		providers = &hujson.Object{}
+		if err := setObjectMember(root, "provider", hujson.Value{Value: providers}); err != nil {
+			return err
+		}
+	}
+	if err := requireUniqueObjectMembers(providers); err != nil {
+		return err
+	}
+	entry, entryPresent, err := requireObjectMember(providers, providerID)
+	if err != nil {
+		return fmt.Errorf("provider %q: %w", providerID, err)
+	}
+	if !entryPresent {
+		entry = &hujson.Object{}
+		if err := setObjectMember(providers, providerID, hujson.Value{Value: entry}); err != nil {
+			return err
+		}
+	}
+	if err := validateOpenCodeEntry(entry); err != nil {
+		return err
+	}
+
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"npm", openCodeVendor(p.Vendor)},
+		{"name", p.Name},
+	} {
+		value, err := jsonValue(field.value)
+		if err != nil {
+			return err
+		}
+		if err := setObjectMember(entry, field.name, value); err != nil {
+			return err
+		}
+	}
+
+	options, optionsPresent, err := requireObjectMember(entry, "options")
+	if err != nil {
+		return err
+	}
+	if !optionsPresent {
+		options = &hujson.Object{}
+		if err := setObjectMember(entry, "options", hujson.Value{Value: options}); err != nil {
+			return err
+		}
+	}
+	if value, err := jsonValue(p.BaseURL); err != nil {
+		return err
+	} else if err := setObjectMember(options, "baseURL", value); err != nil {
+		return err
+	}
+	if p.APIKey == "" {
+		if err := removeObjectMember(options, "apiKey"); err != nil {
+			return err
+		}
+	} else if value, err := jsonValue(p.APIKey); err != nil {
+		return err
+	} else if err := setObjectMember(options, "apiKey", value); err != nil {
+		return err
+	}
+
+	models, defaultModel := buildOpenCodeModels(p.Models)
+	modelsValue, err := jsonValue(models)
+	if err != nil {
+		return err
+	}
+	if err := setObjectMember(entry, "models", modelsValue); err != nil {
+		return err
+	}
+	if defaultModel != "" {
+		value, err := jsonValue(providerID + "/" + defaultModel)
+		if err != nil {
+			return err
+		}
+		return setObjectMember(root, "model", value)
+	}
+	if strings.HasPrefix(objectString(root, "model"), providerID+"/") {
+		// OpenCode's pointer is provider-scoped. Do not clear a pointer to a
+		// different provider when this preset has no default model.
+		return removeObjectMember(root, "model")
+	}
+	return nil
+}
+
+func removeOpenCodeProvider(root *hujson.Object, providerID string, tolerateMissing bool) error {
+	if providerID == "" {
+		return fmt.Errorf("%w: provider ID is required", ErrInvalidPreset)
+	}
+	providers, present, err := requireObjectMember(root, "provider")
+	if err != nil {
+		return err
+	}
+	if !present {
+		if tolerateMissing {
+			return nil
+		}
+		return fmt.Errorf("opencode provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	if err := requireUniqueObjectMembers(providers); err != nil {
+		return err
+	}
+	entry, present, err := requireObjectMember(providers, providerID)
+	if err != nil {
+		return fmt.Errorf("provider %q: %w", providerID, err)
+	}
+	if !present {
+		if tolerateMissing {
+			return nil
+		}
+		return fmt.Errorf("opencode provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	if err := validateOpenCodeEntry(entry); err != nil {
+		return err
+	}
+	if err := removeObjectMember(providers, providerID); err != nil {
+		return err
+	}
+	if strings.HasPrefix(objectString(root, "model"), providerID+"/") {
+		return removeObjectMember(root, "model")
+	}
+	return nil
+}
+
+func (OpenCodeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error) {
 	homeDir = absoluteHomeDir(homeDir)
 	configPath, _ := ResolveConfigPath(ToolOpencode, homeDir)
 	resolvedPath, before, err := snapshotFile(configPath, homeDir)
@@ -111,112 +262,129 @@ func (OpenCodeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, erro
 	if err != nil {
 		return nil, fmt.Errorf("parse opencode config: %w", err)
 	}
+	originalDoc := doc.Clone()
 	if err := requireUniqueKeys(root, "provider", "model"); err != nil {
 		return nil, err
 	}
-
-	providers, present, err := requireObjectMember(root, "provider")
-	if err != nil {
+	if err := upsertOpenCodeProvider(root, p); err != nil {
 		return nil, err
 	}
-	if !present {
-		providers = &hujson.Object{}
-		if err := setObjectMember(root, "provider", hujson.Value{Value: providers}); err != nil {
-			return nil, err
-		}
-	}
-	if err := requireUniqueKeys(providers, providerID); err != nil {
-		return nil, err
-	}
-
-	entry, entryPresent, err := requireObjectMember(providers, providerID)
-	if err != nil {
-		return nil, fmt.Errorf("provider %q: %w", providerID, err)
-	}
-	if !entryPresent {
-		entry = &hujson.Object{}
-		if err := setObjectMember(providers, providerID, hujson.Value{Value: entry}); err != nil {
-			return nil, err
-		}
-	}
-	if err := requireUniqueKeys(entry, "npm", "name", "options", "models"); err != nil {
-		return nil, err
-	}
-	if modelsValue := objectMemberValue(entry, "models"); modelsValue != nil {
-		modelsObject, ok := modelsValue.Value.(*hujson.Object)
-		if !ok {
-			return nil, fmt.Errorf("managed JSON key %q is not an object: %w", "models", ErrUnsafeShape)
-		}
-		if err := requireUniqueObjectMembers(modelsObject); err != nil {
-			return nil, err
-		}
-	}
-
-	if value, err := jsonValue(openCodeVendor(p.Vendor)); err != nil {
-		return nil, err
-	} else if err := setObjectMember(entry, "npm", value); err != nil {
-		return nil, err
-	}
-	if value, err := jsonValue(p.Name); err != nil {
-		return nil, err
-	} else if err := setObjectMember(entry, "name", value); err != nil {
-		return nil, err
-	}
-
-	options, optionsPresent, err := requireObjectMember(entry, "options")
-	if err != nil {
-		return nil, err
-	}
-	if !optionsPresent {
-		options = &hujson.Object{}
-		if err := setObjectMember(entry, "options", hujson.Value{Value: options}); err != nil {
-			return nil, err
-		}
-	}
-	if err := requireUniqueKeys(options, "baseURL", "apiKey"); err != nil {
-		return nil, err
-	}
-	if value, err := jsonValue(p.BaseURL); err != nil {
-		return nil, err
-	} else if err := setObjectMember(options, "baseURL", value); err != nil {
-		return nil, err
-	}
-	if p.APIKey == "" {
-		if err := removeObjectMember(options, "apiKey"); err != nil {
-			return nil, err
-		}
-	} else if value, err := jsonValue(p.APIKey); err != nil {
-		return nil, err
-	} else if err := setObjectMember(options, "apiKey", value); err != nil {
-		return nil, err
-	}
-
-	models, defaultModel := buildOpenCodeModels(p.Models)
-	modelsValue, err := jsonValue(models)
-	if err != nil {
-		return nil, err
-	}
-	if err := setObjectMember(entry, "models", modelsValue); err != nil {
-		return nil, err
-	}
-	if defaultModel != "" {
-		value, err := jsonValue(providerID + "/" + defaultModel)
-		if err != nil {
-			return nil, err
-		}
-		if err := setObjectMember(root, "model", value); err != nil {
-			return nil, err
-		}
-	} else if strings.HasPrefix(objectString(root, "model"), providerID+"/") {
-		// OpenCode's pointer is provider-scoped. Do not clear a pointer to a
-		// different provider when this preset has no default model.
-		if err := removeObjectMember(root, "model"); err != nil {
-			return nil, err
-		}
-	}
-
 	change := changeForSnapshot(ResOpencodeConfig, resolvedPath, false, before)
-	change.After = doc.Pack()
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
+	originalFormatted, formatErr := packFormatted(originalDoc)
+	if formatErr != nil {
+		return nil, formatErr
+	}
+	if string(change.After) == string(originalFormatted) {
+		change.After = append([]byte(nil), before...)
+	}
+	return &ChangeSet{Tool: ToolOpencode, Changes: []FileChange{change}}, nil
+}
+
+func (OpenCodeAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) {
+	homeDir = absoluteHomeDir(homeDir)
+	configPath, _ := ResolveConfigPath(ToolOpencode, homeDir)
+	resolvedPath, before, err := snapshotFile(configPath, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if before == nil {
+		return nil, fmt.Errorf("opencode provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	doc, err := parseJSONBytes(before)
+	if err != nil {
+		return nil, fmt.Errorf("parse opencode config: %w", err)
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("parse opencode config: %w", err)
+	}
+	if err := requireUniqueKeys(root, "provider", "model"); err != nil {
+		return nil, err
+	}
+	if err := removeOpenCodeProvider(root, providerID, false); err != nil {
+		return nil, err
+	}
+	change := changeForSnapshot(ResOpencodeConfig, resolvedPath, false, before)
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
+	return &ChangeSet{Tool: ToolOpencode, Changes: []FileChange{change}}, nil
+}
+
+// OpencodeProviderChange is the internal, already-key-resolved provider
+// mutation used by the staged service planner.
+type OpencodeProviderChange struct {
+	Action string
+	Preset PresetPlaintext
+}
+
+// PlanOpencodeConfigChange renders provider mutations and the five global
+// leaves into one formatted opencode config ChangeSet.
+func PlanOpencodeConfigChange(homeDir string, providers []OpencodeProviderChange, globals OpencodeGlobalSettings) (*ChangeSet, error) {
+	homeDir = absoluteHomeDir(homeDir)
+	configPath, _ := ResolveConfigPath(ToolOpencode, homeDir)
+	resolvedPath, before, err := snapshotFile(configPath, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := parseJSONBytes(before)
+	if err != nil {
+		return nil, fmt.Errorf("parse opencode config: %w", err)
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("parse opencode config: %w", err)
+	}
+	originalDoc := doc.Clone()
+	if err := requireUniqueObjectMembers(root); err != nil {
+		return nil, err
+	}
+	if err := requireUniqueKeys(root, "provider", "model"); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		providerID := providerKey(provider.Preset.Preset)
+		if providerID == "" {
+			return nil, fmt.Errorf("%w: provider ID is required", ErrInvalidPreset)
+		}
+		if _, exists := seen[providerID]; exists {
+			return nil, fmt.Errorf("%w: duplicate opencode provider %q in plan", ErrConflict, providerID)
+		}
+		seen[providerID] = struct{}{}
+		switch provider.Action {
+		case "upsert":
+			if err := upsertOpenCodeProvider(root, provider.Preset); err != nil {
+				return nil, err
+			}
+		case "park", "remove":
+			if err := removeOpenCodeProvider(root, providerID, true); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("%w: unknown opencode provider action %q", ErrInvalidPreset, provider.Action)
+		}
+	}
+	if err := applyOpencodeGlobalLeaves(root, globals); err != nil {
+		return nil, err
+	}
+	change := changeForSnapshot(ResOpencodeConfig, resolvedPath, false, before)
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
+	originalFormatted, formatErr := packFormatted(originalDoc)
+	if formatErr != nil {
+		return nil, formatErr
+	}
+	if string(change.After) == string(originalFormatted) {
+		change.After = append([]byte(nil), before...)
+	}
 	return &ChangeSet{Tool: ToolOpencode, Changes: []FileChange{change}}, nil
 }
 
@@ -266,6 +434,8 @@ func (OpenCodeAdapter) ReadManagedRaw(homeDir, providerID string) (RawManagedSec
 	section := RawManagedSection{
 		Present:    true,
 		ProviderID: providerID,
+		Name:       objectString(entry, "name"),
+		Vendor:     objectString(entry, "npm"),
 		BaseURL:    objectString(options, "baseURL"),
 		APIKey:     objectString(options, "apiKey"),
 		Model:      objectString(root, "model"),
@@ -415,11 +585,11 @@ func parseJSONBytes(data []byte) (hujson.Value, error) {
 
 // ListProviderModels returns every "<providerID>/<model>" reference declared in
 // the opencode config's provider section, across all providers. It is used for
-// OMO cross-file validation (agent model references must exist somewhere in
+// OMO Slim cross-file validation (agent model references must exist somewhere in
 // opencode.json). A missing config yields an empty list, not an error; the
 // adapter's Plan path still fails closed on non-object shapes when applying.
 // ListMcpNames returns the sorted names of MCP servers declared under the
-// top-level "mcp" object of the opencode config, plus the MCP servers OMO
+// top-level "mcp" object of the opencode config, plus the MCP servers OMO Slim
 // bundles itself (websearch, context7, gh_grep). It powers closed-list
 // candidates for agent mcps arrays. A missing config yields the bundled set.
 func ListMcpNames(homeDir string) ([]string, error) {
@@ -537,7 +707,7 @@ func ReadModelPointer(homeDir string) (string, error) {
 
 // ListProviderVariants returns the sorted union of every variant key declared
 // under provider models in the opencode config (provider.*.models.*.variants).
-// It feeds the OMO agent variant dropdown. A missing config yields an empty
+// It feeds the OMO Slim agent variant dropdown. A missing config yields an empty
 // list, not an error; non-object shapes are skipped leniently here and still
 // fail closed on the adapter's Plan path.
 func ListProviderVariants(homeDir string) ([]string, error) {

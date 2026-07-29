@@ -5,7 +5,8 @@ import { api } from '@/api/bridge'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import ToolPresetModal from '@/components/ToolPresetModal.vue'
-import OmoModal from '@/components/OmoModal.vue'
+import OmoSlimModal from '@/components/OmoSlimModal.vue'
+import OpencodeWorkbenchModal from '@/components/OpencodeWorkbenchModal.vue'
 import type { model, service, toolconfig } from '../../wailsjs/go/models'
 
 type ToolName = 'opencode' | 'codex' | 'claude'
@@ -15,7 +16,7 @@ const toast = useToast()
 const confirm = useConfirm()
 const tools: ToolName[] = ['opencode', 'codex', 'claude']
 const statuses = ref<toolconfig.ToolStatus[]>([])
-const presets = ref<Record<string, toolconfig.Preset[]>>({})
+const presets = ref<Record<string, service.ToolProviderView[]>>({})
 const opencodeLive = ref<service.OpencodeLiveState | null>(null)
 const apiKeys = ref<model.ApiKey[]>([])
 const modelRules = ref<model.ModelRule[]>([])
@@ -28,32 +29,10 @@ const mutationBusy = ref(false)
 const presetModalOpen = ref(false)
 const presetModalTool = ref<ToolName>('opencode')
 const editingPreset = ref<toolconfig.Preset | null>(null)
-const omoOpen = ref(false)
-
-const driftOpen = ref(false)
-const driftTool = ref<ToolName>('opencode')
-const driftStates = ref<service.DriftState[]>([])
-const driftLoading = ref(false)
-const applyDriftOpen = ref(false)
-const applyDriftPreset = ref<toolconfig.Preset | null>(null)
-const applyDriftStates = ref<service.DriftState[]>([])
-const applyDriftLoading = ref(false)
-
-const importOpen = ref(false)
-const importTool = ref<ToolName>('opencode')
-type ImportRow = {
-  candidate: service.ImportCandidate
-  name: string
-  selected: boolean
-}
-const importRows = ref<ImportRow[]>([])
-const importLoading = ref(false)
-const importError = ref('')
-const importGeneration = ref(0)
-const importPreselectProviderID = ref('')
-const importPrefillName = ref('')
-const importing = ref(false)
-const selectedImportCount = computed(() => importRows.value.filter((row) => row.selected && !row.candidate.AlreadyImported).length)
+const editingEnabled = ref(false)
+const omoSlimOpen = ref(false)
+const opencodeWorkbenchOpen = ref(false)
+const opencodeWorkbenchProviderID = ref('')
 
 const exportOpen = ref(false)
 const exportLoading = ref(false)
@@ -61,6 +40,7 @@ const exportSnippet = ref<toolconfig.Snippet | null>(null)
 
 const backupsOpen = ref(false)
 const backupsTool = ref<ToolName>('opencode')
+const backupsResource = ref('')
 const backups = ref<service.ToolBackupInfo[]>([])
 const backupsLoading = ref(false)
 
@@ -79,14 +59,9 @@ function presetsFor(tool: ToolName) {
   return presets.value[tool] || []
 }
 
-function activePreset(status: toolconfig.ToolStatus | undefined, tool: ToolName) {
-  if (!status?.ActivePresetID) return null
-  return presetsFor(tool).find((preset) => preset.ID === status.ActivePresetID) || null
-}
-
 function extraPathLabel(key: string) {
   if (key === 'auth_json') return t('toolAccess.status.authPath')
-  if (key === 'omo_config') return t('toolAccess.status.omoPath')
+  if (key === 'omo_slim_config') return t('toolAccess.status.omoSlimPath')
   return key
 }
 
@@ -104,7 +79,7 @@ async function refresh() {
     ])
     statuses.value = nextStatuses
     opencodeLive.value = nextLive
-    const results = await Promise.all(tools.map(async (tool) => [tool, await api.listToolPresets(tool)] as const))
+    const results = await Promise.all(tools.map(async (tool) => [tool, await api.listToolProviders(tool)] as const))
     presets.value = Object.fromEntries(results)
   } catch (e: any) {
     loadError.value = e?.message || String(e)
@@ -129,11 +104,12 @@ async function loadSupportingData() {
   }
 }
 
-async function openPreset(tool: ToolName, preset: toolconfig.Preset | null = null) {
+async function openPreset(tool: ToolName, view: service.ToolProviderView | null = null) {
   // Open the modal immediately — ListModelRules can take seconds, and
   // awaiting it before opening looked like a dead button (no feedback).
   modalGeneration.value++
-  editingPreset.value = preset
+  editingPreset.value = view?.Preset || null
+  editingEnabled.value = view?.Enabled || false
   presetModalTool.value = tool
   presetModalOpen.value = true
   void loadSupportingData()
@@ -143,50 +119,49 @@ function closePresetModal() {
   modalGeneration.value++
   presetModalOpen.value = false
   editingPreset.value = null
+  editingEnabled.value = false
 }
 
-async function openDrift(tool: ToolName) {
-  driftTool.value = tool
-  driftOpen.value = true
-  driftLoading.value = true
-  driftStates.value = []
+function openOpencodeWorkbench(view: service.ToolProviderView | null = null) {
+  opencodeWorkbenchProviderID.value = view?.Preset.ProviderID || ''
+  opencodeWorkbenchOpen.value = true
+}
+
+function closeOpencodeWorkbench() {
+  opencodeWorkbenchOpen.value = false
+  opencodeWorkbenchProviderID.value = ''
+}
+
+async function enableProvider(view: service.ToolProviderView) {
+  if (mutationBusy.value) return
+  mutationBusy.value = true
   try {
-    driftStates.value = await api.checkToolDrift(tool)
+    await api.enableToolPreset(view.Preset.ID)
+    toast.push(t('toolAccess.toast.presetEnabled'), 'success')
+    await refresh()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
-    driftOpen.value = false
   } finally {
-    driftLoading.value = false
+    mutationBusy.value = false
   }
 }
 
-async function applyPreset(preset: toolconfig.Preset, allowDrift = false) {
-  if (mutationBusy.value && !allowDrift) return
+async function disableProvider(tool: ToolName, view: service.ToolProviderView) {
+  if (mutationBusy.value) return
+  const ok = await confirm.open({
+    title: t('toolAccess.confirm.disableTitle'),
+    message: t('toolAccess.confirm.disableMessage', { name: view.Preset.Name, tool: toolLabel(tool) }),
+    confirmText: t('toolAccess.presets.disable'),
+    danger: true,
+  })
+  if (!ok || mutationBusy.value) return
   mutationBusy.value = true
   try {
-    const result = await api.applyToolPreset(preset.ID, allowDrift)
-    toast.push(result.HotReload ? t('toolAccess.toast.hotReloaded') : t('toolAccess.toast.restartRequired'), 'success')
+    await api.disableToolPreset(tool, view.Preset.ProviderID)
+    toast.push(t('toolAccess.toast.presetDisabled'), 'success')
     await refresh()
-    if (preset.Tool === 'opencode' && opencodeLive.value?.OmoConfigured) {
-      omoOpen.value = true
-    }
   } catch (e: any) {
-    const message = e?.message || String(e)
-    if (!allowDrift && message.includes('config file changed externally since last apply')) {
-      applyDriftLoading.value = true
-      try {
-        const states = await api.checkToolDrift(preset.Tool)
-        applyDriftPreset.value = preset
-        applyDriftStates.value = states
-        applyDriftOpen.value = true
-      } catch (driftError: any) {
-        toast.push(driftError?.message || String(driftError), 'error')
-      } finally {
-        applyDriftLoading.value = false
-      }
-    } else {
-      toast.push(message, 'error')
-    }
+    toast.push(e?.message || String(e), 'error')
   } finally {
     mutationBusy.value = false
   }
@@ -212,108 +187,12 @@ async function deletePreset(preset: toolconfig.Preset) {
   }
 }
 
-async function loadImportCandidates(preserveDrafts: boolean) {
-  const generation = importGeneration.value
-  const previous = preserveDrafts
-    ? new Map(importRows.value.map((row) => [row.candidate.ProviderID, { name: row.name, selected: row.selected }]))
-    : new Map<string, { name: string; selected: boolean }>()
-  importLoading.value = true
-  importError.value = ''
-  try {
-    const candidates = await api.listImportCandidates(importTool.value)
-    if (generation !== importGeneration.value) return
-    importRows.value = candidates.map((candidate) => {
-      const draft = previous.get(candidate.ProviderID)
-      const preselected = candidate.ProviderID === importPreselectProviderID.value
-      return {
-        candidate,
-        name: draft ? draft.name : (preselected && importPrefillName.value ? importPrefillName.value : candidate.SuggestedName),
-        selected: !candidate.AlreadyImported && (draft ? draft.selected : preselected),
-      }
-    })
-  } catch (e: any) {
-    if (generation !== importGeneration.value) return
-    importError.value = e?.message || String(e)
-    toast.push(importError.value, 'error')
-    if (!preserveDrafts) importOpen.value = false
-  } finally {
-    if (generation === importGeneration.value) importLoading.value = false
-  }
-}
-
-async function openImport(tool: ToolName, providerID = '', name = '') {
-  importTool.value = tool
-  importPreselectProviderID.value = providerID
-  importPrefillName.value = name
-  importRows.value = []
-  importError.value = ''
-  importOpen.value = true
-  await loadImportCandidates(false)
-}
-
-function closeImport() {
-  importGeneration.value++
-  importOpen.value = false
-  importRows.value = []
-  importError.value = ''
-}
-
-async function continueApplyAfterDrift() {
-  const preset = applyDriftPreset.value
-  applyDriftOpen.value = false
-  if (preset) await applyPreset(preset, true)
-}
-
-function importDriftedConfig() {
-  const preset = applyDriftPreset.value
-  if (!preset) return
-  const current = activePreset(statusFor(preset.Tool as ToolName), preset.Tool as ToolName)
-  applyDriftOpen.value = false
-  openImport(
-    preset.Tool as ToolName,
-    current?.ProviderID || preset.ProviderID || '',
-    t('toolAccess.import.suggestedName', { tool: toolLabel(preset.Tool) })
-  )
-}
-
-async function importPreset() {
-  if (importing.value || selectedImportCount.value === 0) return
-  const selectedRows = importRows.value.filter((row) => row.selected && !row.candidate.AlreadyImported)
-  const invalidRow = selectedRows.find((row) => !row.name.trim())
-  if (invalidRow) {
-    toast.push(t('toolAccess.import.nameRequired', { provider: invalidRow.candidate.ProviderID }), 'error')
-    return
-  }
-  importing.value = true
-  const failures: Array<{ providerID: string; error: string }> = []
-  try {
-    for (const row of selectedRows) {
-      try {
-        await api.importToolPreset(importTool.value, row.candidate.ProviderID, row.name.trim())
-      } catch (e: any) {
-        failures.push({ providerID: row.candidate.ProviderID, error: e?.message || String(e) })
-      }
-    }
-    if (!failures.length) {
-      closeImport()
-      toast.push(t('toolAccess.toast.presetImported'), 'success')
-      await refresh()
-    } else {
-      const first = failures[0]
-      toast.push(t('toolAccess.import.partialFailure', { count: failures.length, provider: first.providerID, error: first.error }), 'error')
-      await loadImportCandidates(true)
-    }
-  } finally {
-    importing.value = false
-  }
-}
-
-async function openExport(preset: toolconfig.Preset) {
+async function openExport(view: service.ToolProviderView) {
   exportOpen.value = true
   exportLoading.value = true
   exportSnippet.value = null
   try {
-    exportSnippet.value = await api.exportToolSnippet(preset.ID)
+    exportSnippet.value = await api.exportToolSnippet(view.Preset.ID)
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
     exportOpen.value = false
@@ -340,13 +219,15 @@ async function copySnippet() {
   }
 }
 
-async function openBackups(tool: ToolName) {
+async function openBackups(tool: ToolName, resource = '') {
   backupsTool.value = tool
+  backupsResource.value = resource
   backupsOpen.value = true
   backupsLoading.value = true
   backups.value = []
   try {
-    backups.value = await api.listToolBackups(tool)
+    const rows = await api.listToolBackups(tool)
+    backups.value = resource ? rows.filter((backup) => backup.Resource === resource) : rows
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
   } finally {
@@ -370,7 +251,7 @@ async function restoreBackup(backup: service.ToolBackupInfo) {
   try {
     await api.restoreToolBackup(backupsTool.value, backup.Resource, backup.Path)
     toast.push(t('toolAccess.toast.backupRestored'), 'success')
-    await openBackups(backupsTool.value)
+    await openBackups(backupsTool.value, backupsResource.value)
     await refresh()
   } catch (e: any) {
     toast.push(e?.message || String(e), 'error')
@@ -413,22 +294,18 @@ onMounted(() => {
                 </div>
               </div>
             </div>
-            <span v-if="statusFor(card.tool)?.Drifted" class="badge warn drift-button" role="button" tabindex="0" @click="openDrift(card.tool)" @keydown.enter="openDrift(card.tool)">{{ t('toolAccess.status.drifted') }}</span>
           </div>
 
           <div class="tool-path-block">
             <div class="tool-path-label">{{ t('toolAccess.status.configPath') }}</div>
             <div class="text-mono tool-path" :title="pathText(statusFor(card.tool)?.ConfigPath || '')">{{ pathText(statusFor(card.tool)?.ConfigPath || '') }}</div>
-            <div v-for="(path, key) in (statusFor(card.tool)?.ExtraPaths || {})" v-show="path" :key="key" class="tool-extra-path">
-              <span>{{ extraPathLabel(key) }}</span><span class="text-mono" :title="path">{{ path }}</span>
-            </div>
+            <template v-for="(path, key) in (statusFor(card.tool)?.ExtraPaths || {})" :key="key">
+              <div v-if="path && !(card.tool === 'opencode' && key === 'omo_slim_config')" class="tool-extra-path">
+                <span>{{ extraPathLabel(key) }}</span><span class="text-mono" :title="path">{{ path }}</span>
+              </div>
+            </template>
           </div>
 
-          <div class="row-between tool-active-line">
-            <span class="text-muted">{{ t('toolAccess.status.activePreset') }}</span>
-            <span v-if="activePreset(statusFor(card.tool), card.tool)" class="badge info">{{ activePreset(statusFor(card.tool), card.tool)?.Name }}</span>
-            <span v-else class="text-muted">{{ t('toolAccess.status.unconfigured') }}</span>
-          </div>
           <div v-if="card.tool === 'opencode'" class="row-between tool-live-line">
             <span class="text-muted">{{ t('toolAccess.status.currentLive') }}</span>
             <span class="text-mono" :class="{ 'text-muted': !opencodeLive?.Model }">{{ opencodeLive?.Model || t('toolAccess.status.modelUnset') }}</span>
@@ -437,114 +314,51 @@ onMounted(() => {
           <div class="h-divider tool-divider"></div>
           <div class="row-between tool-section-heading">
             <div><div class="section-title" style="font-size: 15px;">{{ t('toolAccess.presets.title') }}</div><div class="section-sub">{{ t('toolAccess.presets.count', { count: presetsFor(card.tool).length }) }}</div></div>
-            <button class="btn btn-secondary" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button>
+            <div class="row tool-heading-actions"><button v-if="card.tool === 'opencode'" class="btn btn-primary" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-secondary" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
           </div>
 
           <div v-if="!presetsFor(card.tool).length" class="tool-empty">{{ t('toolAccess.presets.empty') }}</div>
           <div v-else class="tool-preset-list">
-            <div v-for="preset in presetsFor(card.tool)" :key="preset.ID" class="tool-preset-row" :class="{ active: preset.ID === statusFor(card.tool)?.ActivePresetID }">
+            <div v-for="view in presetsFor(card.tool)" :key="view.InDB ? view.Preset.ID : 'file-' + view.Preset.ProviderID" class="tool-preset-row" :class="{ active: view.Enabled }">
               <div class="tool-preset-main">
-                <div class="row" style="gap: 6px; flex-wrap: wrap;"><strong>{{ preset.Name }}</strong><span v-if="preset.ID === statusFor(card.tool)?.ActivePresetID" class="badge success">{{ t('toolAccess.presets.active') }}</span><span class="badge" :class="preset.Kind === 'autoapi' ? 'info' : ''">{{ preset.Kind === 'autoapi' ? t('toolAccess.presets.autoapi') : t('toolAccess.presets.direct') }}</span></div>
-                <div class="tool-preset-meta"><span>{{ preset.Kind === 'autoapi' ? t('toolAccess.presets.relay') : preset.BaseURL }}</span><span>·</span><span>{{ t('toolAccess.presets.models', { count: preset.Models?.length || 0 }) }}</span><span v-if="preset.APIKeyEnc" class="key-hint">· {{ t('toolAccess.presets.storedKey') }}</span></div>
+                <div class="row" style="gap: 6px; flex-wrap: wrap;"><strong>{{ view.Preset.Name }}</strong><span v-if="view.Enabled" class="badge success">{{ t('toolAccess.presets.enabled') }}</span><span v-else class="badge">{{ t('toolAccess.presets.disabled') }}</span><span class="badge" :class="view.Preset.Kind === 'autoapi' ? 'info' : ''">{{ view.Preset.Kind === 'autoapi' ? t('toolAccess.presets.autoapi') : t('toolAccess.presets.direct') }}</span></div>
+                <div class="tool-preset-meta"><template v-if="card.tool === 'opencode' && view.Preset.Kind === 'direct' && view.Preset.Vendor"><span>{{ t('toolAccess.vendors.' + view.Preset.Vendor) }}</span><span>·</span></template><span>{{ view.Preset.Kind === 'autoapi' ? t('toolAccess.presets.relay') : view.Preset.BaseURL }}</span><span>·</span><span>{{ t('toolAccess.presets.models', { count: view.Preset.Models?.length || 0 }) }}</span><span v-if="view.Preset.APIKeyEnc" class="key-hint">· {{ t('toolAccess.presets.storedKey') }}</span></div>
               </div>
-              <div class="row tool-preset-actions">
-                <button class="btn btn-primary" :disabled="mutationBusy || !statusFor(card.tool)?.Installed" :title="!statusFor(card.tool)?.Installed ? t('toolAccess.presets.installHint') : ''" @click="applyPreset(preset)">{{ t('toolAccess.presets.apply') }}</button>
-                <button class="btn btn-icon" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openPreset(card.tool, preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
-                <button class="btn btn-icon" :title="t('toolAccess.presets.export')" :aria-label="t('toolAccess.presets.export')" @click="openExport(preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg></button>
-                <button class="btn btn-icon danger-icon" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deletePreset(preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+              <div v-if="card.tool !== 'opencode'" class="row tool-preset-actions">
+                <button v-if="view.Enabled" class="btn btn-secondary" style="padding: 4px 9px; font-size: 11px;" @click="disableProvider(card.tool, view)">{{ t('toolAccess.presets.disable') }}</button>
+                <button v-else class="btn btn-primary" style="padding: 4px 9px; font-size: 11px;" :disabled="mutationBusy || !statusFor(card.tool)?.Installed" :title="!statusFor(card.tool)?.Installed ? t('toolAccess.presets.installHint') : ''" @click="enableProvider(view)">{{ t('toolAccess.presets.enable') }}</button>
+                <button class="btn btn-icon" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+                <button v-if="view.InDB" class="btn btn-icon" :title="t('toolAccess.presets.export')" :aria-label="t('toolAccess.presets.export')" @click="openExport(view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg></button>
+                <button v-if="!view.Enabled" class="btn btn-icon danger-icon" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deletePreset(view.Preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
               </div>
             </div>
           </div>
 
-          <div v-if="card.tool === 'opencode'" class="omo-card-block">
-            <div class="row-between omo-card-heading">
+          <div v-if="card.tool === 'opencode'" class="omo-slim-card-block">
+            <div class="row-between omo-slim-card-heading">
               <div>
-                <div class="omo-card-label">OMO</div>
-                <div v-if="opencodeLive?.OmoConfigured" class="omo-card-summary">{{ t('toolAccess.omo.activeSummary', { preset: opencodeLive.OmoActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoAgentCount, disabled: opencodeLive.OmoDisabledCount }) }}</div>
-                <div v-else class="omo-card-summary muted">{{ t('toolAccess.omo.notConfigured') }}</div>
+                <div class="omo-slim-card-label">OMO Slim</div>
+                <div v-if="opencodeLive?.OmoSlimConfigured" class="omo-slim-card-summary">{{ t('toolAccess.omoSlim.activeSummary', { preset: opencodeLive.OmoSlimActivePreset || t('toolAccess.status.unconfigured'), agents: opencodeLive.OmoSlimAgentCount, disabled: opencodeLive.OmoSlimDisabledCount }) }}</div>
+                <div v-else class="omo-slim-card-summary muted">{{ t('toolAccess.omoSlim.notConfigured') }}</div>
               </div>
-              <button v-if="opencodeLive?.OmoConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omo.edit') }}</button>
+              <div class="row omo-slim-card-actions"><button v-if="opencodeLive?.OmoSlimConfigured" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" @click="omoSlimOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>{{ t('toolAccess.omoSlim.edit') }}</button><button class="btn btn-ghost" style="padding: 5px 8px; font-size: 11.5px;" @click="openBackups('opencode', 'opencode-omo')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3"/></svg>{{ t('toolAccess.omoSlim.backups') }}</button></div>
             </div>
+            <div class="text-mono omo-slim-card-path" :title="statusFor('opencode')?.ExtraPaths?.omo_slim_config || ''">{{ pathText(statusFor('opencode')?.ExtraPaths?.omo_slim_config || '') }}</div>
           </div>
 
           <div class="row tool-card-actions">
-            <button class="btn btn-ghost" style="padding-left: 0;" @click="openImport(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>{{ t('toolAccess.presets.import') }}</button>
             <button class="btn btn-ghost" @click="openBackups(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button>
-            <button class="btn btn-ghost tool-drift-link" @click="openDrift(card.tool)">{{ t('toolAccess.status.checkDrift') }}</button>
           </div>
         </article>
       </section>
     </div>
   </div>
 
-  <ToolPresetModal :open="presetModalOpen" :tool="presetModalTool" :preset="editingPreset" :api-keys="apiKeys" :model-rules="modelRules" :supporting-loading="supportingLoading" @close="closePresetModal" @saved="closePresetModal(); refresh()" />
-  <OmoModal :open="omoOpen" @close="omoOpen = false" @applied="refresh" />
+  <ToolPresetModal :open="presetModalOpen" :tool="presetModalTool" :preset="editingPreset" :enabled="editingEnabled" :api-keys="apiKeys" :model-rules="modelRules" :supporting-loading="supportingLoading" @close="closePresetModal" @saved="closePresetModal(); refresh()" />
+  <OpencodeWorkbenchModal :open="opencodeWorkbenchOpen" :initial-provider-i-d="opencodeWorkbenchProviderID" @close="closeOpencodeWorkbench" @changed="refresh" />
+  <OmoSlimModal :open="omoSlimOpen" @close="omoSlimOpen = false" @applied="refresh" />
 
   <Teleport to="body">
-    <div v-if="applyDriftOpen" class="modal-overlay" @click.self="applyDriftOpen = false">
-      <div class="modal-card wide">
-        <div class="row-between"><div><div class="modal-title">{{ t('toolAccess.drift.confirmTitle') }}</div><div class="section-sub">{{ t('toolAccess.drift.confirmMessage') }}</div></div><button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="applyDriftOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-        <div v-if="applyDriftLoading" class="tool-page-state">{{ t('toolAccess.drift.loading') }}</div>
-        <div v-else class="drift-list"><div v-for="state in applyDriftStates" :key="state.Resource" class="drift-row"><div class="row"><span class="dot" :class="state.Missing ? 'red' : state.Drifted ? 'amber' : 'green'"/><strong>{{ state.Resource }}</strong><span class="badge" :class="state.Missing || state.Drifted ? 'warn' : 'success'">{{ state.Missing ? t('toolAccess.drift.missing') : state.Drifted ? t('toolAccess.drift.changed') : t('toolAccess.drift.unchanged') }}</span></div><div class="text-mono drift-path">{{ state.Path }}</div></div></div>
-        <div class="row drift-choice-actions"><button class="btn btn-secondary" @click="applyDriftOpen = false">{{ t('common.cancel') }}</button><button class="btn btn-secondary" @click="importDriftedConfig">{{ t('toolAccess.drift.importBackfill') }}</button><button class="btn btn-danger" @click="continueApplyAfterDrift">{{ t('toolAccess.drift.applyAnyway') }}</button></div>
-      </div>
-    </div>
-
-    <div v-if="driftOpen" class="modal-overlay" @click.self="driftOpen = false">
-      <div class="modal-card wide">
-        <div class="row-between"><div><div class="modal-title">{{ t('toolAccess.drift.title', { tool: toolLabel(driftTool) }) }}</div><div class="section-sub">{{ t('toolAccess.drift.subtitle') }}</div></div><button class="btn btn-icon" @click="driftOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-        <div v-if="driftLoading" class="tool-page-state">{{ t('toolAccess.drift.loading') }}</div>
-        <div v-else-if="!driftStates.length" class="tool-page-state">{{ t('toolAccess.drift.none') }}</div>
-        <div v-else class="drift-list"><div v-for="state in driftStates" :key="state.Resource" class="drift-row"><div class="row"><span class="dot" :class="state.Missing ? 'red' : state.Drifted ? 'amber' : 'green'"/><strong>{{ state.Resource }}</strong><span class="badge" :class="state.Missing || state.Drifted ? 'warn' : 'success'">{{ state.Missing ? t('toolAccess.drift.missing') : state.Drifted ? t('toolAccess.drift.changed') : t('toolAccess.drift.unchanged') }}</span></div><div class="text-mono drift-path">{{ state.Path }}</div></div></div>
-        <div class="row" style="justify-content: flex-end; margin-top: 16px;"><button class="btn btn-primary" @click="driftOpen = false">{{ t('common.close') }}</button></div>
-      </div>
-    </div>
-
-    <div v-if="importOpen" class="modal-overlay" @click.self="closeImport">
-      <div class="modal-card wide modal-card-scroll import-modal">
-        <div class="row-between import-modal-heading">
-          <div>
-            <div class="modal-title">{{ t('toolAccess.import.title', { tool: toolLabel(importTool) }) }}</div>
-            <div class="section-sub">{{ t('toolAccess.import.subtitle') }}</div>
-          </div>
-          <button class="btn btn-icon" :title="t('common.close')" :aria-label="t('common.close')" @click="closeImport">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-        </div>
-
-        <div v-if="importLoading" class="tool-page-state import-state">{{ t('toolAccess.import.loading') }}</div>
-        <div v-if="!importLoading && importError" class="tool-inline-error import-inline-error" role="alert"><span>{{ importError }}</span><button class="btn btn-secondary" @click="loadImportCandidates(true)">{{ t('toolAccess.retry') }}</button></div>
-        <div v-if="!importLoading && !importError && !importRows.length" class="tool-page-state import-state">{{ t('toolAccess.import.empty') }}</div>
-        <div v-if="!importLoading && importRows.length" class="import-candidate-list">
-          <div v-for="row in importRows" :key="row.candidate.ProviderID" class="list-row import-candidate-row" :class="{ 'import-candidate-disabled': row.candidate.AlreadyImported }">
-            <input v-model="row.selected" type="checkbox" :disabled="row.candidate.AlreadyImported || importing" :aria-label="row.candidate.ProviderID">
-            <div class="import-candidate-main">
-              <div class="row import-candidate-title">
-                <span class="text-mono import-provider-id">{{ row.candidate.ProviderID }}</span>
-                <span class="text-mono import-base-url" :title="row.candidate.BaseURL">{{ row.candidate.BaseURL || t('toolAccess.status.notFound') }}</span>
-              </div>
-              <div class="row import-candidate-badges">
-                <span class="badge" :class="row.candidate.HasKey ? 'success' : ''">{{ row.candidate.HasKey ? t('toolAccess.import.hasKey') : t('toolAccess.import.noKey') }}</span>
-                <span class="badge info">{{ t('toolAccess.import.models', { count: row.candidate.Models?.length || 0 }) }}</span>
-                <span v-if="row.candidate.AlreadyImported" class="badge">{{ t('toolAccess.import.alreadyImported') }}</span>
-              </div>
-            </div>
-            <div class="import-name-field">
-              <label class="field-label">{{ t('toolAccess.import.nameLabel') }}</label>
-              <input v-model="row.name" class="input" :disabled="row.candidate.AlreadyImported || importing" :placeholder="t('toolAccess.import.namePlaceholder')">
-            </div>
-          </div>
-        </div>
-
-        <div class="row import-modal-footer">
-          <span class="text-muted import-selected-count">{{ t('toolAccess.import.selectedCount', { count: selectedImportCount }) }}</span>
-          <span class="spacer"></span>
-          <button class="btn btn-secondary" :disabled="importing" @click="closeImport">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" :disabled="importing || selectedImportCount === 0" @click="importPreset">{{ importing ? t('common.processing') : t('toolAccess.import.confirm', { count: selectedImportCount }) }}</button>
-        </div>
-      </div>
-    </div>
-
     <div v-if="exportOpen" class="modal-overlay" @click.self="exportOpen = false">
       <div class="modal-card wide modal-card-scroll"><div class="row-between"><div class="modal-title">{{ t('toolAccess.export.title') }}</div><button class="btn btn-icon" @click="exportOpen = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div v-if="exportLoading" class="tool-page-state">{{ t('toolAccess.export.loading') }}</div><template v-else-if="exportSnippet"><div class="export-meta"><div><span>{{ t('toolAccess.export.target') }}</span><strong class="text-mono">{{ exportSnippet.TargetPath }}</strong></div><div><span>{{ t('toolAccess.export.format') }}</span><strong>{{ exportSnippet.Format }}</strong></div><div v-if="exportSnippet.Notes"><span>{{ t('toolAccess.export.notes') }}</span><strong>{{ exportSnippet.Notes }}</strong></div></div><div class="row-between export-code-heading"><span class="field-label">{{ t('toolAccess.export.content') }}</span><button class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px;" @click="copySnippet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>{{ t('common.copy') }}</button></div><pre class="export-code">{{ visibleSnippet }}</pre></template></div>
     </div>
@@ -556,9 +370,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.tool-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .tool-card { padding: 16px; min-width: 0; }
-.tool-card-opencode { grid-column: span 2; }
+.tool-card-opencode { grid-column: 1 / -1; }
 .tool-card-heading { align-items: flex-start; margin-bottom: 14px; }
 .tool-icon { color: white; background: var(--graphite); text-transform: uppercase; }
 .tool-icon.opencode { background: var(--accent); }
@@ -567,16 +381,15 @@ onMounted(() => {
 .tool-card-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; }
 .tool-status-line { gap: 9px; margin-top: 4px; flex-wrap: wrap; }
 .status-chip { gap: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.drift-button { cursor: pointer; }
 .tool-path-block { padding: 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg) 82%, transparent); margin-bottom: 12px; }
 .tool-path-label { color: var(--muted); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
 .tool-path, .tool-extra-path span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .tool-extra-path { display: flex; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 10.5px; min-width: 0; }
 .tool-extra-path span:last-child { flex: 1; min-width: 0; }
-.tool-active-line { font-size: 12px; min-height: 26px; }
 .tool-live-line { min-height: 24px; font-size: 12px; }
 .tool-divider { margin: 12px 0; }
 .tool-section-heading { align-items: flex-start; margin-bottom: 9px; }
+.tool-heading-actions { gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
 .tool-empty, .tool-page-state { padding: 18px 8px; text-align: center; color: var(--muted); font-size: 12px; }
 .tool-preset-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .tool-preset-row { display: flex; gap: 8px; align-items: center; padding: 9px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
@@ -592,18 +405,14 @@ onMounted(() => {
 .danger-icon:hover { color: var(--negative); }
 .tool-card-actions { flex-wrap: wrap; gap: 2px 10px; margin-top: 10px; }
 .tool-card-actions .btn-ghost { font-size: 11.5px; }
-.tool-drift-link { margin-left: auto; }
-.omo-card-block { margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
-.omo-card-heading { align-items: center; gap: 12px; }
-.omo-card-label { font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
-.omo-card-summary { margin-top: 3px; color: var(--muted); font-size: 11px; }
-.omo-card-summary.muted { color: var(--muted); }
+.omo-slim-card-block { margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
+.omo-slim-card-heading { align-items: center; gap: 12px; }
+.omo-slim-card-actions { flex: 0 0 auto; gap: 4px; }
+.omo-slim-card-path { margin-top: 9px; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.omo-slim-card-label { font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.omo-slim-card-summary { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.omo-slim-card-summary.muted { color: var(--muted); }
 .tool-page-error { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 40px 0; color: var(--negative); font-size: 13px; }
-.drift-list { margin-top: 18px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-.drift-row { padding: 11px 12px; border-bottom: 1px solid var(--border); }
-.drift-row:last-child { border-bottom: none; }
-.drift-row .row { gap: 7px; font-size: 12px; }
-.drift-path { color: var(--muted); font-size: 10.5px; margin: 5px 0 0 14px; overflow-wrap: anywhere; }
 .export-meta { display: grid; gap: 8px; margin: 16px 0; padding: 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg) 82%, transparent); font-size: 12px; }
 .export-meta > div { display: flex; gap: 10px; }
 .export-meta span { color: var(--muted); min-width: 52px; }
@@ -612,28 +421,5 @@ onMounted(() => {
 .export-code { max-height: 400px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #1d1d1f; color: #f5f5f7; font: 11.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .backups-table { min-width: 640px; }
 .backup-path { max-width: 300px; overflow-wrap: anywhere; font-size: 11px; }
-.import-modal { max-width: 860px; }
-.import-modal-heading { align-items: flex-start; margin-bottom: 16px; }
-.import-state { min-height: 170px; display: flex; align-items: center; justify-content: center; }
-.import-candidate-list { max-height: 470px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.import-candidate-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(190px, .62fr); align-items: start; gap: 10px; padding: 12px; }
-.import-candidate-row > input { margin-top: 7px; accent-color: var(--accent); }
-.import-candidate-row:last-child { border-bottom: none; }
-.import-candidate-disabled { opacity: .52; background: color-mix(in srgb, var(--bg) 45%, transparent); }
-.import-candidate-main { min-width: 0; }
-.import-candidate-title { min-width: 0; gap: 8px; }
-.import-provider-id { flex: 0 0 auto; font-size: 12px; font-weight: 600; }
-.import-base-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10.5px; }
-.import-candidate-badges { flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-.import-name-field { min-width: 0; }
-.import-name-field .field-label { margin-bottom: 5px; }
-.import-name-field .input { min-height: 32px; font-size: 12px; }
-.import-modal-footer { gap: 8px; margin-top: 16px; }
-.import-selected-count { font-size: 12px; }
-.import-inline-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; padding: 9px 10px; border-radius: var(--radius-sm); background: rgba(217, 48, 37, 0.08); color: var(--negative); font-size: 12px; }
-.import-inline-error .btn { flex: 0 0 auto; color: var(--fg); }
-.drift-choice-actions { justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
-@media (max-width: 1050px) { .tool-grid { grid-template-columns: 1fr 1fr; } .tool-card-opencode { grid-column: span 1; } }
-@media (max-width: 700px) { .tool-grid { grid-template-columns: 1fr; } .tool-page-error { flex-direction: column; } }
-@media (max-width: 680px) { .import-candidate-row { grid-template-columns: 20px minmax(0, 1fr); } .import-name-field { grid-column: 2; } }
+@media (max-width: 700px) { .tool-grid { grid-template-columns: 1fr; } .tool-card-opencode { grid-column: 1 / -1; } .tool-page-error { flex-direction: column; } }
 </style>

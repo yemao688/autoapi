@@ -81,7 +81,71 @@ func (ClaudeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error)
 	}
 
 	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
-	change.After = doc.Pack()
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
+	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
+}
+
+func (ClaudeAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) {
+	if providerID != "anthropic" {
+		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	homeDir = absoluteHomeDir(homeDir)
+	configPath := DefaultConfigPath(ToolClaude, homeDir)
+	resolvedPath, before, err := snapshotFile(configPath, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if before == nil {
+		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	doc, err := parseJSONBytes(before)
+	if err != nil {
+		return nil, fmt.Errorf("parse Claude settings: %w", err)
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("parse Claude settings: %w", err)
+	}
+	if err := requireUniqueKeys(root, "env", "model"); err != nil {
+		return nil, err
+	}
+	env, envPresent, err := requireObjectMember(root, "env")
+	if err != nil {
+		return nil, err
+	}
+	managedPresent := objectMemberValue(root, "model") != nil
+	if envPresent {
+		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+			if objectMemberValue(env, key) != nil {
+				managedPresent = true
+				break
+			}
+		}
+	}
+	if !managedPresent {
+		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	if envPresent {
+		if err := requireUniqueKeys(env, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"); err != nil {
+			return nil, err
+		}
+		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+			if err := removeObjectMember(env, key); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := removeObjectMember(root, "model"); err != nil {
+		return nil, err
+	}
+	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
+	change.After, err = packFormatted(doc)
+	if err != nil {
+		return nil, err
+	}
 	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
 }
 
@@ -141,6 +205,7 @@ func (ClaudeAdapter) ReadManagedRaw(homeDir, providerID string) (RawManagedSecti
 	return RawManagedSection{
 		Present:    true,
 		ProviderID: providerID,
+		Name:       "Anthropic",
 		BaseURL:    objectString(env, "ANTHROPIC_BASE_URL"),
 		APIKey:     objectString(env, "ANTHROPIC_AUTH_TOKEN"),
 		Model:      model,
@@ -181,7 +246,16 @@ func loadClaudeManaged(homeDir, providerID string) (*hujson.Object, *hujson.Obje
 			return nil, nil, false, err
 		}
 	}
-	if !envPresent && objectValue(root, "model") == nil {
+	managedPresent := objectValue(root, "model") != nil
+	if envPresent {
+		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+			if objectMemberValue(env, key) != nil {
+				managedPresent = true
+				break
+			}
+		}
+	}
+	if !managedPresent {
 		return root, nil, false, nil
 	}
 	return root, env, true, nil

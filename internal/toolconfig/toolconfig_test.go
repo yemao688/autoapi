@@ -91,11 +91,11 @@ func TestDetectMissingAndPresent(t *testing.T) {
 	writeFile(t, wantClaude, `{}`, 0o644)
 	writeFile(t, wantCodex, ``, 0o644)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"), `{}`, 0o600)
-	omoJSON := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.json")
-	omoJSONC := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.jsonc")
-	writeFile(t, omoJSON, `{}`, 0o644)
-	writeFile(t, omoJSONC, `{}`, 0o644)
-	if status := openCode.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantOpenCode || status.ExtraPaths["omo_config"] != omoJSONC {
+	omoSlimJSON := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.json")
+	omoSlimJSONC := filepath.Join(filepath.Dir(wantOpenCode), "oh-my-opencode-slim.jsonc")
+	writeFile(t, omoSlimJSON, `{}`, 0o644)
+	writeFile(t, omoSlimJSONC, `{}`, 0o644)
+	if status := openCode.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantOpenCode || status.ExtraPaths["omo_slim_config"] != omoSlimJSONC {
 		t.Fatalf("present opencode status: %+v", status)
 	}
 	if status := claude.Detect(home); !status.ConfigExists || !status.Installed || status.ConfigPath != wantClaude {
@@ -277,7 +277,7 @@ base_url = "https://other.example"
 		t.Fatalf("unexpected Codex top-level values: %#v", configValues)
 	}
 	authAfter := readFile(t, authPath)
-	if !strings.Contains(string(authAfter), `"OTHER_KEY": "keep"`) || !strings.Contains(string(authAfter), "secret-key") {
+	if !strings.Contains(string(authAfter), `"OTHER_KEY"`) || !strings.Contains(string(authAfter), "secret-key") {
 		t.Fatalf("Codex auth was not patched safely: %s", authAfter)
 	}
 	if mode := fileMode(t, authPath); mode != 0o600 {
@@ -516,17 +516,17 @@ func TestReadManagedRawIsPlaintextButManagedIsMasked(t *testing.T) {
 	}
 }
 
-func TestListOmoPresetsListsSortedNames(t *testing.T) {
-	home, _ := writeOmoFixture(t)
-	presets, err := ListOmoPresets(home)
+func TestListOmoSlimPresetsListsSortedNames(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	presets, err := ListOmoSlimPresets(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(presets) != 2 || presets[0] != "balanced" || presets[1] != "fast" {
-		t.Fatalf("ListOmoPresets = %#v", presets)
+		t.Fatalf("ListOmoSlimPresets = %#v", presets)
 	}
-	if got, err := ListOmoPresets(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing OMO config: got %#v, err=%v; want nil, nil", got, err)
+	if got, err := ListOmoSlimPresets(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing OMO Slim config: got %#v, err=%v; want nil, nil", got, err)
 	}
 }
 
@@ -611,16 +611,16 @@ func TestReadModelPointerReadsTopLevelModel(t *testing.T) {
 	}
 }
 
-func TestListOmoPresetAgentsProjectsEveryPreset(t *testing.T) {
-	home, _ := writeOmoFixture(t)
-	projection, err := ListOmoPresetAgents(home)
+func TestListOmoSlimPresetAgentsProjectsEveryPreset(t *testing.T) {
+	home, _ := writeOmoSlimFixture(t)
+	projection, err := ListOmoSlimPresetAgents(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(projection) != 2 {
-		t.Fatalf("ListOmoPresetAgents = %#v", projection)
+		t.Fatalf("ListOmoSlimPresetAgents = %#v", projection)
 	}
-	if got := projection["balanced"]["orchestrator"]; !reflect.DeepEqual(got, OmoAgent{
+	if got := projection["balanced"]["orchestrator"]; !reflect.DeepEqual(got, OmoSlimAgent{
 		Model:       "autoapi-compatible/old-model",
 		Variant:     "slow",
 		DisplayName: "chief",
@@ -629,14 +629,14 @@ func TestListOmoPresetAgentsProjectsEveryPreset(t *testing.T) {
 	}) {
 		t.Fatalf("balanced orchestrator = %+v", got)
 	}
-	if got := projection["fast"]["oracle"]; !reflect.DeepEqual(got, OmoAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
+	if got := projection["fast"]["oracle"]; !reflect.DeepEqual(got, OmoSlimAgent{Model: "autoapi-compatible/oracle-fast", Variant: "quick"}) {
 		t.Fatalf("fast oracle = %+v", got)
 	}
 	if _, ok := projection["balanced"]["custom"]; ok {
 		t.Fatal("custom agents leaked into preset projection")
 	}
-	if got, err := ListOmoPresetAgents(t.TempDir()); err != nil || got != nil {
-		t.Fatalf("missing OMO config: got %#v, err=%v; want nil, nil", got, err)
+	if got, err := ListOmoSlimPresetAgents(t.TempDir()); err != nil || got != nil {
+		t.Fatalf("missing OMO Slim config: got %#v, err=%v; want nil, nil", got, err)
 	}
 }
 
@@ -675,7 +675,7 @@ func TestOpenCodeProviderScopedPointerClearing(t *testing.T) {
 		name string
 		want string
 	}{
-		{name: "other provider survives", want: `"model": "other/keep"`},
+		{name: "other provider survives", want: `"model"`},
 		{name: "same provider clears", want: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -689,13 +689,131 @@ func TestOpenCodeProviderScopedPointerClearing(t *testing.T) {
 			preset.Models = nil
 			commitPlan(t, OpenCodeAdapter{}, preset, home)
 			content := string(readFile(t, DefaultConfigPath(ToolOpencode, home)))
-			if test.want != "" && !strings.Contains(content, `"model":"other/keep"`) {
+			if test.want != "" && (!strings.Contains(content, test.want) || !strings.Contains(content, "other/keep")) {
 				t.Fatalf("pointer was unexpectedly changed: %s", content)
 			}
 			if test.want == "" && strings.Contains(content, `"model"`) {
 				t.Fatalf("provider-scoped pointer was not cleared: %s", content)
 			}
 		})
+	}
+}
+
+func TestOpenCodePlanRemovalPreservesOtherContent(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolOpencode, home)
+	writeFile(t, path, `{
+  // keep root comment
+  "provider": {
+    "remove-me": {"name": "Remove", "options": {"baseURL": "https://remove.example"}},
+    // keep provider comment
+    "keep-me": {"name": "Keep", "options": {"baseURL": "https://keep.example"}}
+  },
+  "model": "remove-me/model",
+  "unmanaged": true
+}`, 0o644)
+	changeSet, err := (OpenCodeAdapter{}).PlanRemoval(home, "remove-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	after := string(readFile(t, path))
+	if strings.Contains(after, "remove-me") || strings.Contains(after, `"model"`) {
+		t.Fatalf("removed provider or pointer remains: %s", after)
+	}
+	for _, want := range []string{"keep root comment", "keep provider comment", "keep-me", `"unmanaged": true`} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("removal lost %q: %s", want, after)
+		}
+	}
+	if _, err := (OpenCodeAdapter{}).PlanRemoval(home, "remove-me"); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("absent provider error = %v", err)
+	}
+}
+
+func TestCodexPlanRemovalRemovesConfigAndAuth(t *testing.T) {
+	home := t.TempDir()
+	configPath := DefaultConfigPath(ToolCodex, home)
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	writeFile(t, configPath, `# keep config
+model_provider = "remove-me"
+model = "old-model"
+
+[model_providers.remove-me] # managed
+name = "Remove"
+base_url = "https://remove.example"
+
+[model_providers.keep-me]
+name = "Keep"
+base_url = "https://keep.example"
+`, 0o644)
+	writeFile(t, authPath, `{
+  // keep auth comment
+  "OPENAI_API_KEY": "remove-secret",
+  "OTHER_KEY": "keep"
+}`, 0o644)
+	changeSet, err := (CodexAdapter{}).PlanRemoval(home, "remove-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changeSet.Changes) != 2 || changeSet.Changes[1].Resource != ResCodexAuth {
+		t.Fatalf("unexpected removal changes: %+v", changeSet.Changes)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	configAfter := string(readFile(t, configPath))
+	if strings.Contains(configAfter, "remove-me") || strings.Contains(configAfter, "model_provider =") {
+		t.Fatalf("Codex provider or pointer remains: %s", configAfter)
+	}
+	if !strings.Contains(configAfter, "keep-me") || !strings.Contains(configAfter, "# keep config") {
+		t.Fatalf("Codex unmanaged content was lost: %s", configAfter)
+	}
+	authAfter := string(readFile(t, authPath))
+	if strings.Contains(authAfter, "OPENAI_API_KEY") || !strings.Contains(authAfter, "OTHER_KEY") || !strings.Contains(authAfter, "keep auth comment") {
+		t.Fatalf("Codex auth removal was incorrect: %s", authAfter)
+	}
+	if _, err := (CodexAdapter{}).PlanRemoval(home, "remove-me"); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("absent Codex provider error = %v", err)
+	}
+}
+
+func TestClaudePlanRemovalPreservesUnmanagedSettings(t *testing.T) {
+	home := t.TempDir()
+	path := DefaultConfigPath(ToolClaude, home)
+	writeFile(t, path, `{
+  // keep settings
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://claude.example",
+    "ANTHROPIC_AUTH_TOKEN": "secret",
+    "ANTHROPIC_MODEL": "claude-model",
+    "KEEP_ENV": "yes"
+  },
+  "model": "claude-model",
+  "permissions": {"allow": ["Bash"]}
+}`, 0o644)
+	changeSet, err := (ClaudeAdapter{}).PlanRemoval(home, "anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(changeSet, CommitOpts{BackupRoot: filepath.Join(home, "backups")}); err != nil {
+		t.Fatal(err)
+	}
+	after := string(readFile(t, path))
+	for _, removed := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", `"model"`} {
+		if strings.Contains(after, removed) {
+			t.Fatalf("Claude managed key remains %q: %s", removed, after)
+		}
+	}
+	for _, want := range []string{"keep settings", "KEEP_ENV", "permissions"} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("Claude removal lost %q: %s", want, after)
+		}
+	}
+	if _, err := (ClaudeAdapter{}).PlanRemoval(home, "anthropic"); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("absent Claude provider error = %v", err)
 	}
 }
 
@@ -707,7 +825,7 @@ func TestClaudeNoDefaultLeavesGlobalPointers(t *testing.T) {
 	preset.Models = nil
 	commitPlan(t, ClaudeAdapter{}, preset, home)
 	content := string(readFile(t, path))
-	if !strings.Contains(content, `"model":"global-root"`) || !strings.Contains(content, `"ANTHROPIC_MODEL":"global-env"`) {
+	if !strings.Contains(content, `"model"`) || !strings.Contains(content, "global-root") || !strings.Contains(content, `"ANTHROPIC_MODEL"`) || !strings.Contains(content, "global-env") {
 		t.Fatalf("Claude global pointers changed by no-default preset: %s", content)
 	}
 }

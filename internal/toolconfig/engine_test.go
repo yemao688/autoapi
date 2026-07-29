@@ -16,7 +16,7 @@ func TestCommitMultiFileHappyPathAndPruning(t *testing.T) {
 	writeTestFile(t, secondPath, []byte("second-before"), 0o644)
 
 	first := testFileChange(t, ResOpencodeConfig, firstPath, []byte("first-after"), false)
-	second := testFileChange(t, ResOpencodeOMO, secondPath, []byte("second-after"), false)
+	second := testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second-after"), false)
 	result, err := Commit(&ChangeSet{Tool: ToolOpencode, Changes: []FileChange{first, second}}, CommitOpts{
 		BackupRoot:  backupRoot,
 		KeepBackups: 1,
@@ -38,15 +38,15 @@ func TestCommitMultiFileHappyPathAndPruning(t *testing.T) {
 	}
 
 	first = testFileChange(t, ResOpencodeConfig, firstPath, []byte("first-final"), false)
-	second = testFileChange(t, ResOpencodeOMO, secondPath, []byte("second-final"), false)
+	second = testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second-final"), false)
 	if _, err := Commit(&ChangeSet{Tool: ToolOpencode, Changes: []FileChange{first, second}}, CommitOpts{
 		BackupRoot:  backupRoot,
 		KeepBackups: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assertBackupCount(t, backupRoot, ResOpencodeConfig, 1)
-	assertBackupCount(t, backupRoot, ResOpencodeOMO, 1)
+	assertSourceBackupCount(t, firstPath, 1)
+	assertSourceBackupCount(t, secondPath, 1)
 }
 
 func TestCommitExpectedDriftAbortsWithoutSideEffects(t *testing.T) {
@@ -94,7 +94,7 @@ func TestCommitRollbackRestoresEarlierFile(t *testing.T) {
 	before := []byte("first-before")
 	writeTestFile(t, firstPath, before, 0o644)
 	first := testFileChange(t, ResOpencodeConfig, firstPath, []byte("first-after"), false)
-	second := testFileChange(t, ResOpencodeOMO, secondPath, []byte("second-after"), false)
+	second := testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second-after"), false)
 	setCommitTestHook(t, func(phase string, _ int) {
 		if phase != "after-backups" {
 			return
@@ -127,7 +127,7 @@ func TestCommitRollbackRemovesEarlierCreatedFile(t *testing.T) {
 	firstPath := filepath.Join(dir, "created.json")
 	secondPath := filepath.Join(blocked, "second.json")
 	first := testFileChange(t, ResOpencodeConfig, firstPath, []byte("created"), false)
-	second := testFileChange(t, ResOpencodeOMO, secondPath, []byte("second"), false)
+	second := testFileChange(t, ResOpencodeOmoSlim, secondPath, []byte("second"), false)
 	setCommitTestHook(t, func(phase string, _ int) {
 		if phase != "after-backups" {
 			return
@@ -224,14 +224,24 @@ func TestCommitRevalidationUsesSnapshotBackup(t *testing.T) {
 		t.Fatalf("expected revalidation conflict, got %v", err)
 	}
 	assertFileBytes(t, path, []byte("changed-after-validation"))
-	entries, err := os.ReadDir(filepath.Join(backupRoot, filepath.FromSlash(string(ResOpencodeConfig))))
+	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected one snapshot backup, got %d", len(entries))
+	backupCount := 0
+	for _, entry := range entries {
+		if IsSourceBackup(path, filepath.Join(filepath.Dir(path), entry.Name())) {
+			backupCount++
+		}
 	}
-	assertFileBytes(t, filepath.Join(backupRoot, filepath.FromSlash(string(ResOpencodeConfig)), entries[0].Name()), before)
+	if backupCount != 1 {
+		t.Fatalf("expected one snapshot backup, got %d", backupCount)
+	}
+	backupPath := filepath.Join(filepath.Dir(path), entries[0].Name())
+	if !IsSourceBackup(path, backupPath) {
+		t.Fatalf("unexpected source backup name: %s", backupPath)
+	}
+	assertFileBytes(t, backupPath, before)
 }
 
 func TestCommitExternalChangeBeforeCommitLeavesNoBackup(t *testing.T) {
@@ -284,7 +294,7 @@ func TestCommitChecksPassAndFailBeforeWrites(t *testing.T) {
 	change := testFileChange(t, ResOpencodeConfig, targetPath, []byte("target-after"), false)
 	if _, err := Commit(&ChangeSet{
 		Changes: []FileChange{change},
-		Checks:  []FileCheck{{Resource: ResOpencodeOMO, Path: checkPath, ExpectedHash: checkHash}},
+		Checks:  []FileCheck{{Resource: ResOpencodeOmoSlim, Path: checkPath, ExpectedHash: checkHash}},
 	}, CommitOpts{BackupRoot: filepath.Join(dir, "backups")}); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +304,7 @@ func TestCommitChecksPassAndFailBeforeWrites(t *testing.T) {
 	failedChange := testFileChange(t, ResOpencodeConfig, targetPath, []byte("must-not-write"), false)
 	_, err = Commit(&ChangeSet{
 		Changes: []FileChange{failedChange},
-		Checks:  []FileCheck{{Resource: ResOpencodeOMO, Path: checkPath, ExpectedHash: "wrong-hash"}},
+		Checks:  []FileCheck{{Resource: ResOpencodeOmoSlim, Path: checkPath, ExpectedHash: "wrong-hash"}},
 	}, CommitOpts{BackupRoot: filepath.Join(dir, "failed-backups")})
 	if !errors.Is(err, ErrDrifted) {
 		t.Fatalf("expected check drift, got %v", err)
@@ -327,24 +337,23 @@ func TestCommitPruneFailureIsBestEffort(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	writeTestFile(t, path, []byte("before"), 0o644)
 	change := testFileChange(t, ResOpencodeConfig, path, []byte("after"), false)
-	backupRoot := filepath.Join(dir, "backups")
 	setCommitTestHook(t, func(phase string, _ int) {
 		if phase != "before-prune" {
 			return
 		}
-		resourceDir := filepath.Join(backupRoot, filepath.FromSlash(string(ResOpencodeConfig)))
-		if err := os.RemoveAll(resourceDir); err != nil {
+		if err := os.Chmod(filepath.Dir(path), 0o000); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(resourceDir, []byte("not a directory"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		t.Cleanup(func() { _ = os.Chmod(filepath.Dir(path), 0o755) })
 	})
 
 	result, err := Commit(&ChangeSet{Changes: []FileChange{change}}, CommitOpts{
-		BackupRoot:  backupRoot,
+		BackupRoot:  filepath.Join(dir, "backups"),
 		KeepBackups: 1,
 	})
+	if chmodErr := os.Chmod(filepath.Dir(path), 0o755); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,14 +417,20 @@ func assertFileBytes(t *testing.T, path string, want []byte) {
 	}
 }
 
-func assertBackupCount(t *testing.T, backupRoot string, resource Resource, want int) {
+func assertSourceBackupCount(t *testing.T, sourcePath string, want int) {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(backupRoot, filepath.FromSlash(string(resource))))
+	entries, err := os.ReadDir(filepath.Dir(sourcePath))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != want {
-		t.Fatalf("backup count for %s = %d, want %d", resource, len(entries), want)
+	count := 0
+	for _, entry := range entries {
+		if IsSourceBackup(sourcePath, filepath.Join(filepath.Dir(sourcePath), entry.Name())) {
+			count++
+		}
+	}
+	if count != want {
+		t.Fatalf("backup count for %s = %d, want %d", sourcePath, count, want)
 	}
 }
 

@@ -142,9 +142,9 @@ export const api = {
     ensureWails()
     return wails.ListToolStatuses() as Promise<toolconfig.ToolStatus[]>
   },
-  listToolPresets: (tool: string): Promise<toolconfig.Preset[]> => {
+  listToolProviders: (tool: string): Promise<service.ToolProviderView[]> => {
     ensureWails()
-    return wails.ListToolPresets(tool) as Promise<toolconfig.Preset[]>
+    return wails.ListToolProviders(tool) as Promise<service.ToolProviderView[]>
   },
   createToolPreset: (preset: toolconfig.Preset, plaintextKey: string): Promise<toolconfig.Preset> => {
     ensureWails()
@@ -158,41 +158,57 @@ export const api = {
     ensureWails()
     return wails.DeleteToolPreset(id) as Promise<void>
   },
-  applyToolPreset: (id: number, allowDrift: boolean): Promise<service.ToolApplyResult> => {
+  enableToolPreset: (id: number): Promise<service.ToolApplyResult> => {
     ensureWails()
-    return wails.ApplyToolPreset(id, allowDrift) as Promise<service.ToolApplyResult>
+    return wails.EnableToolPreset(id) as Promise<service.ToolApplyResult>
+  },
+  disableToolPreset: (tool: string, providerID: string): Promise<service.ToolApplyResult> => {
+    ensureWails()
+    return wails.DisableToolPreset(tool, providerID) as Promise<service.ToolApplyResult>
+  },
+  updateEnabledToolPreset: (preset: toolconfig.Preset, plaintextKey: string): Promise<toolconfig.Preset> => {
+    ensureWails()
+    return wails.UpdateEnabledToolPreset(preset, plaintextKey) as Promise<toolconfig.Preset>
+  },
+  revealToolProviderKey: (tool: string, providerID: string): Promise<string> => {
+    ensureWails()
+    return wails.RevealToolProviderKey(tool, providerID) as Promise<string>
   },
   checkToolDrift: (tool: string): Promise<service.DriftState[]> => {
     ensureWails()
     return wails.CheckToolDrift(tool) as Promise<service.DriftState[]>
   },
-  importToolPreset: (tool: string, providerID: string, name: string): Promise<toolconfig.Preset> => {
-    ensureWails()
-    return wails.ImportToolPreset(tool, providerID, name) as Promise<toolconfig.Preset>
-  },
-  listImportCandidates: (tool: string): Promise<service.ImportCandidate[]> => {
-    ensureWails()
-    return wails.ListImportCandidates(tool) as Promise<service.ImportCandidate[]>
-  },
   exportToolSnippet: (id: number): Promise<toolconfig.Snippet> => {
     ensureWails()
     return wails.ExportToolSnippet(id) as Promise<toolconfig.Snippet>
   },
-  getOmoConfig: (): Promise<service.OmoConfigView> => {
+  getOmoSlimConfig: (): Promise<service.OmoSlimConfigView> => {
     ensureWails()
-    return wails.GetOmoConfig() as Promise<service.OmoConfigView>
+    return wails.GetOmoSlimConfig() as Promise<service.OmoSlimConfigView>
   },
   getOpencodeLiveState: (): Promise<service.OpencodeLiveState> => {
     ensureWails()
     return wails.GetOpencodeLiveState() as Promise<service.OpencodeLiveState>
   },
-  previewToolOmoChange: (change: toolconfig.OmoChange): Promise<service.OmoPreview> => {
+  previewToolOmoSlimChange: (change: toolconfig.OmoSlimChange): Promise<service.OmoSlimPreview> => {
     ensureWails()
-    return wails.PreviewToolOmoChange(change) as Promise<service.OmoPreview>
+    return wails.PreviewToolOmoSlimChange(change) as Promise<service.OmoSlimPreview>
   },
-  applyOmoConfig: (change: toolconfig.OmoChange, allowDrift: boolean): Promise<void> => {
+  applyOmoSlimConfig: (change: toolconfig.OmoSlimChange, allowDrift: boolean): Promise<void> => {
     ensureWails()
-    return wails.ApplyOmoConfig(change, allowDrift) as Promise<void>
+    return wails.ApplyOmoSlimConfig(change, allowDrift) as Promise<void>
+  },
+  getOpencodeGlobalSettings: (): Promise<toolconfig.OpencodeGlobalSettings> => {
+    ensureWails()
+    return wails.GetOpencodeGlobalSettings() as Promise<toolconfig.OpencodeGlobalSettings>
+  },
+  previewOpencodeConfigChange: (plan: service.OpencodeConfigPlan): Promise<service.OmoSlimPreview> => {
+    ensureWails()
+    return wails.PreviewOpencodeConfigChange(plan) as Promise<service.OmoSlimPreview>
+  },
+  applyOpencodeConfigChange: (plan: service.OpencodeConfigPlan, allowDrift: boolean): Promise<void> => {
+    ensureWails()
+    return wails.ApplyOpencodeConfigChange(plan, allowDrift) as Promise<void>
   },
   listToolBackups: (tool: string): Promise<service.ToolBackupInfo[]> => {
     ensureWails()
