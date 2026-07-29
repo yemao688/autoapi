@@ -784,11 +784,11 @@
       "baseURLPlaceholder": "https://api.example.com/v1",
       "vendor": "接口格式",
       "vendorHelp": {
-        "openai-responses": "使用 Responses API（/v1/responses），写入 @ai-sdk/openai",
-        "openai-compatible": "使用 Chat Completions（/v1/chat/completions），写入 @ai-sdk/openai-compatible",
-        "anthropic": "使用 Anthropic Messages API（/v1/messages），写入 @ai-sdk/anthropic",
-        "amazon-bedrock": "写入 @ai-sdk/amazon-bedrock；密钥作为 Bearer 凭证，否则需要 AWS 环境凭证",
-        "google-gemini": "使用 Gemini API，写入 @ai-sdk/google"
+        "openai-responses": "使用 Responses API（/v1/responses），写入 {'@'}ai-sdk/openai",
+        "openai-compatible": "使用 Chat Completions（/v1/chat/completions），写入 {'@'}ai-sdk/openai-compatible",
+        "anthropic": "使用 Anthropic Messages API（/v1/messages），写入 {'@'}ai-sdk/anthropic",
+        "amazon-bedrock": "写入 {'@'}ai-sdk/amazon-bedrock；密钥作为 Bearer 凭证，否则需要 AWS 环境凭证",
+        "google-gemini": "使用 Gemini API，写入 {'@'}ai-sdk/google"
       },
       "providerIDLocked": "启用中的供应商不可修改 ID；如需调整请先禁用",
       "apiKey": "API 密钥",
@@ -890,8 +890,8 @@
       "prompt": "Prompt",
       "promptPlaceholder": "可选的 Agent 提示词",
       "orchestratorPrompt": "Orchestrator Prompt",
-      "orchestratorPromptPlaceholder": "必须以 @agent 名称开头",
-      "orchestratorPromptHelp": "必须以 @{name} 开头。",
+      "orchestratorPromptPlaceholder": "必须以 {'@'}agent 名称开头",
+      "orchestratorPromptHelp": "必须以 {'@'}{name} 开头。",
       "orchestratorPromptWarning": "提示词需要以当前 Agent 名称开头。",
       "deleteAgentTitle": "删除自定义 Agent",
       "deleteAgentMessage": "确定删除「{name}」吗？保存时会移除该 Agent。",
