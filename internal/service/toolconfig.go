@@ -228,6 +228,34 @@ func (s *Service) ListToolProviders(tool string) ([]ToolProviderView, error) {
 		if toolID == toolconfig.ToolOpencode {
 			vendor = toolconfig.NormalizeVendor(raw.Vendor)
 		}
+		var extra map[string]string
+		switch toolID {
+		case toolconfig.ToolClaude:
+			managed, managedErr := adapter.ReadManaged(homeDir, providerID)
+			if managedErr != nil {
+				return nil, managedErr
+			}
+			for _, key := range []string{
+				"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+				"ANTHROPIC_DEFAULT_SONNET_MODEL",
+				"ANTHROPIC_DEFAULT_OPUS_MODEL",
+			} {
+				if value := managed.Fields[key]; value != "" {
+					if extra == nil {
+						extra = map[string]string{}
+					}
+					extra[key] = value
+				}
+			}
+		case toolconfig.ToolCodex:
+			managed, managedErr := adapter.ReadManaged(homeDir, providerID)
+			if managedErr != nil {
+				return nil, managedErr
+			}
+			if value := managed.Fields["wire_api"]; value != "" {
+				extra = map[string]string{"wire_api": value}
+			}
+		}
 		views = append(views, ToolProviderView{
 			Preset: toolconfig.Preset{
 				Tool:       toolID,
@@ -238,6 +266,7 @@ func (s *Service) ListToolProviders(tool string) ([]ToolProviderView, error) {
 				BaseURL:    raw.BaseURL,
 				Models:     raw.Models,
 				APIKeyEnc:  raw.APIKey,
+				Extra:      extra,
 			},
 			Enabled: true,
 			InDB:    false,

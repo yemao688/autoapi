@@ -9,6 +9,7 @@ import { service, toolconfig } from '../../wailsjs/go/models'
 import type { model } from '../../wailsjs/go/models'
 
 type Tool = 'codex' | 'claude'
+type Section = 'provider' | 'common'
 type DraftKey = string
 type ModelRow = { name: string; isDefault: boolean }
 type ProviderDraft = {
@@ -24,6 +25,7 @@ type ProviderDraft = {
   plaintextKey: string
   keyTouched: boolean
   keyRevealed: boolean
+  extra: Record<string, string>
   modelRows: ModelRow[]
 }
 
@@ -46,6 +48,10 @@ const providerBaseline = ref<Record<string, string>>({})
 const apiKeys = ref<model.ApiKey[]>([])
 const modelRules = ref<model.ModelRule[]>([])
 const supportingLoading = ref(false)
+const commonConfig = ref('')
+const commonConfigBaseline = ref('')
+const commonConfigLoading = ref(false)
+const section = ref<Section>('provider')
 const selectedKey = ref<DraftKey | null>(null)
 const pendingDelete = ref<Set<DraftKey>>(new Set())
 const nextNewID = ref(1)
@@ -67,6 +73,22 @@ const providerRows = computed(() => Object.values(drafts.value))
 const selectedDraft = computed(() => selectedKey.value ? drafts.value[selectedKey.value] || null : null)
 const selectedView = computed(() => selectedDraft.value?.view || null)
 const selectedIsPendingDelete = computed(() => !!selectedKey.value && pendingDelete.value.has(selectedKey.value))
+const commonConfigChanged = computed(() => commonConfig.value !== commonConfigBaseline.value)
+const commonConfigValidation = computed(() => {
+  if (!commonConfigChanged.value) return ''
+  if (props.tool === 'codex') return commonConfig.value.trim() ? '' : t('toolAccess.workbench.commonConfigRequiredCodex')
+  if (!commonConfig.value.trim()) return t('toolAccess.workbench.commonConfigRequiredClaude')
+  try {
+    JSON.parse(commonConfig.value)
+    return ''
+  } catch {
+    return t('toolAccess.workbench.commonConfigInvalidJSON')
+  }
+})
+const primaryModelName = computed(() => {
+  const rows = selectedDraft.value?.modelRows || []
+  return rows.find((row) => row.isDefault && row.name.trim())?.name.trim() || rows.find((row) => row.name.trim())?.name.trim() || ''
+})
 const selectedPreview = computed(() => previewData.value[selectedPreviewIndex.value] || null)
 const previewFileLabel = computed(() => selectedPreview.value ? basename(selectedPreview.value.Path) : '')
 const selectedTitle = computed(() => {
@@ -74,6 +96,10 @@ const selectedTitle = computed(() => {
   if (selectedDraft.value.isNew) return props.tool === 'claude' ? t('toolAccess.workbench.claude.provider') : t('toolAccess.workbench.codex.newProvider')
   return selectedDraft.value.name || selectedDraft.value.providerID
 })
+
+function tierPlaceholder() {
+  return primaryModelName.value || t('toolAccess.workbench.tierFallback')
+}
 
 function basename(path: string) {
   const parts = path.split(/[\\/]/)
@@ -101,6 +127,8 @@ function rowsFromPreset(preset: toolconfig.Preset | null, kind: 'direct' | 'auto
 function createDraft(view: service.ToolProviderView | null, key: DraftKey, isNew = false): ProviderDraft {
   const preset = view?.Preset || null
   const kind = preset?.Kind === 'autoapi' ? 'autoapi' : 'direct'
+  const extra = { ...(preset?.Extra || {}) }
+  if (props.tool === 'codex' && !extra.wire_api) extra.wire_api = 'responses'
   return {
     key,
     view,
@@ -114,6 +142,7 @@ function createDraft(view: service.ToolProviderView | null, key: DraftKey, isNew
     plaintextKey: '',
     keyTouched: false,
     keyRevealed: false,
+    extra,
     modelRows: rowsFromPreset(preset, kind),
   }
 }
@@ -125,6 +154,7 @@ function draftSnapshot(draft: ProviderDraft) {
     providerID: draft.providerID,
     baseURL: draft.baseURL,
     apiKeyID: draft.apiKeyID,
+    extra: draft.extra,
     modelRows: draft.modelRows,
   })
 }
@@ -157,8 +187,8 @@ function stagedKeys() {
 }
 
 const invalidStagedKeys = computed(() => stagedKeys().filter((key) => !!draftValidation(drafts.value[key])))
-const hasStagedChanges = computed(() => stagedKeys().length > 0 || [...pendingDelete.value].some((key) => drafts.value[key] && !drafts.value[key].isNew))
-const previewDisabled = computed(() => previewLoading.value || !hasStagedChanges.value || invalidStagedKeys.value.length > 0)
+const hasStagedChanges = computed(() => stagedKeys().length > 0 || [...pendingDelete.value].some((key) => drafts.value[key] && !drafts.value[key].isNew) || commonConfigChanged.value)
+const previewDisabled = computed(() => previewLoading.value || !hasStagedChanges.value || invalidStagedKeys.value.length > 0 || !!commonConfigValidation.value)
 const isDirty = computed(() => hasStagedChanges.value)
 
 function resetProviderDrafts(nextProviders: service.ToolProviderView[]) {
@@ -186,6 +216,19 @@ function resetProviderDrafts(nextProviders: service.ToolProviderView[]) {
   pendingDelete.value = new Set()
 }
 
+async function loadCommonConfig() {
+  commonConfigLoading.value = true
+  try {
+    const snippet = await api.getToolCommonConfig(props.tool)
+    commonConfig.value = snippet || ''
+    commonConfigBaseline.value = commonConfig.value
+  } catch (error: any) {
+    toast.push(error?.message || String(error), 'error')
+  } finally {
+    commonConfigLoading.value = false
+  }
+}
+
 async function loadSupportingData() {
   supportingLoading.value = true
   try {
@@ -209,7 +252,9 @@ async function load() {
   try {
     providers.value = await api.listToolProviders(props.tool)
     resetProviderDrafts(providers.value || [])
+    await loadCommonConfig()
     selectedKey.value = null
+    section.value = 'provider'
 
     if (props.initialProviderID) {
       const initial = providerRows.value.find((draft) => draft.providerID === props.initialProviderID)
@@ -254,9 +299,15 @@ async function revealKey(key: DraftKey) {
 function selectProvider(key: DraftKey) {
   if (selectedKey.value === key) return
   revealGeneration.value++
+  section.value = 'provider'
   selectedKey.value = key
   keyVisible.value = false
   revealError.value = false
+  actionError.value = ''
+}
+
+function selectCommonConfig() {
+  section.value = 'common'
   actionError.value = ''
 }
 
@@ -333,7 +384,7 @@ function buildPreset(draft: ProviderDraft) {
     APIKeyEnc: original?.APIKeyEnc || '',
     APIKeyID: draft.kind === 'autoapi' ? draft.apiKeyID : '',
     Models: models,
-    Extra: original?.Extra || {},
+    Extra: { ...(original?.Extra || {}), ...(draft.extra || {}) },
     CreatedAt: original?.CreatedAt || 0,
     UpdatedAt: original?.UpdatedAt || 0,
   })
@@ -355,7 +406,7 @@ function buildPlan() {
       PlaintextKey: draft.kind === 'direct' ? draft.plaintextKey : '',
     }))
   }
-  return service.ToolConfigPlan.createFrom({ Providers: operations })
+  return service.ToolConfigPlan.createFrom({ Providers: operations, CommonConfig: commonConfig.value })
 }
 
 async function previewChange() {
@@ -494,11 +545,12 @@ watch(() => [props.tool, props.initialProviderID] as const, () => {
                   <span v-if="draftValidation(draft) && (draft.isNew ? draftChanged(draft.key, draft) : true)" class="tool-workbench-row-hint">{{ draftValidation(draft) }}</span>
                 </div>
               </nav>
+              <button type="button" class="tool-workbench-global-nav" :class="{ active: section === 'common' }" @click="selectCommonConfig"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="var(--surface)"/><circle cx="15" cy="12" r="2" fill="var(--surface)"/><circle cx="11" cy="17" r="2" fill="var(--surface)"/></svg>{{ t('toolAccess.workbench.commonConfig') }}</button>
               <div v-if="tool === 'claude'" class="tool-workbench-fixed-hint">{{ t('toolAccess.workbench.claude.fixedProviderHint') }}</div>
             </aside>
 
             <main class="tool-workbench-editor">
-              <template v-if="selectedDraft">
+              <template v-if="section === 'provider' && selectedDraft">
                 <div class="tool-workbench-editor-header"><div><h3 :class="{ 'tool-workbench-pending-title': selectedIsPendingDelete }">{{ selectedTitle }}</h3><p>{{ t(`toolAccess.workbench.${tool}.providerHelp`) }}</p></div><div class="row tool-workbench-editor-actions"><span class="badge" :class="selectedDraft.enabled ? 'success' : ''">{{ selectedDraft.enabled ? t('toolAccess.presets.enabled') : t('toolAccess.presets.disabled') }}</span><button v-if="!selectedDraft.enabled && !selectedIsPendingDelete" class="btn btn-icon danger-icon" type="button" :title="t('common.delete')" :aria-label="t('common.delete')" @click="stageDelete(selectedDraft.key)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button><button v-if="selectedIsPendingDelete" class="btn btn-secondary" type="button" @click="undoDelete(selectedDraft.key)">{{ t('toolAccess.workbench.undoDelete') }}</button></div></div>
                 <div v-if="selectedIsPendingDelete" class="tool-workbench-pending-note" role="status">{{ t('toolAccess.workbench.pendingDelete') }}</div>
 
@@ -508,8 +560,17 @@ watch(() => [props.tool, props.initialProviderID] as const, () => {
                 <template v-if="selectedDraft.kind === 'direct'"><div class="field"><label class="field-label">{{ t('toolAccess.preset.baseURL') }}</label><input v-model="selectedDraft.baseURL" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.baseURLPlaceholder')"></div><div class="field"><label class="field-label">{{ t('toolAccess.preset.apiKey') }}</label><div class="tool-workbench-key-input"><input v-model="selectedDraft.plaintextKey" :type="keyVisible ? 'text' : 'password'" autocomplete="new-password" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="selectedView?.Preset.APIKeyEnc || revealError ? t('toolAccess.preset.keyKeepHint') : t('toolAccess.preset.keyPlaceholder')" @input="selectedDraft.keyTouched = true"><button type="button" class="btn btn-icon" :disabled="revealLoading || selectedIsPendingDelete || selectedDraft.isNew" :title="revealError ? t('toolAccess.workbench.retryRevealKey') : keyVisible ? t('toolAccess.workbench.hideKey') : t('toolAccess.workbench.revealKey')" :aria-label="revealError ? t('toolAccess.workbench.retryRevealKey') : keyVisible ? t('toolAccess.workbench.hideKey') : t('toolAccess.workbench.revealKey')" @click="toggleKeyVisibility(selectedDraft.key)"><svg v-if="keyVisible" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 4.3A10.6 10.6 0 0 1 12 4c5 0 8.6 4.3 9.5 8a10.7 10.7 0 0 1-2.1 4.1M6.2 6.2C4.5 7.5 3.4 9.3 2.5 12c.8 2.7 2.5 5 4.7 6.5A10.6 10.6 0 0 0 12 20c1.1 0 2.2-.2 3.2-.5"/></svg><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 4 12 4s9.5 8 9.5 8-3.5 8-9.5 8-9.5-8-9.5-8Z"/><circle cx="12" cy="12" r="2.5"/></svg></button></div><div class="field-help">{{ selectedView?.Preset.APIKeyEnc ? t('toolAccess.preset.keyKeepHelp') : t('toolAccess.preset.keyHelp') }}</div></div></template>
                 <template v-else><div class="field"><label class="field-label">{{ t('toolAccess.preset.apiKeySelector') }}</label><select v-model="selectedDraft.apiKeyID" class="select" :disabled="supportingLoading || selectedIsPendingDelete"><option value="" disabled>{{ t('toolAccess.preset.apiKeyPlaceholder') }}</option><option v-for="key in apiKeys" :key="key.id" :value="key.id">{{ key.name }}</option></select><div class="field-help">{{ supportingLoading ? t('toolAccess.preset.loadingSupporting') : t('toolAccess.preset.apiKeyHelp') }}</div></div><div class="field-help tool-workbench-relay-note">{{ t('toolAccess.workbench.relayHelp', { tool: toolLabel }) }}</div></template>
 
+                <div v-if="tool === 'codex'" class="field"><label class="field-label">{{ t('toolAccess.workbench.wireApi') }}</label><select v-model="selectedDraft.extra.wire_api" class="select" :disabled="selectedIsPendingDelete"><option value="responses">{{ t('toolAccess.workbench.wireApiResponses') }}</option><option value="chat">{{ t('toolAccess.workbench.wireApiChat') }}</option></select><div class="field-help">{{ t('toolAccess.workbench.wireApiHelp') }}</div></div>
+
                 <div class="field tool-workbench-model-section"><div class="row-between"><div><label class="field-label">{{ t('toolAccess.preset.models') }}</label><div class="field-help">{{ t('toolAccess.workbench.modelsHelp') }}</div></div><button class="btn btn-secondary" type="button" :disabled="selectedIsPendingDelete" @click="addModel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.preset.addModel') }}</button></div><div class="tool-workbench-model-editor"><div v-for="(row, index) in selectedDraft.modelRows" :key="index" class="tool-workbench-model-row"><div class="tool-workbench-model-index">{{ index + 1 }}</div><div class="tool-workbench-model-main"><input v-model="row.name" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="t('toolAccess.preset.modelPlaceholder')"><label class="check-label"><input v-model="row.isDefault" type="checkbox" :disabled="selectedIsPendingDelete"> {{ t('toolAccess.preset.defaultModel') }}</label></div><button class="btn btn-icon" :disabled="selectedDraft.modelRows.length <= 1 || selectedIsPendingDelete" :title="t('toolAccess.preset.removeModel')" :aria-label="t('toolAccess.preset.removeModel')" @click="removeModel(index)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 12h14"/></svg></button></div></div></div>
+                <div v-if="tool === 'claude'" class="field"><label class="field-label">{{ t('toolAccess.workbench.tierOverrides') }}</label><div class="tool-workbench-tier-grid"><div class="field"><label class="field-label">{{ t('toolAccess.workbench.tierHaiku') }}</label><input v-model="selectedDraft.extra.ANTHROPIC_DEFAULT_HAIKU_MODEL" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="tierPlaceholder()"></div><div class="field"><label class="field-label">{{ t('toolAccess.workbench.tierSonnet') }}</label><input v-model="selectedDraft.extra.ANTHROPIC_DEFAULT_SONNET_MODEL" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="tierPlaceholder()"></div><div class="field"><label class="field-label">{{ t('toolAccess.workbench.tierOpus') }}</label><input v-model="selectedDraft.extra.ANTHROPIC_DEFAULT_OPUS_MODEL" class="input mono" :disabled="selectedIsPendingDelete" :placeholder="tierPlaceholder()"></div></div><div class="field-help">{{ t('toolAccess.workbench.tierOverridesHelp') }}</div></div>
                 <div v-if="draftValidation(selectedDraft) && (selectedDraft.isNew ? draftChanged(selectedDraft.key, selectedDraft) : true)" class="tool-workbench-validation" role="alert">{{ draftValidation(selectedDraft) }}</div>
+                <div v-if="actionError" class="tool-workbench-error" role="alert">{{ actionError }}</div>
+              </template>
+              <template v-else-if="section === 'common'">
+                <div class="tool-workbench-editor-header"><div><h3>{{ t('toolAccess.workbench.commonConfig') }}</h3><p>{{ tool === 'claude' ? t('toolAccess.workbench.commonConfigHelpClaude') : t('toolAccess.workbench.commonConfigHelpCodex') }}</p></div></div>
+                <div class="field"><label class="field-label">{{ t('toolAccess.workbench.commonConfig') }}</label><textarea v-model="commonConfig" class="input mono tool-workbench-common-config" :disabled="commonConfigLoading" :rows="tool === 'claude' ? 10 : 8" :placeholder="tool === 'claude' ? t('toolAccess.workbench.commonConfigPlaceholderClaude') : t('toolAccess.workbench.commonConfigPlaceholderCodex')"></textarea><div class="field-help">{{ tool === 'claude' ? t('toolAccess.workbench.commonConfigHelpClaude') : t('toolAccess.workbench.commonConfigHelpCodex') }}</div></div>
+                <div v-if="commonConfigValidation" class="tool-workbench-validation" role="alert">{{ commonConfigValidation }}</div>
                 <div v-if="actionError" class="tool-workbench-error" role="alert">{{ actionError }}</div>
               </template>
               <div v-else class="tool-workbench-empty"><div class="tool-workbench-empty-mark">↗</div><h3>{{ t('toolAccess.workbench.selectProvider') }}</h3><p>{{ t('toolAccess.workbench.selectProviderHelp') }}</p></div>
@@ -559,6 +620,9 @@ watch(() => [props.tool, props.initialProviderID] as const, () => {
 .tool-workbench-undo { flex: 0 0 auto; padding: 3px 5px; font-size: 10px; }
 .tool-workbench-row-hint { position: absolute; left: 8px; right: 8px; bottom: -1px; overflow: hidden; color: var(--negative); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transform: translateY(100%); }
 .tool-workbench-provider-row:has(.tool-workbench-row-hint) { margin-bottom: 10px; }
+.tool-workbench-global-nav { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: auto; padding: 10px 9px 9px; border: 1px solid transparent; border-top-color: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.tool-workbench-global-nav:hover, .tool-workbench-global-nav.active { border-color: var(--border); background: var(--surface); color: var(--fg); }
+.tool-workbench-global-nav svg { width: 15px; height: 15px; }
 .tool-workbench-fixed-hint { margin: auto 4px 0; padding: 10px 0 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 10.5px; line-height: 1.45; }
 .tool-workbench-editor { min-width: 0; padding: 22px 26px; overflow-y: auto; overflow-x: hidden; }
 .tool-workbench-editor-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 20px; }
@@ -574,6 +638,8 @@ watch(() => [props.tool, props.initialProviderID] as const, () => {
 .tool-workbench-key-input .btn { flex: 0 0 auto; }
 .tool-workbench-key-input svg { width: 16px; height: 16px; }
 .tool-workbench-relay-note { margin: 6px 0 16px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border)); border-radius: var(--radius-sm); background: var(--accent-soft); }
+.tool-workbench-tier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.tool-workbench-common-config { min-height: 220px; resize: vertical; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .tool-workbench-model-section { margin-top: 23px; padding-top: 18px; border-top: 1px solid var(--border); }
 .tool-workbench-model-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .tool-workbench-model-row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--surface) 92%, var(--bg)); }
@@ -598,6 +664,6 @@ watch(() => [props.tool, props.initialProviderID] as const, () => {
 .tool-workbench-file-tabs { flex: 0 0 auto; align-self: flex-start; margin-bottom: 10px; }
 .tool-workbench-diff-preview { min-height: 0; flex: 1 1 auto; }
 .tool-workbench-preview-actions { flex: 0 0 auto; justify-content: flex-end; margin-top: 12px; }
-@media (max-width: 900px) { .tool-workbench { width: 96vw; height: 90vh; } .tool-workbench-body { grid-template-columns: 245px minmax(0, 1fr); } .tool-workbench-editor { padding: 18px; } }
-@media (max-width: 680px) { .tool-workbench { width: 100%; height: 100%; max-height: none; border-radius: 0; } .tool-workbench-body { grid-template-columns: 1fr; overflow: auto; } .tool-workbench-sidebar { max-height: 290px; border-right: none; border-bottom: 1px solid var(--border); } .tool-workbench-form-grid { grid-template-columns: 1fr; } .tool-workbench-footer { align-items: flex-end; flex-direction: column; } .tool-workbench-footer .row { width: 100%; justify-content: flex-end; } }
+@media (max-width: 900px) { .tool-workbench { width: 96vw; height: 90vh; } .tool-workbench-body { grid-template-columns: 245px minmax(0, 1fr); } .tool-workbench-editor { padding: 18px; } .tool-workbench-tier-grid { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .tool-workbench { width: 100%; height: 100%; max-height: none; border-radius: 0; } .tool-workbench-body { grid-template-columns: 1fr; overflow: auto; } .tool-workbench-sidebar { max-height: 290px; border-right: none; border-bottom: 1px solid var(--border); } .tool-workbench-form-grid, .tool-workbench-tier-grid { grid-template-columns: 1fr; } .tool-workbench-footer { align-items: flex-end; flex-direction: column; } .tool-workbench-footer .row { width: 100%; justify-content: flex-end; } }
 </style>

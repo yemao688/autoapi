@@ -19,7 +19,8 @@ type ToolProviderPlan struct {
 
 // ToolConfigPlan is the complete staged state for a generic tool workbench.
 type ToolConfigPlan struct {
-	Providers []ToolProviderPlan
+	Providers    []ToolProviderPlan
+	CommonConfig string
 }
 
 // ToolFilePreview contains the exact before and after bytes for one managed
@@ -136,11 +137,19 @@ func (s *Service) planToolConfigChange(tool string, plan ToolConfigPlan) (*toolc
 		}
 	}
 
-	changeSet, err := toolconfig.PlanToolConfigChange(toolID, changes, homeDir)
+	changeSet, err := toolconfig.PlanToolConfigChange(toolID, changes, plan.CommonConfig, homeDir)
 	if err != nil {
 		return nil, nil, err
 	}
 	return changeSet, sync, nil
+}
+
+func (s *Service) GetToolCommonConfig(tool string) (string, error) {
+	toolID := toolconfig.Tool(tool)
+	if toolID != toolconfig.ToolCodex && toolID != toolconfig.ToolClaude {
+		return "", fmt.Errorf("service: unsupported staged tool %q: %w", tool, toolconfig.ErrInvalidPreset)
+	}
+	return s.store.GetToolCommonConfig(string(toolID))
 }
 
 func stagedToolProviderID(preset toolconfig.Preset) (string, error) {
@@ -237,6 +246,9 @@ func (s *Service) ApplyToolConfigChange(tool string, plan ToolConfigPlan, allowD
 	configPath := changeSet.Changes[0].Path
 	toolID := toolconfig.Tool(tool)
 	if _, err := s.commitToolChangeSet(toolID, changeSet, allowDrift, 0, configPath); err != nil {
+		return err
+	}
+	if err := s.store.SetToolCommonConfig(tool, plan.CommonConfig); err != nil {
 		return err
 	}
 	for i, key := range sync.keys {

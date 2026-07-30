@@ -321,7 +321,11 @@ func (CodexAdapter) ExportSnippet(p PresetPlaintext, _ string) (Snippet, error) 
 	if err := validateCodexProviderID(providerID); err != nil {
 		return Snippet{}, err
 	}
-	content, err := spliceCodexConfig(nil, providerID, p.Name, p.BaseURL, presetDefaultModel(p.Models))
+	wireAPI, err := codexWireAPIValue(p.Extra)
+	if err != nil {
+		return Snippet{}, err
+	}
+	content, err := spliceCodexConfigWithWireAPI(nil, providerID, p.Name, p.BaseURL, presetDefaultModel(p.Models), wireAPI)
 	if err != nil {
 		return Snippet{}, err
 	}
@@ -340,6 +344,18 @@ func presetDefaultModel(models []PresetModel) string {
 		}
 	}
 	return ""
+}
+
+func codexWireAPIValue(extra map[string]string) (string, error) {
+	value := strings.TrimSpace(extra["wire_api"])
+	switch value {
+	case "", "responses":
+		return "responses", nil
+	case "chat":
+		return "chat", nil
+	default:
+		return "", fmt.Errorf("codex wire_api %q: %w", value, ErrInvalidPreset)
+	}
 }
 
 func readTOMLBytes(data []byte) (map[string]any, error) {
@@ -593,14 +609,14 @@ func codexTableHeader(providerID string) string {
 	return "[model_providers." + providerID + "]"
 }
 
-func codexTableBlock(providerID, name, baseURL string, lineEnding []byte, headerComment []byte, comments map[string][]byte, unmanaged []codexLine, finalEnding []byte) []codexLine {
+func codexTableBlock(providerID, name, baseURL, wireAPI string, lineEnding []byte, headerComment []byte, comments map[string][]byte, unmanaged []codexLine, finalEnding []byte) []codexLine {
 	managed := []struct {
 		key     string
 		content string
 	}{
 		{key: "name", content: "name = " + quotedTOMLString(name)},
 		{key: "base_url", content: "base_url = " + quotedTOMLString(baseURL)},
-		{key: "wire_api", content: `wire_api = "responses"`},
+		{key: "wire_api", content: "wire_api = " + quotedTOMLString(wireAPI)},
 		{key: "requires_openai_auth", content: "requires_openai_auth = true"},
 	}
 	lines := []codexLine{{content: append([]byte(codexTableHeader(providerID)), headerComment...), ending: append([]byte(nil), lineEnding...)}}
@@ -619,7 +635,7 @@ func codexTableBlock(providerID, name, baseURL string, lineEnding []byte, header
 	return lines
 }
 
-func spliceCodexTable(data []byte, providerID, name, baseURL string) ([]byte, error) {
+func spliceCodexTable(data []byte, providerID, name, baseURL, wireAPI string) ([]byte, error) {
 	lines := splitCodexLines(data)
 	header := codexTableHeader(providerID)
 	headerIndex := -1
@@ -635,7 +651,7 @@ func spliceCodexTable(data []byte, providerID, name, baseURL string) ([]byte, er
 	}
 	lineEnding := codexLineEnding(lines, data)
 	if headerIndex < 0 {
-		block := codexTableBlock(providerID, name, baseURL, lineEnding, nil, nil, nil, lineEnding)
+		block := codexTableBlock(providerID, name, baseURL, wireAPI, lineEnding, nil, nil, nil, lineEnding)
 		result := append([]byte(nil), data...)
 		if len(result) > 0 && !bytes.HasSuffix(result, []byte("\n")) {
 			result = append(result, lineEnding...)
@@ -668,7 +684,7 @@ func spliceCodexTable(data []byte, providerID, name, baseURL string) ([]byte, er
 		}
 		unmanaged = append(unmanaged, line)
 	}
-	block := codexTableBlock(providerID, name, baseURL, lineEnding, headerComment, comments, unmanaged, finalEnding)
+	block := codexTableBlock(providerID, name, baseURL, wireAPI, lineEnding, headerComment, comments, unmanaged, finalEnding)
 	replaced := make([]codexLine, 0, len(lines)-end+headerIndex+len(block))
 	replaced = append(replaced, lines[:headerIndex]...)
 	replaced = append(replaced, block...)
@@ -681,11 +697,15 @@ func spliceCodexTable(data []byte, providerID, name, baseURL string) ([]byte, er
 // final go-toml reparse below turns those cases into safe errors instead of
 // silently writing corrupted configuration.
 func spliceCodexConfig(data []byte, providerID, name, baseURL, model string) ([]byte, error) {
+	return spliceCodexConfigWithWireAPI(data, providerID, name, baseURL, model, "responses")
+}
+
+func spliceCodexConfigWithWireAPI(data []byte, providerID, name, baseURL, model, wireAPI string) ([]byte, error) {
 	topLevel, err := spliceCodexTopLevel(data, providerID, model)
 	if err != nil {
 		return nil, err
 	}
-	result, err := spliceCodexTable(topLevel, providerID, name, baseURL)
+	result, err := spliceCodexTable(topLevel, providerID, name, baseURL, wireAPI)
 	if err != nil {
 		return nil, err
 	}
@@ -711,7 +731,7 @@ func spliceCodexConfig(data []byte, providerID, name, baseURL, model string) ([]
 		return nil, fmt.Errorf("spliced Codex config has no model_providers table: %w", ErrUnsafeShape)
 	}
 	entry, ok := tomlMap(providers[providerID])
-	if !ok || tomlString(entry["name"]) != name || tomlString(entry["base_url"]) != baseURL || tomlString(entry["wire_api"]) != "responses" {
+	if !ok || tomlString(entry["name"]) != name || tomlString(entry["base_url"]) != baseURL || tomlString(entry["wire_api"]) != wireAPI {
 		return nil, fmt.Errorf("spliced Codex config has unexpected provider table: %w", ErrUnsafeShape)
 	}
 	if value, ok := entry["requires_openai_auth"].(bool); !ok || !value {
@@ -733,7 +753,11 @@ func spliceCodexUpsert(configBytes, authBytes []byte, p PresetPlaintext) ([]byte
 	if err := validateCodexConfigShape(configBytes, providerID); err != nil {
 		return nil, nil, err
 	}
-	configAfter, err := spliceCodexConfig(configBytes, providerID, p.Name, p.BaseURL, presetDefaultModel(p.Models))
+	wireAPI, err := codexWireAPIValue(p.Extra)
+	if err != nil {
+		return nil, nil, err
+	}
+	configAfter, err := spliceCodexConfigWithWireAPI(configBytes, providerID, p.Name, p.BaseURL, presetDefaultModel(p.Models), wireAPI)
 	if err != nil {
 		return nil, nil, err
 	}

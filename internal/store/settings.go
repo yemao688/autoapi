@@ -3,10 +3,13 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"autoapi/internal/model"
+	"autoapi/internal/toolconfig"
 )
 
 // GetSettings reads all setting sections from the DB, merging defaults for
@@ -103,6 +106,60 @@ func (s *Store) SaveSettings(settings model.Settings) error {
 		slog.Info("store: settings saved")
 	}
 	return err
+}
+
+func toolCommonConfigSettingKey(tool string) (string, error) {
+	toolID := toolconfig.Tool(strings.TrimSpace(tool))
+	switch toolID {
+	case toolconfig.ToolCodex, toolconfig.ToolClaude:
+		return "toolconfig.common_config." + string(toolID), nil
+	default:
+		return "", fmt.Errorf("store: unsupported staged tool %q: %w", tool, toolconfig.ErrInvalidPreset)
+	}
+}
+
+func (s *Store) GetToolCommonConfig(tool string) (string, error) {
+	key, err := toolCommonConfigSettingKey(tool)
+	if err != nil {
+		return "", err
+	}
+	var value string
+	if err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("store: get tool common config %q: %w", key, err)
+	}
+	var snippet string
+	if err := json.Unmarshal([]byte(value), &snippet); err != nil {
+		return "", fmt.Errorf("store: decode tool common config %q: %w", key, err)
+	}
+	return snippet, nil
+}
+
+func (s *Store) SetToolCommonConfig(tool, commonConfig string) error {
+	key, err := toolCommonConfigSettingKey(tool)
+	if err != nil {
+		return err
+	}
+	return s.execTx(func(tx *sql.Tx) error {
+		if strings.TrimSpace(commonConfig) == "" {
+			if _, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, key); err != nil {
+				return fmt.Errorf("store: delete tool common config %q: %w", key, err)
+			}
+			return nil
+		}
+		data, err := json.Marshal(commonConfig)
+		if err != nil {
+			return fmt.Errorf("store: marshal tool common config %q: %w", key, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO settings (key, value) VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(data)); err != nil {
+			return fmt.Errorf("store: write tool common config %q: %w", key, err)
+		}
+		return nil
+	})
 }
 
 // ListEndpoints returns the static list of endpoints served by the proxy.
