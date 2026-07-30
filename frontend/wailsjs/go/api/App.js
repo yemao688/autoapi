@@ -14,6 +14,10 @@ export function ApplyOpencodeConfigChange(arg1, arg2) {
   return window['go']['api']['App']['ApplyOpencodeConfigChange'](arg1, arg2);
 }
 
+export function ApplyToolConfigChange(arg1, arg2, arg3) {
+  return window['go']['api']['App']['ApplyToolConfigChange'](arg1, arg2, arg3);
+}
+
 export function CancelModelTest(arg1) {
   return window['go']['api']['App']['CancelModelTest'](arg1);
 }
@@ -256,6 +260,10 @@ export function PingLogEvent() {
 
 export function PreviewOpencodeConfigChange(arg1) {
   return window['go']['api']['App']['PreviewOpencodeConfigChange'](arg1);
+}
+
+export function PreviewToolConfigChange(arg1, arg2) {
+  return window['go']['api']['App']['PreviewToolConfigChange'](arg1, arg2);
 }
 
 export function PreviewToolOmoSlimChange(arg1) {

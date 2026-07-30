@@ -13,6 +13,8 @@ export function ApplyOmoSlimConfig(arg1:toolconfig.OmoSlimChange,arg2:boolean):P
 
 export function ApplyOpencodeConfigChange(arg1:service.OpencodeConfigPlan,arg2:boolean):Promise<void>;
 
+export function ApplyToolConfigChange(arg1:string,arg2:service.ToolConfigPlan,arg3:boolean):Promise<void>;
+
 export function CancelModelTest(arg1:string):Promise<boolean>;
 
 export function CheckToolDrift(arg1:string):Promise<Array<service.DriftState>>;
@@ -134,6 +136,8 @@ export function OpenStorageFolder():Promise<void>;
 export function PingLogEvent():Promise<void>;
 
 export function PreviewOpencodeConfigChange(arg1:service.OpencodeConfigPlan):Promise<service.OmoSlimPreview>;
+
+export function PreviewToolConfigChange(arg1:string,arg2:service.ToolConfigPlan):Promise<Array<service.ToolFilePreview>>;
 
 export function PreviewToolOmoSlimChange(arg1:toolconfig.OmoSlimChange):Promise<service.OmoSlimPreview>;
 

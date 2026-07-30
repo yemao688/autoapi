@@ -1917,6 +1917,87 @@ export namespace service {
 		    return a;
 		}
 	}
+	export class ToolProviderPlan {
+	    Action: string;
+	    Preset: toolconfig.Preset;
+	    PlaintextKey: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolProviderPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Action = source["Action"];
+	        this.Preset = this.convertValues(source["Preset"], toolconfig.Preset);
+	        this.PlaintextKey = source["PlaintextKey"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolConfigPlan {
+	    Providers: ToolProviderPlan[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolConfigPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Providers = this.convertValues(source["Providers"], ToolProviderPlan);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolFilePreview {
+	    Path: string;
+	    Before: string;
+	    After: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolFilePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Path = source["Path"];
+	        this.Before = source["Before"];
+	        this.After = source["After"];
+	    }
+	}
+	
 	export class ToolProviderView {
 	    Preset: toolconfig.Preset;
 	    Enabled: boolean;

@@ -33,7 +33,47 @@ func (ClaudeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := parseJSONBytes(before)
+	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
+	change.After, err = spliceClaudeUpsert(before, p)
+	if err != nil {
+		return nil, err
+	}
+	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
+}
+
+func (ClaudeAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) {
+	if providerID != "anthropic" {
+		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	homeDir = absoluteHomeDir(homeDir)
+	configPath := DefaultConfigPath(ToolClaude, homeDir)
+	resolvedPath, before, err := snapshotFile(configPath, homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if before == nil {
+		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
+	change.After, err = spliceClaudeRemove(before, providerID)
+	if err != nil {
+		return nil, err
+	}
+	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
+}
+
+func setClaudeString(object *hujson.Object, name, value string) error {
+	literal, err := jsonValue(value)
+	if err != nil {
+		return err
+	}
+	return setObjectMember(object, name, literal)
+}
+
+// spliceClaudeUpsert applies the managed Claude environment and model leaves
+// to a captured settings.json buffer while retaining all unmanaged content.
+func spliceClaudeUpsert(configBytes []byte, p PresetPlaintext) ([]byte, error) {
+	doc, err := parseJSONBytes(configBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse Claude settings: %w", err)
 	}
@@ -57,7 +97,6 @@ func (ClaudeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error)
 	if err := requireUniqueKeys(env, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"); err != nil {
 		return nil, err
 	}
-
 	if err := setClaudeString(env, "ANTHROPIC_BASE_URL", p.BaseURL); err != nil {
 		return nil, err
 	}
@@ -75,33 +114,17 @@ func (ClaudeAdapter) Plan(p PresetPlaintext, homeDir string) (*ChangeSet, error)
 		if err := setClaudeString(root, "model", defaultModel); err != nil {
 			return nil, err
 		}
-	} else {
-		// Claude's pointers are global. Unlike OpenCode's provider-scoped
-		// pointer, a no-default preset leaves both existing pointers untouched.
 	}
-
-	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
-	change.After, err = packFormatted(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
+	return packFormatted(doc)
 }
 
-func (ClaudeAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error) {
+// spliceClaudeRemove removes Claude's managed leaves from a captured settings
+// buffer while preserving unrelated environment and root settings.
+func spliceClaudeRemove(configBytes []byte, providerID string) ([]byte, error) {
 	if providerID != "anthropic" {
 		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
 	}
-	homeDir = absoluteHomeDir(homeDir)
-	configPath := DefaultConfigPath(ToolClaude, homeDir)
-	resolvedPath, before, err := snapshotFile(configPath, homeDir)
-	if err != nil {
-		return nil, err
-	}
-	if before == nil {
-		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
-	}
-	doc, err := parseJSONBytes(before)
+	doc, err := parseJSONBytes(configBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse Claude settings: %w", err)
 	}
@@ -141,20 +164,43 @@ func (ClaudeAdapter) PlanRemoval(homeDir, providerID string) (*ChangeSet, error)
 	if err := removeObjectMember(root, "model"); err != nil {
 		return nil, err
 	}
-	change := changeForSnapshot(ResClaudeSettings, resolvedPath, false, before)
-	change.After, err = packFormatted(doc)
+	return packFormatted(doc)
+}
+
+// spliceClaudeStagedRemove is tolerant of an already absent global Claude
+// provider so a parked DB row can be edited or deleted without a file entry.
+func spliceClaudeStagedRemove(configBytes []byte, providerID string) ([]byte, error) {
+	if providerID != "anthropic" {
+		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
+	}
+	doc, err := parseJSONBytes(configBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse Claude settings: %w", err)
+	}
+	root, err := jsonRootObject(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("parse Claude settings: %w", err)
+	}
+	if err := requireUniqueKeys(root, "env", "model"); err != nil {
+		return nil, err
+	}
+	env, envPresent, err := requireObjectMember(root, "env")
 	if err != nil {
 		return nil, err
 	}
-	return &ChangeSet{Tool: ToolClaude, Changes: []FileChange{change}}, nil
-}
-
-func setClaudeString(object *hujson.Object, name, value string) error {
-	literal, err := jsonValue(value)
-	if err != nil {
-		return err
+	managedPresent := objectMemberValue(root, "model") != nil
+	if envPresent {
+		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+			if objectMemberValue(env, key) != nil {
+				managedPresent = true
+				break
+			}
+		}
 	}
-	return setObjectMember(object, name, literal)
+	if !managedPresent {
+		return configBytes, nil
+	}
+	return spliceClaudeRemove(configBytes, providerID)
 }
 
 func (ClaudeAdapter) ReadManaged(homeDir, providerID string) (ManagedSection, error) {

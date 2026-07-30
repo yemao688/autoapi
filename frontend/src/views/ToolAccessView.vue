@@ -4,10 +4,10 @@ import { useI18n } from 'vue-i18n'
 import { api } from '@/api/bridge'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
-import ToolPresetModal from '@/components/ToolPresetModal.vue'
 import OmoSlimModal from '@/components/OmoSlimModal.vue'
 import OpencodeWorkbenchModal from '@/components/OpencodeWorkbenchModal.vue'
-import type { model, service, toolconfig } from '../../wailsjs/go/models'
+import ToolWorkbenchModal from '@/components/ToolWorkbenchModal.vue'
+import type { service, toolconfig } from '../../wailsjs/go/models'
 
 type ToolName = 'opencode' | 'codex' | 'claude'
 
@@ -18,21 +18,17 @@ const tools: ToolName[] = ['opencode', 'codex', 'claude']
 const statuses = ref<toolconfig.ToolStatus[]>([])
 const presets = ref<Record<string, service.ToolProviderView[]>>({})
 const opencodeLive = ref<service.OpencodeLiveState | null>(null)
-const apiKeys = ref<model.ApiKey[]>([])
-const modelRules = ref<model.ModelRule[]>([])
 const loading = ref(true)
 const refreshing = ref(false)
 const loadError = ref('')
-const modalGeneration = ref(0)
 const mutationBusy = ref(false)
 
-const presetModalOpen = ref(false)
-const presetModalTool = ref<ToolName>('opencode')
-const editingPreset = ref<toolconfig.Preset | null>(null)
-const editingEnabled = ref(false)
 const omoSlimOpen = ref(false)
 const opencodeWorkbenchOpen = ref(false)
 const opencodeWorkbenchProviderID = ref('')
+const toolWorkbenchOpen = ref(false)
+const toolWorkbenchTool = ref<'codex' | 'claude'>('codex')
+const toolWorkbenchProviderID = ref('')
 
 const exportOpen = ref(false)
 const exportLoading = ref(false)
@@ -90,42 +86,25 @@ async function refresh() {
   }
 }
 
-const supportingLoading = ref(false)
-
-async function loadSupportingData() {
-  supportingLoading.value = true
-  try {
-    const [keys, rules] = await Promise.all([api.apiKeys(), api.modelRules()])
-    apiKeys.value = keys || []
-    modelRules.value = rules || []
-  } catch (e: any) {
-    toast.push(e?.message || String(e), 'error')
-  } finally {
-    supportingLoading.value = false
-  }
-}
-
-async function openPreset(tool: ToolName, view: service.ToolProviderView | null = null) {
-  // Open the modal immediately — ListModelRules can take seconds, and
-  // awaiting it before opening looked like a dead button (no feedback).
-  modalGeneration.value++
-  editingPreset.value = view?.Preset || null
-  editingEnabled.value = view?.Enabled || false
-  presetModalTool.value = tool
-  presetModalOpen.value = true
-  void loadSupportingData()
-}
-
-function closePresetModal() {
-  modalGeneration.value++
-  presetModalOpen.value = false
-  editingPreset.value = null
-  editingEnabled.value = false
-}
-
 function openOpencodeWorkbench(view: service.ToolProviderView | null = null) {
   opencodeWorkbenchProviderID.value = view?.Preset.ProviderID || ''
   opencodeWorkbenchOpen.value = true
+}
+
+function openToolWorkbench(tool: 'codex' | 'claude', view: service.ToolProviderView | null = null) {
+  toolWorkbenchTool.value = tool
+  toolWorkbenchProviderID.value = view?.Preset.ProviderID || ''
+  toolWorkbenchOpen.value = true
+}
+
+function openPreset(tool: ToolName, view: service.ToolProviderView | null = null) {
+  if (tool === 'opencode') openOpencodeWorkbench(view)
+  else openToolWorkbench(tool, view)
+}
+
+function closeToolWorkbench() {
+  toolWorkbenchOpen.value = false
+  toolWorkbenchProviderID.value = ''
 }
 
 function closeOpencodeWorkbench() {
@@ -320,7 +299,7 @@ onMounted(() => {
           <div class="h-divider tool-divider"></div>
           <div class="row-between tool-section-heading">
             <div><div class="section-title" style="font-size: 15px;">{{ t('toolAccess.presets.title') }}</div><div class="section-sub">{{ t('toolAccess.presets.count', { count: presetsFor(card.tool).length }) }}</div></div>
-            <div class="row tool-heading-actions"><button class="btn btn-ghost tool-card-backups" :disabled="mutationBusy" @click="openBackups(card.tool, card.tool === 'opencode' ? 'opencode/config' : '')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button><button v-if="card.tool === 'opencode'" class="btn btn-primary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-secondary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>{{ t('toolAccess.presets.new') }}</button></div>
+            <div class="row tool-heading-actions"><button class="btn btn-ghost tool-card-backups" :disabled="mutationBusy" @click="openBackups(card.tool, card.tool === 'opencode' ? 'opencode/config' : '')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v14h14V6M8 6V3h8v3M9 10v6M12 10v6M15 10v6"/></svg>{{ t('toolAccess.presets.backups') }}</button><button v-if="card.tool === 'opencode'" class="btn btn-primary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openOpencodeWorkbench()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button><button v-else class="btn btn-primary" :disabled="mutationBusy" style="padding: 5px 9px; font-size: 11.5px;" @click="openPreset(card.tool)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>{{ t('toolAccess.opencode.editConfig') }}</button></div>
           </div>
 
           <div v-if="!presetsFor(card.tool).length" class="tool-empty">{{ t('toolAccess.presets.empty') }}</div>
@@ -333,7 +312,7 @@ onMounted(() => {
               <div v-if="card.tool !== 'opencode'" class="row tool-preset-actions">
                 <button v-if="view.Enabled" class="btn btn-secondary" :disabled="mutationBusy" style="padding: 4px 9px; font-size: 11px;" @click="disableProvider(card.tool, view)">{{ t('toolAccess.presets.disable') }}</button>
                 <button v-else class="btn btn-primary" style="padding: 4px 9px; font-size: 11px;" :disabled="mutationBusy || !statusFor(card.tool)?.Installed" :title="!statusFor(card.tool)?.Installed ? t('toolAccess.presets.installHint') : ''" @click="enableProvider(view)">{{ t('toolAccess.presets.enable') }}</button>
-                <button class="btn btn-icon" :disabled="mutationBusy" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openPreset(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+                <button class="btn btn-icon" :disabled="mutationBusy" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openToolWorkbench(card.tool, view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg></button>
                 <button v-if="view.InDB" class="btn btn-icon" :disabled="mutationBusy" :title="t('toolAccess.presets.export')" :aria-label="t('toolAccess.presets.export')" @click="openExport(view)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg></button>
                 <button v-if="!view.Enabled" class="btn btn-icon danger-icon" :disabled="mutationBusy" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deletePreset(view.Preset)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
               </div>
@@ -357,8 +336,8 @@ onMounted(() => {
     </div>
   </div>
 
-  <ToolPresetModal :open="presetModalOpen" :tool="presetModalTool" :preset="editingPreset" :enabled="editingEnabled" :api-keys="apiKeys" :model-rules="modelRules" :supporting-loading="supportingLoading" @close="closePresetModal" @saved="closePresetModal(); refresh()" />
   <OpencodeWorkbenchModal :open="opencodeWorkbenchOpen" :initial-provider-i-d="opencodeWorkbenchProviderID" @close="closeOpencodeWorkbench" @changed="refresh" />
+  <ToolWorkbenchModal :open="toolWorkbenchOpen" :tool="toolWorkbenchTool" :initial-provider-i-d="toolWorkbenchProviderID" @close="closeToolWorkbench" @changed="refresh" />
   <OmoSlimModal :open="omoSlimOpen" @close="omoSlimOpen = false" @applied="refresh" />
 
   <Teleport to="body">
@@ -468,9 +447,9 @@ onMounted(() => {
 .backup-row-icon svg { width: 18px; height: 18px; }
 .backup-row-main { min-width: 0; }
 .backup-row-resource { margin-bottom: 4px; color: var(--fg); font-size: 12px; font-weight: 600; }
-.backup-row-path { overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.backup-row-path { color: var(--muted); font-size: 11px; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
 .backup-row-time { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.backup-row-actions { display: flex; align-items: center; justify-content: flex-end; }
+.backup-row-actions { display: flex; align-items: center; justify-content: flex-end; white-space: nowrap; }
 .backup-action { padding: 6px 10px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 11.5px; }
 .backup-action svg { width: 14px; height: 14px; }
 .backup-action-restore { color: var(--negative); background: transparent; }
