@@ -95,6 +95,8 @@ export function GetTargetBreakerStatuses():Promise<Array<proxy.TargetBreakerStat
 
 export function GetTargetDiagnostics():Promise<Array<model.TargetShadowScore>>;
 
+export function GetToolCommonConfig(arg1:string):Promise<string>;
+
 export function GetUsageStats(arg1:model.LogQuery):Promise<model.UsageStats>;
 
 export function GetUsageTrends(arg1:model.UsageTrendsQuery):Promise<model.UsageTrends>;

@@ -1005,6 +1005,29 @@ func TestSettings(t *testing.T) {
 	}
 }
 
+func TestToolCommonConfigSettings(t *testing.T) {
+	s := newTestStore(t)
+	if got, err := s.GetToolCommonConfig("codex"); err != nil || got != "" {
+		t.Fatalf("missing Codex common config = %q, err=%v", got, err)
+	}
+	common := "profile = \"fast\"\n"
+	if err := s.SetToolCommonConfig("codex", common); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetToolCommonConfig("codex"); err != nil || got != common {
+		t.Fatalf("Codex common config = %q, err=%v", got, err)
+	}
+	if got, err := s.GetToolCommonConfig("claude"); err != nil || got != "" {
+		t.Fatalf("Claude common config = %q, err=%v", got, err)
+	}
+	if err := s.SetToolCommonConfig("codex", " \n\t"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetToolCommonConfig("codex"); err != nil || got != "" {
+		t.Fatalf("blank common config was not cleared = %q, err=%v", got, err)
+	}
+}
+
 func TestSettingsInjectedDefaultsAndPersistedMerge(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(context.Background(), StoreDeps{DSN: dir + "/settings.db", DefaultPort: 18344})

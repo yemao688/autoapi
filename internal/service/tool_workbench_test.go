@@ -172,8 +172,8 @@ func TestToolWorkbenchPreviewFileCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(previews) != 2 {
-		t.Fatalf("Codex preview count = %d, want 2", len(previews))
+	if len(previews) != 3 {
+		t.Fatalf("Codex preview count = %d, want 3", len(previews))
 	}
 	claudePreset := workbenchPreset(toolconfig.ToolClaude, "anthropic", "Anthropic", "https://claude.example", toolconfig.PresetDirect)
 	previews, err = svc.PreviewToolConfigChange("claude", ToolConfigPlan{Providers: []ToolProviderPlan{{Action: "upsert", Preset: claudePreset, PlaintextKey: "claude-key"}}})
@@ -185,6 +185,49 @@ func TestToolWorkbenchPreviewFileCounts(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, ".codex", "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("preview created Codex auth file: %v", err)
+	}
+}
+
+func TestToolWorkbenchCommonConfigPersistence(t *testing.T) {
+	svc, _, homeDir := newToolConfigTestService(t)
+	configPath := toolconfig.DefaultConfigPath(toolconfig.ToolCodex, homeDir)
+	writeWorkbenchFile(t, configPath, `# retain this comment
+profile = "old"
+`, 0o644)
+	common := "profile = \"fast\"\nfeatures = [\"a\", \"b\"]\n"
+	plan := ToolConfigPlan{CommonConfig: common}
+
+	previews, err := svc.PreviewToolConfigChange("codex", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(previews) != 1 || !strings.Contains(previews[0].After, `profile = "fast"`) {
+		t.Fatalf("common config preview = %+v", previews)
+	}
+	if got, err := svc.GetToolCommonConfig("codex"); err != nil || got != "" {
+		t.Fatalf("preview persisted common config = %q, err=%v", got, err)
+	}
+
+	if err := svc.ApplyToolConfigChange("codex", plan, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.GetToolCommonConfig("codex"); err != nil || got != common {
+		t.Fatalf("applied common config = %q, err=%v", got, err)
+	}
+
+	previewPlan := ToolConfigPlan{CommonConfig: "profile = \"preview-only\"\n"}
+	if _, err := svc.PreviewToolConfigChange("codex", previewPlan); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.GetToolCommonConfig("codex"); err != nil || got != common {
+		t.Fatalf("preview replaced persisted common config = %q, err=%v", got, err)
+	}
+
+	if err := svc.ApplyToolConfigChange("codex", ToolConfigPlan{CommonConfig: " \n\t"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.GetToolCommonConfig("codex"); err != nil || got != "" {
+		t.Fatalf("blank apply did not clear common config = %q, err=%v", got, err)
 	}
 }
 

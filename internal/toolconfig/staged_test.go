@@ -73,7 +73,7 @@ base_url = "https://park.example"
 		{Action: "remove", Preset: stagedDirectPreset(ToolCodex, "remove-me", "Remove", "https://remove.example", "")},
 		{Action: "park", Preset: stagedDirectPreset(ToolCodex, "park-me", "Park", "https://park.example", "")},
 	}
-	changeSet, err := PlanToolConfigChange(ToolCodex, changes, homeDir)
+	changeSet, err := PlanToolConfigChange(ToolCodex, changes, "", homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ base_url = "https://park.example"
 	removePointer, err := PlanToolConfigChange(ToolCodex, []ToolProviderChange{{
 		Action: "remove",
 		Preset: stagedDirectPreset(ToolCodex, "existing", "Edited Existing", "https://edited.example", ""),
-	}}, homeDir)
+	}}, "", homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ base_url = "https://park.example"
 	addKey, err := PlanToolConfigChange(ToolCodex, []ToolProviderChange{{
 		Action: "upsert",
 		Preset: stagedDirectPreset(ToolCodex, "new-provider", "New", "https://new.example", "final-key"),
-	}}, homeDir)
+	}}, "", homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,14 +139,14 @@ base_url = "https://park.example"
 
 func TestPlanToolConfigChangeRejectsCodexReservedAndDuplicateIDs(t *testing.T) {
 	reserved := stagedDirectPreset(ToolCodex, "openai", "OpenAI", "https://example.test", "")
-	if _, err := PlanToolConfigChange(ToolCodex, []ToolProviderChange{{Action: "upsert", Preset: reserved}}, t.TempDir()); !errors.Is(err, ErrConflict) {
+	if _, err := PlanToolConfigChange(ToolCodex, []ToolProviderChange{{Action: "upsert", Preset: reserved}}, "", t.TempDir()); !errors.Is(err, ErrConflict) {
 		t.Fatalf("reserved provider error = %v", err)
 	}
 	duplicate := stagedDirectPreset(ToolCodex, "same", "Same", "https://example.test", "")
 	if _, err := PlanToolConfigChange(ToolCodex, []ToolProviderChange{
 		{Action: "upsert", Preset: duplicate},
 		{Action: "remove", Preset: duplicate},
-	}, t.TempDir()); !errors.Is(err, ErrConflict) {
+	}, "", t.TempDir()); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate provider error = %v", err)
 	}
 }
@@ -163,7 +163,7 @@ func TestPlanToolConfigChangeClaudeUpsertThenRemove(t *testing.T) {
 }`, 0o644)
 
 	preset := stagedDirectPreset(ToolClaude, "anthropic", "Anthropic", "https://claude.example", "claude-key")
-	upsert, err := PlanToolConfigChange(ToolClaude, []ToolProviderChange{{Action: "upsert", Preset: preset}}, homeDir)
+	upsert, err := PlanToolConfigChange(ToolClaude, []ToolProviderChange{{Action: "upsert", Preset: preset}}, "", homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestPlanToolConfigChangeClaudeUpsertThenRemove(t *testing.T) {
 	remove, err := PlanToolConfigChange(ToolClaude, []ToolProviderChange{{
 		Action: "remove",
 		Preset: PresetPlaintext{Preset: preset.Preset},
-	}}, homeDir)
+	}}, "", homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,10 +195,10 @@ func TestPlanToolConfigChangeClaudeUpsertThenRemove(t *testing.T) {
 
 func TestPlanToolConfigChangeRejectsUnsupportedToolAndAction(t *testing.T) {
 	preset := stagedDirectPreset(ToolCodex, "provider", "Provider", "https://example.test", "")
-	if _, err := PlanToolConfigChange(ToolOpencode, []ToolProviderChange{{Action: "upsert", Preset: preset}}, t.TempDir()); !errors.Is(err, ErrInvalidPreset) {
+	if _, err := PlanToolConfigChange(ToolOpencode, []ToolProviderChange{{Action: "upsert", Preset: preset}}, "", t.TempDir()); !errors.Is(err, ErrInvalidPreset) {
 		t.Fatalf("opencode error = %v", err)
 	}
-	if _, err := PlanToolConfigChange(ToolCodex, []ToolProviderChange{{Action: "invalid", Preset: preset}}, t.TempDir()); !errors.Is(err, ErrInvalidPreset) {
+	if _, err := PlanToolConfigChange(ToolCodex, []ToolProviderChange{{Action: "invalid", Preset: preset}}, "", t.TempDir()); !errors.Is(err, ErrInvalidPreset) {
 		t.Fatalf("action error = %v", err)
 	}
 }
@@ -210,7 +210,156 @@ func TestPlanToolConfigChangeClaudeRejectsNonAnthropic(t *testing.T) {
 		t.Fatal(err)
 	}
 	preset := stagedDirectPreset(ToolClaude, "other", "Other", "https://example.test", "")
-	if _, err := PlanToolConfigChange(ToolClaude, []ToolProviderChange{{Action: "upsert", Preset: preset}}, homeDir); !errors.Is(err, ErrConfigNotFound) {
+	if _, err := PlanToolConfigChange(ToolClaude, []ToolProviderChange{{Action: "upsert", Preset: preset}}, "", homeDir); !errors.Is(err, ErrConfigNotFound) {
 		t.Fatalf("non-anthropic error = %v", err)
+	}
+}
+
+func TestPlanToolConfigChangeClaudeCommonConfigDeepMerge(t *testing.T) {
+	homeDir := t.TempDir()
+	path := DefaultConfigPath(ToolClaude, homeDir)
+	writeFile(t, path, `{
+  // retain settings comment
+  "env": {
+    "KEEP_ENV": "yes",
+    "ANTHROPIC_BASE_URL": "https://managed.example",
+    "ANTHROPIC_AUTH_TOKEN": "managed-token",
+    "ANTHROPIC_MODEL": "managed-model",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-model",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-model",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-model"
+  },
+  "permissions": {"allow": ["Bash"]},
+  "array": ["old"],
+  "model": "managed-root"
+}`, 0o644)
+
+	common := `{
+  "env": {"KEEP_ENV": "updated", "COMMON_FLAG": true},
+  "permissions": {"deny": ["rm -rf"]},
+  "array": ["new"]
+}`
+	changeSet, err := PlanToolConfigChange(ToolClaude, nil, common, homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := string(changeSet.Changes[0].After)
+	for _, want := range []string{
+		"retain settings comment",
+		`"KEEP_ENV": "updated"`,
+		`"COMMON_FLAG": true`,
+		`"allow"`,
+		`"deny"`,
+		`"array": ["new"]`,
+		`"ANTHROPIC_BASE_URL": "https://managed.example"`,
+		`"ANTHROPIC_AUTH_TOKEN": "managed-token"`,
+		`"ANTHROPIC_MODEL": "managed-model"`,
+		`"ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-model"`,
+		`"ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-model"`,
+		`"ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-model"`,
+		`"model": "managed-root"`,
+	} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("Claude common merge omitted %q: %s", want, after)
+		}
+	}
+}
+
+func TestPlanToolConfigChangeClaudeCommonConfigRejectsInvalidAndSensitive(t *testing.T) {
+	homeDir := t.TempDir()
+	path := DefaultConfigPath(ToolClaude, homeDir)
+	writeFile(t, path, `{ "env": {"ANTHROPIC_BASE_URL": "https://managed.example"} }`, 0o644)
+	preset := stagedDirectPreset(ToolClaude, "anthropic", "Anthropic", "https://managed.example", "managed-token")
+
+	for _, test := range []struct {
+		name    string
+		snippet string
+		want    string
+		isErr   error
+	}{
+		{name: "managed collision", snippet: `{"env":{"ANTHROPIC_BASE_URL":"override"}}`, want: "managed key path", isErr: ErrConflict},
+		{name: "nested secret", snippet: `{"options":{"nested":{"apiKey":"secret"}}}`, want: "secrets belong in preset key fields", isErr: ErrInvalidPreset},
+		{name: "invalid JSON", snippet: `{"options":}`, want: "invalid JSON", isErr: ErrInvalidPreset},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := PlanToolConfigChange(ToolClaude, []ToolProviderChange{{Action: "upsert", Preset: preset}}, test.snippet, homeDir)
+			if err == nil || !strings.Contains(err.Error(), test.want) || !errors.Is(err, test.isErr) {
+				t.Fatalf("common config error = %v", err)
+			}
+		})
+	}
+}
+
+func TestPlanToolConfigChangeClaudeCommonConfigEmptyIsNoOp(t *testing.T) {
+	homeDir := t.TempDir()
+	path := DefaultConfigPath(ToolClaude, homeDir)
+	before := `{"permissions":{"allow":["Bash"]}}
+`
+	writeFile(t, path, before, 0o644)
+	changeSet, err := PlanToolConfigChange(ToolClaude, nil, " \n\t", homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(changeSet.Changes[0].After); got != before {
+		t.Fatalf("empty Claude common config changed file: %q", got)
+	}
+}
+
+func TestPlanToolConfigChangeCodexCommonConfigMergesTopLevel(t *testing.T) {
+	homeDir := t.TempDir()
+	path := DefaultConfigPath(ToolCodex, homeDir)
+	writeFile(t, path, `# retain this comment
+profile = "old" # retain profile comment
+existing = true
+
+[model_providers.existing]
+name = "Existing"
+base_url = "https://existing.example"
+`, 0o644)
+	common := `profile = "fast"
+new_flag = true
+features = ["a", "b"]
+options = { mode = "fast", count = 2 }
+`
+	changeSet, err := PlanToolConfigChange(ToolCodex, nil, common, homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := string(changeSet.Changes[0].After)
+	if _, err := readTOMLBytes(changeSet.Changes[0].After); err != nil {
+		t.Fatalf("merged Codex config is invalid: %v\n%s", err, after)
+	}
+	for _, want := range []string{
+		"retain this comment",
+		`profile = "fast" # retain profile comment`,
+		`new_flag = true`,
+		`features = ["a", "b"]`,
+		`options = { mode = "fast", count = 2 }`,
+		"model_providers.existing",
+	} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("Codex common merge omitted %q: %s", want, after)
+		}
+	}
+}
+
+func TestPlanToolConfigChangeCodexCommonConfigRejectsInvalid(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		snippet string
+		want    string
+		isErr   error
+	}{
+		{name: "table section", snippet: "[profiles]\nname = \"fast\"\n", want: "table sections are not supported in v1", isErr: ErrInvalidPreset},
+		{name: "managed key", snippet: "model = \"managed\"\n", want: "managed and cannot be overridden", isErr: ErrConflict},
+		{name: "sensitive key", snippet: "options = { authToken = \"secret\" }\n", want: "secrets belong in preset key fields", isErr: ErrInvalidPreset},
+		{name: "invalid TOML", snippet: "profile = [\n", want: "invalid TOML", isErr: ErrInvalidPreset},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := PlanToolConfigChange(ToolCodex, nil, test.snippet, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), test.want) || !errors.Is(err, test.isErr) {
+				t.Fatalf("common config error = %v", err)
+			}
+		})
 	}
 }

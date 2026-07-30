@@ -1953,6 +1953,7 @@ export namespace service {
 	}
 	export class ToolConfigPlan {
 	    Providers: ToolProviderPlan[];
+	    CommonConfig: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ToolConfigPlan(source);
@@ -1961,6 +1962,7 @@ export namespace service {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Providers = this.convertValues(source["Providers"], ToolProviderPlan);
+	        this.CommonConfig = source["CommonConfig"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

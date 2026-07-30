@@ -178,6 +178,10 @@ export const api = {
     ensureWails()
     return wails.CheckToolDrift(tool) as Promise<service.DriftState[]>
   },
+  getToolCommonConfig: (tool: string): Promise<string> => {
+    ensureWails()
+    return wails.GetToolCommonConfig(tool) as Promise<string>
+  },
   previewToolConfigChange: (tool: string, plan: service.ToolConfigPlan): Promise<service.ToolFilePreview[]> => {
     ensureWails()
     return wails.PreviewToolConfigChange(tool, plan) as Promise<service.ToolFilePreview[]>

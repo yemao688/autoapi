@@ -178,6 +178,10 @@ export function GetTargetDiagnostics() {
   return window['go']['api']['App']['GetTargetDiagnostics']();
 }
 
+export function GetToolCommonConfig(arg1) {
+  return window['go']['api']['App']['GetToolCommonConfig'](arg1);
+}
+
 export function GetUsageStats(arg1) {
   return window['go']['api']['App']['GetUsageStats'](arg1);
 }

@@ -70,6 +70,12 @@ func setClaudeString(object *hujson.Object, name, value string) error {
 	return setObjectMember(object, name, literal)
 }
 
+var claudeTierModelKeys = []string{
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+	"ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"ANTHROPIC_DEFAULT_OPUS_MODEL",
+}
+
 // spliceClaudeUpsert applies the managed Claude environment and model leaves
 // to a captured settings.json buffer while retaining all unmanaged content.
 func spliceClaudeUpsert(configBytes []byte, p PresetPlaintext) ([]byte, error) {
@@ -94,7 +100,8 @@ func spliceClaudeUpsert(configBytes []byte, p PresetPlaintext) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if err := requireUniqueKeys(env, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"); err != nil {
+	managedEnvKeys := append([]string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"}, claudeTierModelKeys...)
+	if err := requireUniqueKeys(env, managedEnvKeys...); err != nil {
 		return nil, err
 	}
 	if err := setClaudeString(env, "ANTHROPIC_BASE_URL", p.BaseURL); err != nil {
@@ -112,6 +119,18 @@ func spliceClaudeUpsert(configBytes []byte, p PresetPlaintext) ([]byte, error) {
 			return nil, err
 		}
 		if err := setClaudeString(root, "model", defaultModel); err != nil {
+			return nil, err
+		}
+	}
+	for _, key := range claudeTierModelKeys {
+		value := p.Extra[key]
+		if value == "" {
+			if err := removeObjectMember(env, key); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := setClaudeString(env, key, value); err != nil {
 			return nil, err
 		}
 	}
@@ -141,7 +160,8 @@ func spliceClaudeRemove(configBytes []byte, providerID string) ([]byte, error) {
 	}
 	managedPresent := objectMemberValue(root, "model") != nil
 	if envPresent {
-		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+		managedEnvKeys := append([]string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"}, claudeTierModelKeys...)
+		for _, key := range managedEnvKeys {
 			if objectMemberValue(env, key) != nil {
 				managedPresent = true
 				break
@@ -152,10 +172,11 @@ func spliceClaudeRemove(configBytes []byte, providerID string) ([]byte, error) {
 		return nil, fmt.Errorf("Claude provider %q: %w", providerID, ErrConfigNotFound)
 	}
 	if envPresent {
-		if err := requireUniqueKeys(env, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"); err != nil {
+		managedEnvKeys := append([]string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"}, claudeTierModelKeys...)
+		if err := requireUniqueKeys(env, managedEnvKeys...); err != nil {
 			return nil, err
 		}
-		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+		for _, key := range managedEnvKeys {
 			if err := removeObjectMember(env, key); err != nil {
 				return nil, err
 			}
@@ -190,7 +211,8 @@ func spliceClaudeStagedRemove(configBytes []byte, providerID string) ([]byte, er
 	}
 	managedPresent := objectMemberValue(root, "model") != nil
 	if envPresent {
-		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+		managedEnvKeys := append([]string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"}, claudeTierModelKeys...)
+		for _, key := range managedEnvKeys {
 			if objectMemberValue(env, key) != nil {
 				managedPresent = true
 				break
@@ -228,6 +250,11 @@ func (ClaudeAdapter) ReadManaged(homeDir, providerID string) (ManagedSection, er
 		}
 		if value := objectString(env, "ANTHROPIC_MODEL"); value != "" {
 			section.Fields["ANTHROPIC_MODEL"] = value
+		}
+		for _, key := range claudeTierModelKeys {
+			if value := objectString(env, key); value != "" {
+				section.Fields[key] = value
+			}
 		}
 	}
 	return section, nil
@@ -288,13 +315,15 @@ func loadClaudeManaged(homeDir, providerID string) (*hujson.Object, *hujson.Obje
 		return nil, nil, false, err
 	}
 	if envPresent {
-		if err := requireUniqueKeys(env, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"); err != nil {
+		managedEnvKeys := append([]string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"}, claudeTierModelKeys...)
+		if err := requireUniqueKeys(env, managedEnvKeys...); err != nil {
 			return nil, nil, false, err
 		}
 	}
 	managedPresent := objectValue(root, "model") != nil
 	if envPresent {
-		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+		managedEnvKeys := append([]string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"}, claudeTierModelKeys...)
+		for _, key := range managedEnvKeys {
 			if objectMemberValue(env, key) != nil {
 				managedPresent = true
 				break
