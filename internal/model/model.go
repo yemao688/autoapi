@@ -49,9 +49,16 @@ type Provider struct {
 	ResponsesEnabled bool           `json:"responses_enabled"`
 	MessagesEnabled  bool           `json:"messages_enabled"`
 	GeminiEnabled    bool           `json:"gemini_enabled"`
-	Enabled          bool           `json:"enabled"`
-	CreatedAt        int64          `json:"created_at"`
-	UpdatedAt        int64          `json:"updated_at"`
+	// FixEmptyAssistant enables a per-provider request sanitizer for strict
+	// upstreams (e.g. Kimi) that reject assistant messages which have BOTH
+	// empty content AND no tool_calls. When enabled, the proxy removes
+	// exactly those messages from the final upstream request body (chat
+	// protocol only). Removal is safe: such messages cannot be referenced
+	// by tool messages (which require tool_call_id from tool_calls).
+	FixEmptyAssistant bool  `json:"fix_empty_assistant"`
+	Enabled           bool  `json:"enabled"`
+	CreatedAt         int64 `json:"created_at"`
+	UpdatedAt         int64 `json:"updated_at"`
 }
 
 type ProviderCapability struct {
@@ -701,6 +708,10 @@ type ProviderInput struct {
 	ResponsesEnabled bool   `json:"responses_enabled"` // legacy compatibility field; provider save ignores it
 	MessagesEnabled  bool   `json:"messages_enabled"`  // legacy compatibility field; provider save ignores it
 	GeminiEnabled    bool   `json:"gemini_enabled"`    // legacy compatibility field; provider save ignores it
+	// FixEmptyAssistant opts the provider into the empty-assistant-message
+	// sanitizer (see Provider.FixEmptyAssistant). Unlike the legacy protocol
+	// flags above, provider create/update DOES persist this field.
+	FixEmptyAssistant bool `json:"fix_empty_assistant"`
 }
 
 type ModelRuleInput struct {

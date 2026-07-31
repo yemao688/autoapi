@@ -657,6 +657,11 @@ CREATE TABLE IF NOT EXISTS tool_file_state (
 SET resource = 'opencode-omo-slim'
 WHERE tool = 'opencode' AND resource = 'opencode-omo';`,
 	},
+	{
+		ID:              "039_provider_fix_empty_assistant",
+		SQL:             `ALTER TABLE providers ADD COLUMN fix_empty_assistant INTEGER NOT NULL DEFAULT 0;`,
+		SkipIfRedundant: func(tx *sql.Tx) (bool, error) { return tableHasColumn(tx, "providers", "fix_empty_assistant") },
+	},
 }
 
 // routeTargetsHasEnabled reports whether the `enabled` column already exists

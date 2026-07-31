@@ -101,6 +101,7 @@ const form = ref<model.ProviderInput>({
   responses_enabled: false,
   messages_enabled: false,
   gemini_enabled: false,
+  fix_empty_assistant: false,
 })
 
 const filteredProviders = computed(() => {
@@ -587,7 +588,7 @@ function openAdd(isCustom: boolean) {
   resetModalState()
   modalMode.value = 'add'
   editingId.value = ''
-  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false, messages_enabled: false, gemini_enabled: false }
+  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false, messages_enabled: false, gemini_enabled: false, fix_empty_assistant: false }
   modalOpen.value = true
 }
 
@@ -604,6 +605,7 @@ function openEdit(provider: model.Provider) {
     responses_enabled: provider.responses_enabled,
     messages_enabled: provider.messages_enabled,
     gemini_enabled: provider.gemini_enabled,
+    fix_empty_assistant: provider.fix_empty_assistant,
   }
   loadingKey.value = true
   modelRows.value = []
@@ -658,6 +660,7 @@ async function saveProvider() {
       responses_enabled: form.value.responses_enabled,
       messages_enabled: form.value.messages_enabled,
       gemini_enabled: form.value.gemini_enabled,
+      fix_empty_assistant: form.value.fix_empty_assistant,
     }
     if (modalMode.value === 'edit' && !keyDirty.value) {
       payload.upstream_key = ''
@@ -938,6 +941,13 @@ onMounted(() => {
             @input="onKeyInput"
           >
           <div class="field-help">{{ t('providers.modal.upstreamKeyHelp') }}</div>
+        </div>
+        <div class="field">
+          <label class="row" style="gap: 8px; align-items: center; cursor: pointer;">
+            <input type="checkbox" v-model="form.fix_empty_assistant">
+            <span class="field-label" style="margin: 0;">{{ t('providers.modal.fixEmptyAssistant') }}</span>
+          </label>
+          <div class="field-help">{{ t('providers.modal.fixEmptyAssistantHelp') }}</div>
         </div>
         <div v-if="modalMode === 'edit'" class="field">
           <div class="row-between" style="margin-bottom: 8px;">

@@ -5858,6 +5858,136 @@ func TestUpstream401StillPenalizesProvider(t *testing.T) {
 	}
 }
 
+// TestSanitizeEmptyAssistantE2E: with FixEmptyAssistant enabled on the
+// provider, empty assistant messages (no content, no tool_calls) are stripped
+// from the upstream request body, while tool_calls-bearing assistants and
+// their tool results are preserved.
+func TestSanitizeEmptyAssistantE2E(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, `{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, FixEmptyAssistant: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "up", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	body := `{"model":"m","messages":[` +
+		`{"role":"user","content":"hi"},` +
+		`{"role":"assistant","content":""},` +
+		`{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},` +
+		`{"role":"tool","tool_call_id":"call_1","content":"ok"},` +
+		`{"role":"user","content":"go on"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var sent struct {
+		Messages []struct {
+			Role      string          `json:"role"`
+			ToolCalls json.RawMessage `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("upstream body not JSON: %v (%s)", err, gotBody)
+	}
+	if len(sent.Messages) != 4 {
+		t.Fatalf("upstream got %d messages, want 4 (empty assistant stripped): %s", len(sent.Messages), gotBody)
+	}
+	wantRoles := []string{"user", "assistant", "tool", "user"}
+	for i, want := range wantRoles {
+		if sent.Messages[i].Role != want {
+			t.Fatalf("message[%d].role=%q, want %q: %s", i, sent.Messages[i].Role, want, gotBody)
+		}
+	}
+	if len(sent.Messages[1].ToolCalls) == 0 || string(sent.Messages[1].ToolCalls) == "null" {
+		t.Fatalf("tool_calls assistant must be preserved: %s", gotBody)
+	}
+}
+
+// TestSanitizeEmptyAssistantStreamE2E is the streaming counterpart: the
+// forwardStream PrepareAttempt hook must sanitize too.
+func TestSanitizeEmptyAssistantStreamE2E(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, FixEmptyAssistant: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "up", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	body := `{"model":"m","stream":true,"messages":[` +
+		`{"role":"user","content":"hi"},` +
+		`{"role":"assistant","content":"  "},` +
+		`{"role":"user","content":"go on"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var sent struct {
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("upstream body not JSON: %v (%s)", err, gotBody)
+	}
+	if len(sent.Messages) != 2 || sent.Messages[0].Role != "user" || sent.Messages[1].Role != "user" {
+		t.Fatalf("stream upstream messages=%s, want [user user]", gotBody)
+	}
+}
+
+// TestSanitizeDisabledPassesThroughE2E: with the toggle off (default), the
+// request body reaches the upstream byte-identical.
+func TestSanitizeDisabledPassesThroughE2E(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, `{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "up", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	body := `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":""},{"role":"user","content":"go on"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var sent struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("upstream body not JSON: %v (%s)", err, gotBody)
+	}
+	if len(sent.Messages) != 3 {
+		t.Fatalf("toggle off must pass all messages through, got %d: %s", len(sent.Messages), gotBody)
+	}
+}
+
 func TestFailover_IgnoresRetryAfterAcrossTargetsStreaming(t *testing.T) {
 	var p0Time, p1Time time.Time
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

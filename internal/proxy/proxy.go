@@ -1265,6 +1265,19 @@ outer:
 			continue
 		}
 
+		if c.provider.FixEmptyAssistant {
+			upstreamProto := c.protocol
+			if c.convertTo != "" {
+				upstreamProto = c.convertTo
+			}
+			if sanitized, removed, sErr := sanitizeUpstreamBody(upstreamProto, prep.Body); sErr != nil {
+				slog.Warn("proxy: sanitize upstream body failed; passing through", "provider", c.provider.Name, "err", sErr)
+			} else if removed > 0 {
+				prep.Body = sanitized
+				slog.Info("proxy: removed empty assistant messages", "provider", c.provider.Name, "model", c.modelName, "removed", removed)
+			}
+		}
+
 		rewrittenBody := prep.Body
 		upstreamURL, err := url.Parse(store.JoinProviderURL(c.provider.BaseURL, prep.Path))
 		if err != nil {
@@ -2037,6 +2050,19 @@ outer:
 				LatencyMs:    0,
 			})
 			continue
+		}
+
+		if c.provider.FixEmptyAssistant {
+			upstreamProto := c.protocol
+			if c.convertTo != "" {
+				upstreamProto = c.convertTo
+			}
+			if sanitized, removed, sErr := sanitizeUpstreamBody(upstreamProto, prep.Body); sErr != nil {
+				slog.Warn("proxy: sanitize upstream body failed; passing through", "provider", c.provider.Name, "err", sErr)
+			} else if removed > 0 {
+				prep.Body = sanitized
+				slog.Info("proxy: removed empty assistant messages", "provider", c.provider.Name, "model", c.modelName, "removed", removed)
+			}
 		}
 
 		rewrittenBody := prep.Body

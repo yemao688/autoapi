@@ -440,6 +440,8 @@
       "upstreamKey": "Upstream key",
       "upstreamKeyCurrent": "Current: {key}",
       "upstreamKeyHelp": "Encrypted key used to forward requests to this upstream. Leave empty to keep the existing key.",
+      "fixEmptyAssistant": "Fix empty assistant messages",
+      "fixEmptyAssistantHelp": "Strip assistant messages that have empty content and no tool calls, for strict upstreams (e.g. Kimi) that reject them with 400.",
       "showKey": "Show key",
       "hideKey": "Hide key",
       "copyKey": "Copy key",

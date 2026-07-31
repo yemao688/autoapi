@@ -342,6 +342,7 @@ export namespace model {
 	    responses_enabled: boolean;
 	    messages_enabled: boolean;
 	    gemini_enabled: boolean;
+	    fix_empty_assistant: boolean;
 	    enabled: boolean;
 	    created_at: number;
 	    updated_at: number;
@@ -366,6 +367,7 @@ export namespace model {
 	        this.responses_enabled = source["responses_enabled"];
 	        this.messages_enabled = source["messages_enabled"];
 	        this.gemini_enabled = source["gemini_enabled"];
+	        this.fix_empty_assistant = source["fix_empty_assistant"];
 	        this.enabled = source["enabled"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -957,6 +959,7 @@ export namespace model {
 	    responses_enabled: boolean;
 	    messages_enabled: boolean;
 	    gemini_enabled: boolean;
+	    fix_empty_assistant: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProviderInput(source);
@@ -971,6 +974,7 @@ export namespace model {
 	        this.responses_enabled = source["responses_enabled"];
 	        this.messages_enabled = source["messages_enabled"];
 	        this.gemini_enabled = source["gemini_enabled"];
+	        this.fix_empty_assistant = source["fix_empty_assistant"];
 	    }
 	}
 	export class ProviderModelUpdate {

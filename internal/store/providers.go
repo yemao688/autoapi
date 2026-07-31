@@ -16,7 +16,7 @@ func (s *Store) ListProviders() ([]model.Provider, error) {
 		SELECT id, name, base_url, status,
 		       key_ciphertext, key_nonce, key_masked,
 		       models_count, monthly_tokens, avg_latency_ms,
-		       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, enabled,
+		       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, fix_empty_assistant, enabled,
 		       created_at, updated_at
 		FROM providers ORDER BY name ASC`)
 	if err != nil {
@@ -31,7 +31,7 @@ func (s *Store) ListProviders() ([]model.Provider, error) {
 			&p.ID, &p.Name, &p.BaseURL, &p.Status,
 			&p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked,
 			&p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs,
-			&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.Enabled,
+			&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.FixEmptyAssistant, &p.Enabled,
 			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan provider: %w", err)
@@ -50,7 +50,7 @@ func (s *Store) GetProvider(id string) (*model.Provider, error) {
 		SELECT id, name, base_url, status,
 		       key_ciphertext, key_nonce, key_masked,
 		       models_count, monthly_tokens, avg_latency_ms,
-		       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, enabled,
+		       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, fix_empty_assistant, enabled,
 		       created_at, updated_at
 		FROM providers WHERE id = ?`, id)
 
@@ -59,7 +59,7 @@ func (s *Store) GetProvider(id string) (*model.Provider, error) {
 		&p.ID, &p.Name, &p.BaseURL, &p.Status,
 		&p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked,
 		&p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs,
-		&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.Enabled,
+		&p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.FixEmptyAssistant, &p.Enabled,
 		&p.CreatedAt, &p.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -91,14 +91,14 @@ func (s *Store) GetProvidersForIDs(ids []string) ([]model.Provider, error) {
 		for i, id := range chunk {
 			marks[i], args[i] = "?", id
 		}
-		rows, err := s.db.Query(`SELECT id, name, base_url, status, key_ciphertext, key_nonce, key_masked, models_count, monthly_tokens, avg_latency_ms, last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, enabled, created_at, updated_at FROM providers WHERE id IN (`+strings.Join(marks, ",")+`)`, args...)
+		rows, err := s.db.Query(`SELECT id, name, base_url, status, key_ciphertext, key_nonce, key_masked, models_count, monthly_tokens, avg_latency_ms, last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, fix_empty_assistant, enabled, created_at, updated_at FROM providers WHERE id IN (`+strings.Join(marks, ",")+`)`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("store: get providers: %w", err)
 		}
 		scanErr := func() error {
 			for rows.Next() {
 				var p model.Provider
-				if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.Status, &p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked, &p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs, &p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+				if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.Status, &p.KeyCiphertext, &p.KeyNonce, &p.KeyMasked, &p.ModelsCount, &p.MonthlyTokens, &p.AvgLatencyMs, &p.LastTestedAt, &p.ErrorMessage, &p.IsCustom, &p.ResponsesEnabled, &p.MessagesEnabled, &p.GeminiEnabled, &p.FixEmptyAssistant, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
 					return err
 				}
 				out = append(out, p)
@@ -121,17 +121,18 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 	id := makeID()
 
 	p := &model.Provider{
-		ID:               id,
-		Name:             in.Name,
-		BaseURL:          in.BaseURL,
-		Status:           model.ProviderStatusUnknown,
-		IsCustom:         in.IsCustom,
-		ResponsesEnabled: false,
-		MessagesEnabled:  false,
-		GeminiEnabled:    false,
-		Enabled:          true,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                id,
+		Name:              in.Name,
+		BaseURL:           in.BaseURL,
+		Status:            model.ProviderStatusUnknown,
+		IsCustom:          in.IsCustom,
+		ResponsesEnabled:  false,
+		MessagesEnabled:   false,
+		GeminiEnabled:     false,
+		FixEmptyAssistant: in.FixEmptyAssistant,
+		Enabled:           true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
 	if err := s.execTx(func(tx *sql.Tx) error {
@@ -139,15 +140,15 @@ func (s *Store) CreateProvider(in model.ProviderInput) (*model.Provider, error) 
 			INSERT INTO providers (id, name, base_url, status,
 			                       key_ciphertext, key_nonce, key_masked,
 			                       models_count, monthly_tokens, avg_latency_ms,
-			                       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, enabled,
+			                       last_tested_at, error_message, is_custom, responses_enabled, messages_enabled, gemini_enabled, fix_empty_assistant, enabled,
 			                       created_at, updated_at)
 			VALUES (?, ?, ?, ?,
 			        NULL, NULL, '',
 			        0, 0, 0,
-			        0, '', ?, ?, ?, ?, 1,
+			        0, '', ?, ?, ?, ?, ?, 1,
 			        ?, ?)`,
 			p.ID, p.Name, p.BaseURL, p.Status,
-			boolInt(p.IsCustom), boolInt(p.ResponsesEnabled), boolInt(p.MessagesEnabled), boolInt(p.GeminiEnabled), p.CreatedAt, p.UpdatedAt)
+			boolInt(p.IsCustom), boolInt(p.ResponsesEnabled), boolInt(p.MessagesEnabled), boolInt(p.GeminiEnabled), boolInt(p.FixEmptyAssistant), p.CreatedAt, p.UpdatedAt)
 		if err != nil {
 			return err
 		}
@@ -167,9 +168,9 @@ func (s *Store) UpdateProvider(id string, in model.ProviderInput) (*model.Provid
 
 	if err := s.execTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
-			UPDATE providers SET name=?, base_url=?, is_custom=?, updated_at=?
+			UPDATE providers SET name=?, base_url=?, is_custom=?, fix_empty_assistant=?, updated_at=?
 			WHERE id=?`,
-			in.Name, in.BaseURL, boolInt(in.IsCustom), now, id)
+			in.Name, in.BaseURL, boolInt(in.IsCustom), boolInt(in.FixEmptyAssistant), now, id)
 		if err != nil {
 			return err
 		}

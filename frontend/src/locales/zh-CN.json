@@ -440,6 +440,8 @@
       "upstreamKey": "上游密钥",
       "upstreamKeyCurrent": "当前：{key}",
       "upstreamKeyHelp": "用于向该上游转发请求的加密密钥。留空可保持现有密钥不变。",
+      "fixEmptyAssistant": "修复空 assistant 消息",
+      "fixEmptyAssistantHelp": "为严格上游（如 Kimi）删除无工具调用的空 assistant 消息，避免 400 报错。",
       "showKey": "显示密钥",
       "hideKey": "隐藏密钥",
       "copyKey": "复制密钥",
