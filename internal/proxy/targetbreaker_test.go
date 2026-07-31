@@ -29,8 +29,13 @@ func TestTargetBreakerRollingWindowAndFailureClasses(t *testing.T) {
 	if !b.allow(now.Add(window+5*time.Second), threshold, window) {
 		t.Fatal("aged failures did not recover")
 	}
-	if !targetFailure(io.ErrUnexpectedEOF, 0) || !targetFailure(nil, 400) || !targetFailure(nil, 401) || !targetFailure(nil, 403) || !targetFailure(nil, 429) || !targetFailure(nil, 503) {
+	if !targetFailure(io.ErrUnexpectedEOF, 0) || !targetFailure(nil, 401) || !targetFailure(nil, 403) || !targetFailure(nil, 404) || !targetFailure(nil, 429) || !targetFailure(nil, 503) {
 		t.Fatal("required failure classes were not counted")
+	}
+	for _, status := range []int{400, 413, 422} {
+		if targetFailure(nil, status) {
+			t.Fatalf("deterministic client error %d must not trip the target breaker", status)
+		}
 	}
 	if targetFailure(context.Canceled, 499) {
 		t.Fatal("client abort counted")

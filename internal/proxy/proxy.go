@@ -1309,6 +1309,7 @@ outer:
 		// Retry-After is local to this candidate. A target switch must never
 		// delay the first attempt on the next target.
 		retryAfter := time.Duration(0)
+	retry:
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
 			// Global attempt cap: stops the N×(M+1) explosion when
 			// many candidates each have a high MaxRetries. The cap is
@@ -1778,9 +1779,11 @@ outer:
 				// computed exponential delay. parseRetryAfter
 				// tolerates missing/malformed values by returning 0,
 				// which means "use the regular backoff".
+				attemptHasRetryAfter := false
 				if buf.statusCode == 429 || buf.statusCode == 503 {
 					if v := parseRetryAfter(buf.header.Get("Retry-After")); v > 0 {
 						retryAfter = v
+						attemptHasRetryAfter = true
 					}
 				}
 				chainErr := attemptErr
@@ -1808,6 +1811,16 @@ outer:
 					Error:                chainErr.Error(),
 					LatencyMs:            latencyMs,
 				})
+				// Deterministic-for-this-target failures (404, 429/503
+				// without Retry-After, unknown 4xx) gain nothing from a
+				// same-target retry: fail over to the next candidate now.
+				if !sameTargetRetryWorthwhile(effectiveStatus, attemptHasRetryAfter) {
+					slog.Debug("proxy: skip same-target retry, failing over",
+						"provider", c.provider.Name,
+						"model", c.modelName,
+						"status", effectiveStatus)
+					break retry
+				}
 				continue
 			}
 		}
@@ -2065,6 +2078,7 @@ outer:
 		retryAfter := time.Duration(0)
 		var finalCause error
 		candidateAttempted := false
+	retry:
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
 			// Global attempt cap: stops the N×(M+1) explosion when
 			// many candidates each have a high MaxRetries.
@@ -2340,6 +2354,16 @@ outer:
 					"attempt", attempt,
 					"maxRetries", c.maxRetries,
 					"retry_after", result.RetryAfter)
+				// Deterministic-for-this-target failures (404, 429/503
+				// without Retry-After, unknown 4xx) gain nothing from a
+				// same-target retry: fail over to the next candidate now.
+				if !sameTargetRetryWorthwhile(result.StatusCode, result.RetryAfter > 0) {
+					slog.Debug("proxy: stream skip same-target retry, failing over",
+						"provider", c.provider.Name,
+						"model", c.modelName,
+						"status", result.StatusCode)
+					break retry
+				}
 				continue
 			default:
 				providerProbe.cancel()

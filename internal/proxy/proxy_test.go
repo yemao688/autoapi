@@ -2359,7 +2359,12 @@ func TestFailover_OpensCircuitAfterThreshold(t *testing.T) {
 	}
 }
 
-func TestFailover_Upstream400RetriesAndFailsOver(t *testing.T) {
+// TestFailover_Upstream400FastFailNoFailoverNoPenalty verifies the O1
+// semantics: 400 invalid_request_error is a deterministic request-shape
+// error — the proxy returns it to the client immediately without
+// same-target retry, without failover, and without any breaker penalty
+// (a malformed client request must not trip provider/target breakers).
+func TestFailover_Upstream400FastFailNoFailoverNoPenalty(t *testing.T) {
 	var p0Hits, p1Hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/p0/") {
@@ -2398,27 +2403,34 @@ func TestFailover_Upstream400RetriesAndFailsOver(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected failover success after upstream 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad request") {
+		t.Fatalf("expected upstream 400 returned immediately, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if p0Hits != 1 {
-		t.Fatalf("expected P0 hit once, got %d", p0Hits)
+		t.Fatalf("expected P0 hit exactly once (no same-target retry), got %d", p0Hits)
 	}
-	if p1Hits != 1 {
-		t.Fatalf("expected P1 hit once, got %d", p1Hits)
+	if p1Hits != 0 {
+		t.Fatalf("expected no failover to P1 on deterministic 400, got %d hits", p1Hits)
 	}
 	targetStatuses := p.TargetBreakerStatuses()
 	totalTargetFailures := 0
 	for _, ts := range targetStatuses {
 		totalTargetFailures += ts.FailureCount
 	}
-	if p.breakerFor("p0").ConsecutiveFailures() != 1 || totalTargetFailures != 1 {
-		t.Fatalf("upstream 400 should penalize breaker state exactly once: provider=%d targets=%+v", p.breakerFor("p0").ConsecutiveFailures(), targetStatuses)
+	if got := p.breakerFor("p0").ConsecutiveFailures(); got != 0 || totalTargetFailures != 0 {
+		t.Fatalf("deterministic 400 must be breaker-neutral: provider=%d targets=%+v", got, targetStatuses)
 	}
 }
 
-func TestFailover_AllTargetsUpstream400Returns400WithBreakerPenalty(t *testing.T) {
+// TestFailover_AllTargetsUpstream400Returns400WithoutBreakerPenalty: when
+// every target rejects with a deterministic 400, the client gets the 400
+// but neither the provider nor the target breaker is penalized — the
+// failure is caused by the request, not by provider health. MaxRetries is
+// configured but must NOT be exercised: 400 is non-retryable.
+func TestFailover_AllTargetsUpstream400Returns400WithoutBreakerPenalty(t *testing.T) {
+	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, `{"error":{"message":"provider rejected request"}}`)
 	}))
@@ -2433,12 +2445,15 @@ func TestFailover_AllTargetsUpstream400Returns400WithBreakerPenalty(t *testing.T
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "provider rejected request") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if p.breakerFor("p").ConsecutiveFailures() != 1 {
-		t.Fatal("400 did not penalize provider breaker")
+	if hits != 1 {
+		t.Fatalf("expected exactly one upstream attempt (400 is non-retryable), got %d", hits)
+	}
+	if got := p.breakerFor("p").ConsecutiveFailures(); got != 0 {
+		t.Fatalf("deterministic 400 must not penalize provider breaker, got %d", got)
 	}
 	for _, status := range p.TargetBreakerStatuses() {
-		if status.FailureCount != 1 {
-			t.Fatalf("400 did not penalize target breaker exactly once: %+v", status)
+		if status.FailureCount != 0 {
+			t.Fatalf("deterministic 400 must not penalize target breaker: %+v", status)
 		}
 	}
 }
@@ -2460,8 +2475,13 @@ func TestFailover_StreamAllTargetsUpstream400Returns400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "stream provider rejected request") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if p.breakerFor("p").ConsecutiveFailures() != 1 || p.TargetBreakerStatuses()[0].FailureCount != 1 {
-		t.Fatal("stream upstream 400 did not penalize breakers exactly once")
+	if got := p.breakerFor("p").ConsecutiveFailures(); got != 0 {
+		t.Fatalf("stream deterministic 400 must not penalize provider breaker, got %d", got)
+	}
+	for _, status := range p.TargetBreakerStatuses() {
+		if status.FailureCount != 0 {
+			t.Fatalf("stream deterministic 400 must not penalize target breaker: %+v", status)
+		}
 	}
 }
 
@@ -2616,6 +2636,49 @@ func TestNoMatchingRuleReturns503(t *testing.T) {
 	}
 	if !strings.Contains(body.Error.Message, "user-requested-model") {
 		t.Fatalf("expected error message to mention the request model, got %q", body.Error.Message)
+	}
+}
+
+// TestPreflightChainEntryRecordedForNoMatchingRule verifies that requests
+// failing BEFORE any upstream attempt persist a synthetic chain entry
+// (UpstreamStarted=false) so chain-level debugging can see them;
+// previously these error logs had an empty chain.
+func TestPreflightChainEntryRecordedForNoMatchingRule(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("upstream should not be called when no model rule matches; got %s", r.URL.Path)
+	}))
+	defer srv.Close()
+	store := &mockStore{
+		providers: map[string]*model.Provider{
+			"default": {ID: "default", Name: "Default", BaseURL: srv.URL, Enabled: true},
+		},
+		rules:   []model.ModelRule{},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(store, &mockService{}, 0, nil)
+	defer p.Shutdown()
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"ghost-model","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	logEntry := waitForLog(t, store)
+	if len(logEntry.Chain) != 1 {
+		t.Fatalf("expected exactly one preflight chain entry, got %+v", logEntry.Chain)
+	}
+	entry := logEntry.Chain[0]
+	if entry.UpstreamStarted {
+		t.Fatalf("preflight chain entry must have UpstreamStarted=false: %+v", entry)
+	}
+	if entry.Status != "no_matching_rule" {
+		t.Fatalf("expected chain entry status=no_matching_rule, got %q", entry.Status)
+	}
+	if entry.Error == "" {
+		t.Fatal("expected preflight chain entry to carry the error message")
 	}
 }
 
@@ -5619,6 +5682,179 @@ func TestFailover_RetryAfterHonoredWithinCandidate(t *testing.T) {
 	}
 	if gap := times[1].Sub(times[0]); gap < 900*time.Millisecond || gap > 2*time.Second {
 		t.Fatalf("Retry-After was not honored within candidate: gap=%v", gap)
+	}
+}
+
+// TestFailover_429WithoutRetryAfterSkipsSameTargetRetry verifies the O2
+// semantics: a 429 WITHOUT a Retry-After hint is deterministic for the
+// target that produced it — the overloaded engine queued 32-48s before
+// rejecting, so hammering it again in place never succeeds. The proxy
+// must skip the configured same-target retries and fail over to the next
+// candidate immediately. (With Retry-After, in-place retry is kept — see
+// TestFailover_RetryAfterHonoredWithinCandidate.)
+func TestFailover_429WithoutRetryAfterSkipsSameTargetRetry(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"engine_overloaded"}}`)
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, `{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "rl-no-hint", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"rl-no-hint","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected failover success, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if p0Hits != 1 {
+		t.Fatalf("expected P0 hit exactly once (same-target retry skipped without Retry-After), got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once, got %d", p1Hits)
+	}
+}
+
+// TestFailover_Stream429WithoutRetryAfterSkipsSameTargetRetry is the
+// streaming counterpart: 429 without Retry-After must break the
+// same-target retry loop and fail over to the next candidate immediately.
+func TestFailover_Stream429WithoutRetryAfterSkipsSameTargetRetry(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"engine_overloaded"}}`)
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, "data: {\"id\":\"p1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "stream-rl-no-hint", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"stream-rl-no-hint","stream":true,"messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected stream failover success, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if p0Hits != 1 {
+		t.Fatalf("expected P0 hit exactly once (same-target retry skipped without Retry-After), got %d", p0Hits)
+	}
+	if p1Hits != 1 {
+		t.Fatalf("expected P1 hit once, got %d", p1Hits)
+	}
+}
+
+// TestFailover_404SkipsSameTargetRetryButFailsOver: 404 model_not_found is
+// deterministic per target, so the same-target retry is skipped — but another
+// provider may serve the model, so failover still happens. The TARGET breaker
+// keeps the penalty (misconfigured target) while the PROVIDER breaker does not.
+func TestFailover_404SkipsSameTargetRetryButFailsOver(t *testing.T) {
+	var p0Hits, p1Hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/p0/") {
+			p0Hits++
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":{"message":"model_not_found: no such model"}}`)
+			return
+		}
+		p1Hits++
+		_, _ = io.WriteString(w, `{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{
+			"p0": {ID: "p0", Name: "P0", BaseURL: srv.URL + "/p0", Enabled: true},
+			"p1": {ID: "p1", Name: "P1", BaseURL: srv.URL + "/p1", Enabled: true},
+		},
+		rules: []model.ModelRule{{ID: "r", Name: "rl-404", Enabled: true, Targets: []model.ModelRuleTarget{
+			{ID: "t0", ProviderID: "p0", ModelName: "m0", MaxRetries: 2, Enabled: true},
+			{ID: "t1", ProviderID: "p1", ModelName: "m1", Enabled: true},
+		}}},
+		apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"rl-404","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected failover success after 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if p0Hits != 1 || p1Hits != 1 {
+		t.Fatalf("expected exactly one attempt per provider (no same-target 404 retry), got p0=%d p1=%d", p0Hits, p1Hits)
+	}
+	if got := p.breakerFor("p0").ConsecutiveFailures(); got != 0 {
+		t.Fatalf("404 must not penalize provider breaker, got %d", got)
+	}
+	totalTargetFailures := 0
+	for _, ts := range p.TargetBreakerStatuses() {
+		totalTargetFailures += ts.FailureCount
+	}
+	if totalTargetFailures != 1 {
+		t.Fatalf("404 must penalize target breaker exactly once: %+v", p.TargetBreakerStatuses())
+	}
+}
+
+// TestUpstream401StillPenalizesProvider guards against over-exemption:
+// auth/quota failures ARE provider-attributable and must keep breaker +
+// health penalties.
+func TestUpstream401StillPenalizesProvider(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"message":"invalid key"}}`)
+	}))
+	defer srv.Close()
+	st := &mockStore{providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true}}, rules: []model.ModelRule{{ID: "r", Name: "rl-401", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "t", ProviderID: "p", ModelName: "m", Enabled: true}}}}, apiKeys: []model.ApiKey{{ID: "key1", Enabled: true}}}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"rl-401","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	p.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := p.breakerFor("p").ConsecutiveFailures(); got != 1 {
+		t.Fatalf("401 must still penalize provider breaker, got %d", got)
+	}
+	provider, _ := st.GetProvider("p")
+	if provider.Status != model.ProviderStatusError {
+		t.Fatalf("401 must mark provider health error, got %q", provider.Status)
 	}
 }
 

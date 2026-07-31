@@ -27,18 +27,22 @@ const (
 
 // CategorizeError classifies an upstream response. If err is non-nil, the error
 // type takes precedence over the status code. Client-side 4xx errors are
-// generally non-retryable, except 400/401/403/404/408/409/429 which may succeed
+// generally non-retryable, except 401/403/404/408/409/429 which may succeed
 // on a different provider; 5xx and network errors are retryable. Unknown 4xx
 // codes (e.g. 451, 460) are ALSO retryable: a misbehaving provider returning
 // an odd status should not kill failover for the rest of the chain — let the
-// next candidate try. The explicit NonRetryable list (405/406/413/414/
-// 415/422/501) is reserved for HTTP codes whose semantics are clearly
-// "client error, do not retry" per RFC 9110 and OpenAI API behavior.
+// next candidate try. The explicit NonRetryable list (400/405/406/413/414/
+// 415/422/501) is reserved for codes whose semantics are clearly
+// "the request itself is wrong, no provider can fix it" per RFC 9110 and
+// OpenAI API behavior: 400 invalid_request_error is a deterministic
+// request-shape error in the same class as 422 — production logs show
+// retrying and failing over such requests only burns attempt budget and
+// delays the (identical) error reaching the client.
 //
 // Note: this is a categorizer only — it does NOT decide whether to penalize
 // the provider's circuit breaker. See isCircuitBreakerFailure for that:
-// network errors and any upstream error status (4xx and 5xx) all count, so a
-// retryable 4xx will failover AND penalize the breaker once retries exhaust.
+// network errors and provider-attributable error statuses (401/403/5xx/…)
+// count, while deterministic client errors (400/404/413/422) never do.
 func CategorizeError(err error, statusCode int) ErrorCategory {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -56,7 +60,7 @@ func CategorizeError(err error, statusCode int) ErrorCategory {
 	// retryable (auth/quota/5xx/unknown 4xx) or out of the failure
 	// path (< 400).
 	switch statusCode {
-	case 405, 406, 413, 414, 415, 422, 501:
+	case 400, 405, 406, 413, 414, 415, 422, 501:
 		return CategoryNonRetryable
 	}
 	if statusCode >= 400 {
@@ -65,12 +69,34 @@ func CategorizeError(err error, statusCode int) ErrorCategory {
 	return CategoryNonRetryable
 }
 
+// sameTargetRetryWorthwhile reports whether a retryable attempt should be
+// retried against the SAME target. Same-target retries only help failures
+// that can plausibly clear within milliseconds-to-seconds: transport errors
+// (no response yet), 5xx, 408, and 429/503 carrying an explicit Retry-After
+// hint. Everything else retryable (404 model_not_found, 409, 429/503 without
+// a hint, unknown 4xx) is deterministic for this target — production logs
+// show such retries never succeed and only add latency (32-48s per 429 that
+// queues before rejecting) before the inevitable failover. Those go straight
+// to the next candidate.
+func sameTargetRetryWorthwhile(statusCode int, hasRetryAfter bool) bool {
+	if statusCode == 0 || statusCode >= 500 || statusCode == 408 {
+		return true
+	}
+	if (statusCode == 429 || statusCode == 503) && hasRetryAfter {
+		return true
+	}
+	return false
+}
+
 // isCircuitBreakerFailure reports whether a failure should count toward the
-// provider circuit breaker. True network/transport failures and ANY upstream
-// error status (4xx and 5xx) open the breaker: a provider that keeps
-// rejecting requests (expired keys, quota/arrearage, suspended accounts) is
-// just as unavailable as one that times out. Client-side cancellations never
-// count.
+// provider circuit breaker. True network/transport failures and
+// provider-attributable error statuses (401/403 auth+quota, 408/409/429,
+// 5xx, unknown 4xx) open the breaker: a provider that keeps rejecting
+// requests (expired keys, quota/arrearage, suspended accounts) is just as
+// unavailable as one that times out. Client-side cancellations never count.
+// Deterministic CLIENT errors (400/404/413/422) never count either: the
+// failure is caused by the request, not by the provider's health — a client
+// sending malformed or oversized requests must not trip provider breakers.
 func isCircuitBreakerFailure(err error, statusCode int) bool {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -80,6 +106,10 @@ func isCircuitBreakerFailure(err error, statusCode int) bool {
 			return true
 		}
 		return isNetError(err)
+	}
+	switch statusCode {
+	case 400, 404, 413, 422:
+		return false
 	}
 	return statusCode >= 400
 }

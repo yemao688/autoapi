@@ -99,6 +99,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode, logEntry.Error = status, "authentication failed"
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), "authentication failed")
 		return
 	}
 	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
@@ -106,6 +107,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode, logEntry.Error = http.StatusBadRequest, err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	_ = r.Body.Close()
@@ -113,6 +115,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = respReq.Model, respReq.Model, respReq.Stream
@@ -134,12 +137,14 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
+		appendPreflightChainEntry(logEntry, errType, err.Error())
 		return
 	}
 	if respReq.Stream && hasUnsupportedStreamConversion(candidates, ProtocolOpenAIResponses) {
 		msg := "Streaming protocol conversion is not yet supported"
 		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
+		appendPreflightChainEntry(logEntry, "unsupported_feature", msg)
 		return
 	}
 	// forwardWithFailover preserves the original JSON and uses r.URL.Path,
@@ -163,6 +168,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode, logEntry.Error = status, "authentication failed"
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), "authentication failed")
 		return
 	}
 	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
@@ -170,6 +176,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode, logEntry.Error = http.StatusBadRequest, err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	_ = r.Body.Close()
@@ -177,6 +184,7 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	logEntry.Model, logEntry.RouteLabel, logEntry.IsStream = msgReq.Model, msgReq.Model, msgReq.Stream
@@ -198,12 +206,14 @@ func (p *Proxy) handleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
+		appendPreflightChainEntry(logEntry, errType, err.Error())
 		return
 	}
 	if msgReq.Stream && hasUnsupportedStreamConversion(candidates, ProtocolAnthropicMessages) {
 		msg := "Streaming protocol conversion is not yet supported"
 		p.writeError(w, http.StatusUnprocessableEntity, "unsupported_feature", msg)
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, msg
+		appendPreflightChainEntry(logEntry, "unsupported_feature", msg)
 		return
 	}
 	p.forwardWithFailover(w, r, body, candidates, msgReq.Stream, 0, logEntry)
@@ -225,6 +235,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, status, "invalid_request_error", "Invalid API key")
 		logEntry.StatusCode, logEntry.Error = status, "authentication failed"
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), "authentication failed")
 		return
 	}
 	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
@@ -233,6 +244,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.writeError(w, http.StatusNotFound, "invalid_request_error", err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusNotFound, err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	stream := action == "streamGenerateContent"
@@ -246,6 +258,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode, logEntry.Error = http.StatusBadRequest, err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	_ = r.Body.Close()
@@ -254,6 +267,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusUnprocessableEntity, err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	_ = gReq
@@ -280,6 +294,7 @@ func (p *Proxy) handleGemini(w http.ResponseWriter, r *http.Request) {
 		}
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode, logEntry.Error = http.StatusServiceUnavailable, err.Error()
+		appendPreflightChainEntry(logEntry, errType, err.Error())
 		return
 	}
 	p.forwardWithFailover(w, r, body, candidates, stream, len(body)/16, logEntry)
@@ -384,6 +399,19 @@ func (p *Proxy) appendUnsupportedFeaturePreflightChain(logEntry *model.RequestLo
 	}
 }
 
+// appendPreflightChainEntry records a synthetic chain entry for requests that
+// fail before any upstream attempt (auth failure, body read, request parse,
+// no matching rule). Without it these error logs persist an empty chain and
+// are invisible to chain-level debugging.
+func appendPreflightChainEntry(logEntry *model.RequestLog, status, errMsg string) {
+	logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+		UpstreamStarted: false,
+		AttemptOrder:    len(logEntry.Chain) + 1,
+		Status:          status,
+		Error:           errMsg,
+	})
+}
+
 type chatRequest struct {
 	Model    string            `json:"model"`
 	Messages []json.RawMessage `json:"messages"`
@@ -426,6 +454,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode = status
 		logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 		logEntry.Error = "authentication failed"
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), "authentication failed")
 		return
 	}
 	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
@@ -436,6 +465,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	_ = r.Body.Close()
@@ -445,6 +475,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
 		logEntry.StatusCode = http.StatusUnprocessableEntity
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	if chatReq.Task == "" {
@@ -498,6 +529,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, errType, err.Error())
 		return
 	}
 
@@ -529,6 +561,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode = status
 		logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
 		logEntry.Error = "authentication failed"
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), "authentication failed")
 		return
 	}
 	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
@@ -539,6 +572,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	_ = r.Body.Close()
@@ -549,6 +583,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 
@@ -579,6 +614,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, errType, err.Error())
 		return
 	}
 
@@ -622,6 +658,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		logEntry.StatusCode = status
 		logEntry.APIKeyID = ""
 		logEntry.Error = "authentication failed"
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), "authentication failed")
 		return
 	}
 	logEntry.APIKeyID, logEntry.APIKeyName = apiKeyID, apiKeyName
@@ -632,6 +669,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		logEntry.StatusCode = http.StatusBadRequest
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, string(model.AttemptOutcomePreflightError), err.Error())
 		return
 	}
 	_ = r.Body.Close()
@@ -691,6 +729,7 @@ func (p *Proxy) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusServiceUnavailable, errType, err.Error())
 		logEntry.StatusCode = http.StatusServiceUnavailable
 		logEntry.Error = err.Error()
+		appendPreflightChainEntry(logEntry, errType, err.Error())
 		return
 	}
 
