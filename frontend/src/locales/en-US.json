@@ -137,6 +137,8 @@
       "breakerThresholdHelp": "Open a model-target breaker after this many qualifying failures in the rolling window · 1–50",
       "breakerWindow": "Target breaker window",
       "breakerWindowHelp": "How long failures remain active when deciding whether a target should open · 30–3600 seconds",
+      "streamStallTimeout": "Stream stall timeout (s)",
+      "streamStallTimeoutHelp": "After a streaming response commits, cut off the upstream (counted as an upstream failure) if no bytes arrive within this interval. -1 disables.",
       "seconds": "seconds"
     },
     "breaker": {

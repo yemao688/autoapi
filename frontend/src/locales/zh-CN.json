@@ -137,6 +137,8 @@
       "breakerThresholdHelp": "滚动窗口内达到此数量的符合条件失败后打开目标熔断器 · 1–50",
       "breakerWindow": "目标熔断窗口",
       "breakerWindowHelp": "判断目标是否应熔断时，失败记录保持有效的时间 · 30–3600 秒",
+      "streamStallTimeout": "流停滞超时（秒）",
+      "streamStallTimeoutHelp": "流式响应提交后，相邻数据块间隔超过该值则判定上游停滞并切断（记为上游故障）。-1 表示禁用。",
       "seconds": "秒"
     },
     "breaker": {

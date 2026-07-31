@@ -42,13 +42,11 @@ func TestParseResponsesStreamTerminalAndUsage(t *testing.T) {
 	}
 }
 
-func TestResponsesTerminalFailuresAreNotSuccessful(t *testing.T) {
-	for _, typ := range []string{"response.failed", "response.incomplete"} {
-		var acc streamUsageAccumulator
-		acc.Feed([]byte("data: {\"type\":\"" + typ + "\"}\n\n"))
-		if acc.Successful() {
-			t.Fatalf("%s incorrectly successful", typ)
-		}
+func TestResponsesFailedTerminalIsNotSuccessful(t *testing.T) {
+	var acc streamUsageAccumulator
+	acc.Feed([]byte("data: {\"type\":\"response.failed\"}\n\n"))
+	if acc.Successful() {
+		t.Fatal("response.failed incorrectly successful")
 	}
 }
 

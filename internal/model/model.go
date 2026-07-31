@@ -603,11 +603,13 @@ type AdvancedSettings struct {
 	FeatureCapabilityEnforcement string `json:"feature_capability_enforcement"` // "observe" | "enforce"
 	TargetBreakerThreshold       int    `json:"target_breaker_threshold"`
 	TargetBreakerWindowSeconds   int    `json:"target_breaker_window_seconds"`
+	StreamStallTimeoutSeconds    int    `json:"stream_stall_timeout_seconds"` // 0 = default, -1 = disabled
 }
 
 const (
 	DefaultTargetBreakerThreshold     = 5
 	DefaultTargetBreakerWindowSeconds = 300
+	DefaultStreamStallTimeoutSeconds  = 300
 )
 
 func NormalizeTargetBreakerThreshold(v int) int {
@@ -624,12 +626,26 @@ func NormalizeTargetBreakerWindowSeconds(v int) int {
 	return v
 }
 
+func NormalizeStreamStallTimeoutSeconds(v int) int {
+	if v < 0 {
+		return -1
+	}
+	if v == 0 || v > 3600 {
+		return DefaultStreamStallTimeoutSeconds
+	}
+	if v < 30 {
+		return 30
+	}
+	return v
+}
+
 func NormalizeTargetBreakerSettings(s *AdvancedSettings) {
 	if s == nil {
 		return
 	}
 	s.TargetBreakerThreshold = NormalizeTargetBreakerThreshold(s.TargetBreakerThreshold)
 	s.TargetBreakerWindowSeconds = NormalizeTargetBreakerWindowSeconds(s.TargetBreakerWindowSeconds)
+	s.StreamStallTimeoutSeconds = NormalizeStreamStallTimeoutSeconds(s.StreamStallTimeoutSeconds)
 }
 
 // LoggingSettings configures the application diagnostic logger. The fields

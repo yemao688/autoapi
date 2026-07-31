@@ -212,6 +212,7 @@ func (s *Store) defaultSettings() model.Settings {
 			FeatureCapabilityEnforcement: model.FeatureCapabilityEnforcementObserve,
 			TargetBreakerThreshold:       model.DefaultTargetBreakerThreshold,
 			TargetBreakerWindowSeconds:   model.DefaultTargetBreakerWindowSeconds,
+			StreamStallTimeoutSeconds:    model.DefaultStreamStallTimeoutSeconds,
 		},
 		Logging: model.LoggingSettings{
 			Enabled:    true,

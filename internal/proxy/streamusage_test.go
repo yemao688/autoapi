@@ -86,7 +86,6 @@ func TestStreamUsageAccumulatorProtocolErrors(t *testing.T) {
 	}{
 		{"responses error", `data: {"type":"error","code":"overloaded","message":"server overloaded"}` + "\n\n", "server overloaded"},
 		{"responses failed", `data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"provider failed"}}}` + "\n\n", "provider failed"},
-		{"responses incomplete", `data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}` + "\n\n", "max_output_tokens"},
 		{"anthropic error", `data: {"type":"error","error":{"type":"overloaded_error","message":"anthropic overloaded"}}` + "\n\n", "anthropic overloaded"},
 		{"gemini error", `data: {"error":{"code":503,"message":"temporarily unavailable","status":"UNAVAILABLE"}}` + "\n\n", "temporarily unavailable"},
 	}
@@ -101,5 +100,18 @@ func TestStreamUsageAccumulatorProtocolErrors(t *testing.T) {
 				t.Fatalf("message=%q, want %q", a.ErrorMessage(), tt.message)
 			}
 		})
+	}
+}
+
+func TestStreamUsageAccumulatorIncompleteIsSuccessful(t *testing.T) {
+	for _, data := range []string{
+		`data: {"type":"response.output_text.delta","delta":"hello"}` + "\n\n" + `data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}` + "\n\n",
+		`data: {"type":"response.output_text.delta","delta":"hello"}` + "\n\n" + `data: {"type":"response.incomplete","incomplete_details":{"reason":"max_output_tokens"}}` + "\n\n",
+	} {
+		a := &streamUsageAccumulator{}
+		a.Feed([]byte(data))
+		if !a.Done() || a.Errored() || !a.Successful() || !a.ProducedOutput() || a.TerminalState() != "incomplete" {
+			t.Fatalf("state: done=%v errored=%v successful=%v produced=%v terminal=%q", a.Done(), a.Errored(), a.Successful(), a.ProducedOutput(), a.TerminalState())
+		}
 	}
 }

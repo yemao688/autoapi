@@ -152,6 +152,7 @@ type Proxy struct {
 	featureEnforcement         atomic.Value
 	targetBreakerThreshold     atomic.Int32
 	targetBreakerWindowSeconds atomic.Int32
+	streamStallTimeoutSeconds  atomic.Int32
 
 	lifecycleMu    sync.Mutex
 	mu             sync.RWMutex
@@ -860,6 +861,7 @@ func (p *Proxy) loadFeatureEnforcement() {
 	model.NormalizeTargetBreakerSettings(&advanced)
 	p.targetBreakerThreshold.Store(int32(advanced.TargetBreakerThreshold))
 	p.targetBreakerWindowSeconds.Store(int32(advanced.TargetBreakerWindowSeconds))
+	p.streamStallTimeoutSeconds.Store(int32(advanced.StreamStallTimeoutSeconds))
 }
 
 func (p *Proxy) targetBreakerConfig() (int, time.Duration) {
@@ -872,6 +874,14 @@ func (p *Proxy) targetBreakerConfig() (int, time.Duration) {
 		window = model.DefaultTargetBreakerWindowSeconds
 	}
 	return threshold, time.Duration(window) * time.Second
+}
+
+func (p *Proxy) streamStallTimeout() time.Duration {
+	seconds := p.streamStallTimeoutSeconds.Load()
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (p *Proxy) featureEnforcementMode() string {
@@ -2883,9 +2893,15 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		if !committed && (converter != nil || sseGate) {
 			chunk, readErr = readBodyChunk(r.Context(), resp.Body, len(buf), conversionDeadline)
 		} else {
-			var n int
-			n, readErr = resp.Body.Read(buf)
-			chunk = buf[:n]
+			if stall := p.streamStallTimeout(); stall > 0 {
+				chunk, readErr = readBodyChunkWithError(r.Context(), resp.Body, len(buf), time.Now().Add(stall), func() error {
+					return &stallTimeoutError{timeout: stall}
+				})
+			} else {
+				var n int
+				n, readErr = resp.Body.Read(buf)
+				chunk = buf[:n]
+			}
 		}
 		if len(chunk) > 0 {
 			if werr := writeConverted(chunk); werr != nil {

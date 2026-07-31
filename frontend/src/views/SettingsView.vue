@@ -123,6 +123,7 @@ function defaultSettings(): model.Settings {
       feature_capability_enforcement: 'observe',
       target_breaker_threshold: 5,
       target_breaker_window_seconds: 300,
+      stream_stall_timeout_seconds: 300,
     },
     logging: {
       enabled: true,
@@ -175,6 +176,7 @@ function applySettings(value: model.Settings) {
   lanEnabled.value = settings.value.server.lan_enabled ?? settings.value.server.bind_address !== '127.0.0.1'
   settings.value.advanced.target_breaker_threshold ||= 5
   settings.value.advanced.target_breaker_window_seconds ||= 300
+  settings.value.advanced.stream_stall_timeout_seconds ||= 300
   normalizeLifecycleSettings(settings.value)
   activeTheme.value = settings.value.appearance.theme as any
   settingsLoaded.value = true
@@ -231,6 +233,14 @@ function normalizeBreakerSettings() {
   const advanced = settings.value.advanced
   advanced.target_breaker_threshold = Math.min(50, Math.max(1, Math.round(Number(advanced.target_breaker_threshold) || 5)))
   advanced.target_breaker_window_seconds = Math.min(3600, Math.max(30, Math.round(Number(advanced.target_breaker_window_seconds) || 300)))
+  const stallTimeout = Math.round(Number(advanced.stream_stall_timeout_seconds) || 0)
+  if (stallTimeout < 0) {
+    advanced.stream_stall_timeout_seconds = -1
+  } else if (stallTimeout === 0 || stallTimeout > 3600) {
+    advanced.stream_stall_timeout_seconds = 300
+  } else {
+    advanced.stream_stall_timeout_seconds = Math.max(30, stallTimeout)
+  }
 }
 
 async function resetTargetBreakers() {
@@ -770,6 +780,13 @@ watch(activeTheme, (t) => {
                 <span class="text-muted" style="font-size: 12.5px;">{{ t('settings.advanced.seconds') }}</span>
               </div>
               <div class="field-help">{{ t('settings.advanced.breakerWindowHelp') }}</div>
+            </div>
+            <div class="h-divider"></div>
+
+            <div class="field">
+              <div class="field-label">{{ t('settings.advanced.streamStallTimeout') }}</div>
+              <input class="input mono" style="max-width: 160px;" type="number" min="-1" max="3600" step="1" v-model.number="settings.advanced.stream_stall_timeout_seconds" @input="markSettingsDirty" @change="normalizeBreakerSettings">
+              <div class="field-help">{{ t('settings.advanced.streamStallTimeoutHelp') }}</div>
             </div>
             <div class="h-divider"></div>
 

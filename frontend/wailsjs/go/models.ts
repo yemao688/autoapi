@@ -54,6 +54,7 @@ export namespace model {
 	    feature_capability_enforcement: string;
 	    target_breaker_threshold: number;
 	    target_breaker_window_seconds: number;
+	    stream_stall_timeout_seconds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedSettings(source);
@@ -67,6 +68,7 @@ export namespace model {
 	        this.feature_capability_enforcement = source["feature_capability_enforcement"];
 	        this.target_breaker_threshold = source["target_breaker_threshold"];
 	        this.target_breaker_window_seconds = source["target_breaker_window_seconds"];
+	        this.stream_stall_timeout_seconds = source["stream_stall_timeout_seconds"];
 	    }
 	}
 	export class ApiKey {

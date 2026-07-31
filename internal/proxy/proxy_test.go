@@ -1808,6 +1808,155 @@ func TestResponsesNativeStreamingPassthroughE2E(t *testing.T) {
 	}
 }
 
+func TestResponsesNativeStreamingIncompleteMaxOutputTokensSuccess(t *testing.T) {
+	const upstream = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"complete output\"}\n\n" +
+		"event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, upstream)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	spy := &metricSpy{}
+	p.metricSink = spy
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	var recovered interface{}
+	func() {
+		defer func() { recovered = recover() }()
+		p.router.ServeHTTP(rec, req)
+	}()
+	if recovered != nil {
+		t.Fatalf("incomplete stream aborted the handler: %v", recovered)
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != upstream {
+		t.Fatalf("status=%d body=%q, want clean full stream", rec.Code, rec.Body.String())
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.AttemptOutcomeSuccess) {
+		t.Fatalf("log=%+v, want one successful attempt", log)
+	}
+	if hit, fail := st.statsFor("target"); hit != 1 || fail != 0 {
+		t.Fatalf("stats=(%d,%d), want hit=1 fail=0", hit, fail)
+	}
+	provider, _ := st.GetProvider("p")
+	if provider.Status == model.ProviderStatusError {
+		t.Fatalf("provider status=%q, want non-error", provider.Status)
+	}
+	events := spy.Events()
+	var attemptSuccesses int
+	for _, event := range events {
+		if event.Kind == model.MetricEventAttempt && event.AttemptOutcome == model.AttemptOutcomeSuccess {
+			attemptSuccesses++
+		}
+	}
+	if attemptSuccesses != 1 {
+		t.Fatalf("attempt events=%+v, want one success", events)
+	}
+}
+
+func TestResponsesNativeStreamingFailedWithErrorRemainsTruncated(t *testing.T) {
+	const upstream = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\",\"message\":\"provider failed\"}}}\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, upstream)
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	var recovered interface{}
+	func() {
+		defer func() { recovered = recover() }()
+		p.router.ServeHTTP(rec, req)
+	}()
+	if recovered == nil {
+		t.Fatal("failed stream did not abort after committed partial output")
+	}
+	if err, ok := recovered.(error); !ok || !errors.Is(err, http.ErrAbortHandler) {
+		t.Fatalf("unexpected recovery value: %v", recovered)
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.OutcomeTruncated) || !strings.Contains(log.Error, "provider failed") {
+		t.Fatalf("log=%+v, want truncated provider failure", log)
+	}
+	if hit, fail := st.statsFor("target"); hit != 0 || fail != 1 {
+		t.Fatalf("stats=(%d,%d), want hit=0 fail=1", hit, fail)
+	}
+	provider, _ := st.GetProvider("p")
+	if provider.Status != model.ProviderStatusError {
+		t.Fatalf("provider status=%q, want error", provider.Status)
+	}
+}
+
+func TestResponsesNativeStreamingPostCommitStall(t *testing.T) {
+	upstreamFirstChunk := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, upstreamFirstChunk)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	st := &mockStore{
+		providers: map[string]*model.Provider{"p": {ID: "p", Name: "P", BaseURL: srv.URL, Enabled: true, ResponsesEnabled: true}},
+		rules:     []model.ModelRule{{ID: "r", Name: "m", Enabled: true, Targets: []model.ModelRuleTarget{{ID: "target", ProviderID: "p", ModelName: "upstream", Enabled: true}}}},
+		apiKeys:   []model.ApiKey{{ID: "key1", Enabled: true}},
+	}
+	p := New(st, &mockService{}, 0, nil)
+	defer p.Shutdown()
+	p.streamStallTimeoutSeconds.Store(1)
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer key1")
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	var recovered interface{}
+	func() {
+		defer func() { recovered = recover() }()
+		p.router.ServeHTTP(rec, req)
+	}()
+	if elapsed := time.Since(started); elapsed >= 3*time.Second {
+		t.Fatalf("stall attempt took %s", elapsed)
+	}
+	if recovered == nil {
+		t.Fatal("stalled stream did not abort after committed partial output")
+	}
+	if err, ok := recovered.(error); !ok || !errors.Is(err, http.ErrAbortHandler) {
+		t.Fatalf("unexpected recovery value: %v", recovered)
+	}
+	log := waitForLog(t, st)
+	if len(log.Chain) != 1 || log.Chain[0].Status != string(model.OutcomeTruncated) || !strings.Contains(log.Error, "stalled") {
+		t.Fatalf("log=%+v, want truncated stalled attempt", log)
+	}
+	if hit, fail := st.statsFor("target"); hit != 0 || fail != 1 {
+		t.Fatalf("stats=(%d,%d), want hit=0 fail=1", hit, fail)
+	}
+	provider, _ := st.GetProvider("p")
+	if provider.Status != model.ProviderStatusError {
+		t.Fatalf("provider status=%q, want error", provider.Status)
+	}
+}
+
 func TestResponsesNativeStreamingRequestsIdentityEncoding(t *testing.T) {
 	var gotAcceptEncoding string
 	const upstream = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"identity\"}\n\n" +

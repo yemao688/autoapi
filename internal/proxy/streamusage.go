@@ -85,7 +85,9 @@ type geminiStreamCandidate struct {
 // in arrival order; the accumulator holds onto the last-seen value for each
 // usage field across all parsed `data: {...}` lines and reports them via
 // Usage(). Done() returns true once a [DONE] marker or a Responses terminal
-// event is observed.
+// event is observed. response.incomplete is terminal and counts as a
+// successful completion (for example, max_output_tokens); response.failed
+// remains terminal but unsuccessful.
 type streamUsageAccumulator struct {
 	// buf holds any partial line carried over from the previous Feed call
 	// (i.e. a line that arrived without a trailing newline yet).
@@ -436,16 +438,16 @@ func (a *streamUsageAccumulator) Usage() (input, output int, cacheHit, cacheCrea
 }
 
 // Done reports whether the stream observed [DONE] or a Responses terminal
-// event. Successful reports whether that terminal was [DONE] or
-// response.completed; response.failed and response.incomplete are terminal
-// but unsuccessful.
+// event. Successful reports whether that terminal was [DONE],
+// response.completed, or response.incomplete. response.failed is terminal but
+// unsuccessful.
 func (a *streamUsageAccumulator) Done() bool {
 	return a.seenDone
 }
 
 func (a *streamUsageAccumulator) TerminalState() string { return a.terminal }
 func (a *streamUsageAccumulator) Successful() bool {
-	return (a.terminal == "" && a.seenDone) || a.terminal == "completed" || a.terminal == "message_stop"
+	return (a.terminal == "" && a.seenDone) || a.terminal == "completed" || a.terminal == "incomplete" || a.terminal == "message_stop"
 }
 
 func (a *streamUsageAccumulator) Errored() bool { return a.errored }
@@ -479,12 +481,6 @@ func streamProtocolError(u *streamUsageJSON) (string, bool) {
 			}
 			return "upstream protocol error", true
 		}
-		if u.Response.IncompleteDetails != nil && u.Response.IncompleteDetails.Reason != "" {
-			return u.Response.IncompleteDetails.Reason, u.Type == "response.incomplete"
-		}
-	}
-	if u.IncompleteDetails != nil && u.IncompleteDetails.Reason != "" {
-		return u.IncompleteDetails.Reason, u.Type == "response.incomplete"
 	}
 	// Responses also has a top-level error event with code/message, while
 	// Anthropic and Gemini put the same object under error; the shared Error
