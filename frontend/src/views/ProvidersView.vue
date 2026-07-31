@@ -497,6 +497,26 @@ async function saveModelRow(row: EditableModelRow) {
   }
 }
 
+async function saveModelApiType(row: EditableModelRow) {
+  if (row.saving || row.deleting || row.capabilitiesLoading || !editingId.value) return
+  const providerId = editingId.value
+  const persistedModelName = row.model.name
+  row.saving = true
+  try {
+    for (const protocol of modelApiTypeOptions) {
+      await api.setModelCapability(providerId, persistedModelName, protocol.value, 'native', protocol.value === row.apiType)
+    }
+    row.originalApiType = row.apiType
+    toast.push(t('providers.modal.modelUpdated', { name: persistedModelName }), 'success')
+  } catch (e: any) {
+    row.apiType = row.originalApiType
+    const messageError = e?.message || String(e)
+    toast.push(t('providers.modal.capabilitiesSaveFailed', { error: messageError }), 'error')
+  } finally {
+    row.saving = false
+  }
+}
+
 async function deleteModelConfirm(row: EditableModelRow) {
   if (row.saving || row.deleting) return
   const ok = await confirm.open({
@@ -1009,7 +1029,7 @@ onMounted(() => {
             </button>
           </div>
 
-          <div class="model-list">
+          <div class="model-list provider-catalog-list">
             <div v-if="fetchingModels" class="model-empty">{{ t('providers.modal.loading') }}</div>
             <div v-else-if="!models.length" class="model-empty">{{ t('providers.modal.empty') }}</div>
             <table v-else class="model-table">
@@ -1059,6 +1079,7 @@ onMounted(() => {
                       class="select model-inline-select"
                       :aria-label="t('providers.modal.apiType')"
                       :disabled="row.saving || row.deleting || row.capabilitiesLoading"
+                      @change="saveModelApiType(row)"
                     >
                       <option v-for="option in modelApiTypeOptions" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
                     </select>
@@ -1359,11 +1380,64 @@ onMounted(() => {
   }
 }
 
-.model-table {
-  min-width: 780px;
+.provider-catalog-list {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
-.model-table td {
+.provider-catalog-list .model-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+.provider-catalog-list .model-table th,
+.provider-catalog-list .model-table td {
+  min-width: 0;
+}
+.provider-catalog-list .model-table th:nth-child(1) { width: 31%; }
+.provider-catalog-list .model-table th:nth-child(2) { width: 12%; }
+.provider-catalog-list .model-table th:nth-child(3) { width: 18%; }
+.provider-catalog-list .model-table th:nth-child(4) { width: 8%; }
+.provider-catalog-list .model-table th:nth-child(5) { width: 7%; }
+.provider-catalog-list .model-table th:nth-child(6) { width: 24%; }
+.provider-catalog-list .model-table td {
   vertical-align: top;
+}
+.provider-catalog-list .model-table td:nth-child(-n + 3) {
+  overflow: hidden;
+}
+.provider-catalog-list .model-inline-input,
+.provider-catalog-list .model-inline-select {
+  min-width: 0;
+  max-width: 100%;
+}
+.provider-catalog-list .model-inline-input {
+  width: 100%;
+}
+.provider-catalog-list .model-inline-select {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-catalog-list .model-price-control {
+  width: 100%;
+  min-width: 0;
+}
+.provider-catalog-list .model-price-input {
+  flex: 1;
+  width: auto;
+}
+.provider-catalog-list .model-row-error {
+  overflow-wrap: anywhere;
+}
+.provider-catalog-list .model-owner {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-catalog-list .model-row-actions {
+  min-width: 0;
 }
 .model-row-dirty {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
@@ -1404,7 +1478,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 3px;
-  min-width: 112px;
+  min-width: 0;
   color: var(--muted);
   font-size: 12px;
 }
@@ -1438,6 +1512,16 @@ onMounted(() => {
   min-height: 30px;
   padding: 4px 9px;
   font-size: 11.5px;
+}
+
+@media (max-width: 560px) {
+  .provider-catalog-list {
+    overflow-x: auto;
+  }
+
+  .provider-catalog-list .model-table {
+    min-width: 560px;
+  }
 }
 .btn-danger-text {
   background: transparent;
