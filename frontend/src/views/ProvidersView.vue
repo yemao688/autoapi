@@ -895,7 +895,7 @@ onMounted(() => {
   <!-- Provider modal -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
-      <div class="modal-card wide modal-card-scroll">
+      <div class="modal-card wide modal-card-scroll provider-modal-card">
         <div class="modal-title">{{ modalMode === 'edit' ? t('providers.modal.edit') : (form.is_custom ? t('providers.modal.addCustom') : t('providers.modal.add')) }}</div>
         <div class="field">
           <label class="field-label">{{ t('providers.modal.name') }}</label>
@@ -906,12 +906,12 @@ onMounted(() => {
           <input v-model="form.base_url" class="input mono" :placeholder="t('providers.modal.baseUrlPlaceholder')">
         </div>
         <div class="field">
-          <div class="row-between" style="margin-bottom: 6px;">
-            <label class="field-label" style="margin: 0;">{{ t('providers.modal.upstreamKey') }}</label>
-            <div class="row" style="gap: 4px;">
+          <div class="row-between provider-field-head">
+            <label class="field-label">{{ t('providers.modal.upstreamKey') }}</label>
+            <div class="provider-key-actions">
               <button
                 type="button"
-                class="btn btn-icon"
+                class="btn btn-icon provider-key-action"
                 :title="keyVisible ? t('providers.modal.hideKey') : t('providers.modal.showKey')"
                 :aria-label="keyVisible ? t('providers.modal.hideKey') : t('providers.modal.showKey')"
                 @click="toggleKeyVisibility"
@@ -921,7 +921,7 @@ onMounted(() => {
               </button>
               <button
                 type="button"
-                class="btn btn-icon"
+                class="btn btn-icon provider-key-action"
                 :title="t('providers.modal.copyKey')"
                 :aria-label="t('providers.modal.copyKey')"
                 :disabled="!form.upstream_key"
@@ -942,20 +942,24 @@ onMounted(() => {
           >
           <div class="field-help">{{ t('providers.modal.upstreamKeyHelp') }}</div>
         </div>
-        <div class="field">
-          <label class="row" style="gap: 8px; align-items: center; cursor: pointer;">
-            <input type="checkbox" v-model="form.fix_empty_assistant">
-            <span class="field-label" style="margin: 0;">{{ t('providers.modal.fixEmptyAssistant') }}</span>
+        <div class="field provider-fix-field">
+          <label class="provider-option-row">
+            <span class="provider-option-copy">
+              <span class="field-label">{{ t('providers.modal.fixEmptyAssistant') }}</span>
+              <span class="field-help">{{ t('providers.modal.fixEmptyAssistantHelp') }}</span>
+            </span>
+            <span class="toggle provider-option-toggle">
+              <input type="checkbox" v-model="form.fix_empty_assistant">
+              <span class="toggle-slider blue"></span>
+            </span>
           </label>
-          <div class="field-help">{{ t('providers.modal.fixEmptyAssistantHelp') }}</div>
         </div>
-        <div v-if="modalMode === 'edit'" class="field">
-          <div class="row-between" style="margin-bottom: 8px;">
-            <label class="field-label">{{ t('providers.modal.availableModels') }}</label>
-            <div class="row" style="gap: 6px;">
+        <div v-if="modalMode === 'edit'" class="field provider-models-section">
+          <div class="row-between provider-models-header">
+            <label class="field-label provider-section-label">{{ t('providers.modal.availableModels') }}</label>
+            <div class="provider-model-actions">
               <button
                 class="btn btn-secondary"
-                style="padding: 4px 10px; font-size: 12px;"
                 :disabled="manualAddVisible"
                 @click="openManualAdd"
               >
@@ -964,7 +968,6 @@ onMounted(() => {
               </button>
               <button
                 class="btn btn-secondary"
-                style="padding: 4px 10px; font-size: 12px;"
                 :disabled="fetchingModels"
                 @click="fetchModels"
               >
@@ -973,7 +976,6 @@ onMounted(() => {
               </button>
               <button
                 class="btn btn-danger-text"
-                style="padding: 4px 10px; font-size: 12px;"
                 :disabled="mutationBusy || models.length === 0"
                 @click="clearAllModels"
               >
@@ -983,18 +985,16 @@ onMounted(() => {
           </div>
 
           <!-- Inline manual-add input row -->
-          <div v-if="manualAddVisible" class="row" style="gap: 6px; margin-bottom: 8px;">
+          <div v-if="manualAddVisible" class="provider-manual-add-row">
             <input
               v-model="manualAddName"
               class="input mono"
-              style="flex: 1; font-size: 12.5px;"
               :placeholder="t('providers.modal.manualAddPlaceholder')"
               @keydown.enter="confirmManualAdd"
             >
             <button
               type="button"
               class="btn btn-primary"
-              style="padding: 5px 14px; font-size: 12.5px;"
               :disabled="!manualAddName.trim()"
               @click="confirmManualAdd"
             >{{ t('providers.modal.manualAddConfirm') }}</button>
@@ -1101,7 +1101,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
+        <div class="provider-modal-footer">
           <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? t('common.processing') : (modalMode === 'add' ? t('providers.modal.createAndContinue') : t('common.save')) }}</button>
         </div>
@@ -1164,6 +1164,201 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.provider-modal-card > .field {
+  margin-bottom: 18px;
+}
+
+.provider-field-head {
+  align-items: center;
+  margin-bottom: 7px;
+}
+
+.provider-field-head .field-label {
+  margin: 0;
+}
+
+.provider-key-actions {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.provider-key-action {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+.provider-key-action:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.provider-fix-field {
+  margin-top: 2px;
+}
+
+.provider-option-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.provider-option-row:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.provider-option-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.provider-option-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.provider-option-copy .field-label {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.provider-option-copy .field-help {
+  margin-top: 0;
+  line-height: 1.45;
+}
+
+.provider-option-toggle {
+  margin-top: 1px;
+}
+
+.provider-modal-card .toggle input:focus-visible + .toggle-slider {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+.provider-modal-card .toggle input:disabled + .toggle-slider {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-models-section {
+  margin-top: 22px;
+  margin-bottom: 0 !important;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.provider-models-header {
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.provider-section-label {
+  margin: 3px 0 0;
+  white-space: nowrap;
+}
+
+.provider-model-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.provider-model-actions .btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.provider-manual-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.provider-manual-add-row .input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.provider-manual-add-row .btn-primary {
+  padding: 5px 14px;
+  font-size: 12.5px;
+}
+
+.provider-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.provider-modal-card .btn:focus-visible,
+.provider-modal-card .input:focus-visible,
+.provider-modal-card .select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+.provider-modal-card .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-modal-card .btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+@media (max-width: 560px) {
+  .provider-models-header {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .provider-model-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .provider-model-actions .btn {
+    flex: 1 1 auto;
+  }
+
+  .provider-manual-add-row {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .provider-manual-add-row .input {
+    flex-basis: 100%;
+  }
+
+  .provider-manual-add-row .btn-primary {
+    flex: 1;
+  }
+}
+
 .model-table {
   min-width: 780px;
 }
