@@ -564,6 +564,8 @@ type responsesToolCallState struct {
 	id        string
 	name      string
 	itemIndex int
+	emitted   bool
+	completed bool
 }
 
 func newResponsesToChatStreamConverter() StreamConverter {
@@ -594,6 +596,10 @@ func (c *responsesToChatStreamConverter) Close() ([]byte, error) {
 		return out, c.err
 	}
 	if !c.terminal {
+		if err := c.ensureToolCallsComplete(); err != nil {
+			c.err = err
+			return out, err
+		}
 		c.err = fmt.Errorf("responses stream closed without terminal event")
 		return out, c.err
 	}
@@ -741,12 +747,7 @@ func (c *responsesToChatStreamConverter) processEvent() ([]byte, error) {
 			}
 			c.functionCallSeen = true
 			c.calls[idx] = &responsesToolCallState{id: callID, name: name, itemIndex: idx}
-			return c.chatChunk(map[string]any{"tool_calls": []map[string]any{{
-				"index":    idx,
-				"id":       callID,
-				"type":     "function",
-				"function": map[string]any{"name": name},
-			}}}), nil
+			return nil, nil
 		case "refusal", "reasoning":
 			return nil, fmt.Errorf("unsupported Responses output item type: %s", kind)
 		default:
@@ -769,16 +770,54 @@ func (c *responsesToChatStreamConverter) processEvent() ([]byte, error) {
 		return nil, nil
 	case "response.function_call_arguments.delta":
 		idx := intNumber(v, "output_index")
-		delta, _ := v["delta"].(string)
+		state, ok := c.calls[idx]
+		if !ok {
+			return nil, fmt.Errorf("function_call_arguments.delta without function_call")
+		}
+		if state.completed {
+			return nil, fmt.Errorf("function_call_arguments.delta after function_call_arguments.done")
+		}
+		delta, ok := v["delta"].(string)
+		if !ok {
+			return nil, fmt.Errorf("function_call_arguments.delta requires a string delta")
+		}
+		if delta == "" {
+			return nil, nil
+		}
+		stateArgs := map[string]any{"arguments": delta}
+		if !state.emitted {
+			state.emitted = true
+			stateArgs["name"] = state.name
+			return c.chatChunk(map[string]any{"tool_calls": []map[string]any{{
+				"index":    idx,
+				"id":       state.id,
+				"type":     "function",
+				"function": stateArgs,
+			}}}), nil
+		}
 		return c.chatChunk(map[string]any{"tool_calls": []map[string]any{{
 			"index":    idx,
-			"function": map[string]any{"arguments": delta},
+			"function": stateArgs,
 		}}}), nil
 	case "response.function_call_arguments.done":
+		idx := intNumber(v, "output_index")
+		state, ok := c.calls[idx]
+		if !ok {
+			return nil, fmt.Errorf("function_call_arguments.done without function_call")
+		}
+		if !state.emitted {
+			return nil, fmt.Errorf("function_call_arguments.done before function_call arguments")
+		}
+		state.completed = true
 		return nil, nil
 	case "response.completed":
 		if wrapper.Response != nil {
 			c.applyUsage(wrapper.Response.Usage)
+		}
+		if err := c.ensureToolCallsComplete(); err != nil {
+			c.terminal = true
+			c.err = err
+			return nil, c.err
 		}
 		stopReason := ""
 		if wrapper.Response != nil {
@@ -790,12 +829,27 @@ func (c *responsesToChatStreamConverter) processEvent() ([]byte, error) {
 		if wrapper.Response != nil && wrapper.Response.IncompleteDetails != nil {
 			reason = wrapper.Response.IncompleteDetails.Reason
 		}
+		if err := c.ensureToolCallsComplete(); err != nil {
+			c.terminal = true
+			c.err = err
+			return nil, c.err
+		}
 		return c.finishIncomplete(reason), nil
 	case "response.failed":
 		return nil, fmt.Errorf("responses stream failed")
 	default:
 		return nil, fmt.Errorf("unsupported Responses stream event type: %s", typ)
 	}
+}
+
+func (c *responsesToChatStreamConverter) ensureToolCallsComplete() error {
+	for idx, state := range c.calls {
+		if state == nil || state.completed {
+			continue
+		}
+		return fmt.Errorf("responses stream ended with incomplete function call arguments at output index %d", idx)
+	}
+	return nil
 }
 
 func (c *responsesToChatStreamConverter) applyUsage(u responsesStreamUsage) {

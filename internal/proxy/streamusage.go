@@ -360,7 +360,7 @@ func streamEventProducesOutput(data []byte, typ string) bool {
 		return false
 	}
 	for _, c := range v.Choices {
-		if c.Delta.Content != "" || c.Delta.Refusal != "" || c.Delta.Reasoning != "" || c.Delta.ReasoningContent != "" || len(c.Delta.ToolCalls) > 0 || rawJSONPresent(c.Delta.FunctionCall) || rawJSONPresent(c.Delta.Audio) ||
+		if c.Delta.Content != "" || c.Delta.Refusal != "" || c.Delta.Reasoning != "" || c.Delta.ReasoningContent != "" || toolCallsProduceOutput(c.Delta.ToolCalls) || rawJSONPresent(c.Delta.FunctionCall) || rawJSONPresent(c.Delta.Audio) ||
 			c.Message.Content != "" || c.Message.Refusal != "" || c.Message.Reasoning != "" || c.Message.ReasoningContent != "" || len(c.Message.ToolCalls) > 0 || rawJSONPresent(c.Message.FunctionCall) || rawJSONPresent(c.Message.Audio) || c.FinishReason == "content_filter" || c.FinishReason == "refusal" {
 			return true
 		}
@@ -370,7 +370,13 @@ func streamEventProducesOutput(data []byte, typ string) bool {
 			var raw struct {
 				Item json.RawMessage `json:"item"`
 			}
-			return json.Unmarshal(data, &raw) == nil && len(raw.Item) > 0 && string(bytes.TrimSpace(raw.Item)) != "null"
+			if json.Unmarshal(data, &raw) != nil || len(raw.Item) == 0 || string(bytes.TrimSpace(raw.Item)) == "null" {
+				return false
+			}
+			if typ == "response.output_item.added" {
+				return responsesOutputItemProducesOutput(raw.Item)
+			}
+			return true
 		}
 		if typ == "response.output_text.delta" || typ == "response.refusal.delta" || typ == "response.function_call_arguments.delta" {
 			var raw struct {
@@ -404,9 +410,11 @@ func streamEventProducesOutput(data []byte, typ string) bool {
 		return true
 	}
 	if typ == "content_block_start" {
+		if v.ContentBlock.Type == "tool_use" {
+			return toolUseInputProducesOutput(v.ContentBlock.InputSchema)
+		}
 		// A block declaration is a structural commitment even when text is
-		// initially empty; tool blocks likewise carry semantic output in the
-		// block shape itself.
+		// initially empty.
 		return v.ContentBlock.Type != "" || v.ContentBlock.Text != "" || len(v.ContentBlock.InputSchema) > 0
 	}
 	if typ == "content_block_delta" {
@@ -423,6 +431,55 @@ func streamEventProducesOutput(data []byte, typ string) bool {
 		}
 	}
 	return false
+}
+
+func toolCallsProduceOutput(calls []json.RawMessage) bool {
+	for _, raw := range calls {
+		var call struct {
+			Function *struct {
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(raw, &call); err != nil {
+			// Preserve the previous behavior for malformed tool-call data.
+			return true
+		}
+		if call.Function != nil && call.Function.Arguments != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func responsesOutputItemProducesOutput(raw json.RawMessage) bool {
+	var item struct {
+		Type      string          `json:"type"`
+		Arguments json.RawMessage `json:"arguments"`
+		Input     json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return true
+	}
+	switch item.Type {
+	case "function_call":
+		var arguments string
+		if len(item.Arguments) == 0 || bytes.Equal(bytes.TrimSpace(item.Arguments), []byte("null")) {
+			return false
+		}
+		if err := json.Unmarshal(item.Arguments, &arguments); err != nil {
+			return true
+		}
+		return arguments != ""
+	case "tool_use":
+		return toolUseInputProducesOutput(item.Input)
+	default:
+		return true
+	}
+}
+
+func toolUseInputProducesOutput(input json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(input)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) && !bytes.Equal(trimmed, []byte("{}"))
 }
 
 func rawJSONPresent(raw json.RawMessage) bool {
