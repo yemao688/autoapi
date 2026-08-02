@@ -16,6 +16,20 @@ import (
 // but only the timer carries this cause.
 var errFirstByteTimeout = errors.New("first-byte timeout")
 
+// errFirstByteBudgetExceeded is the cancellation cause used when the
+// request-wide first-byte budget expires. It is distinct from a parent
+// request cancellation so budget exhaustion cannot be logged as a client
+// disconnect.
+var errFirstByteBudgetExceeded = errors.New("first-byte budget exhausted")
+
+func firstByteBudgetError(d time.Duration) error {
+	return fmt.Errorf("%w (%s)", errFirstByteBudgetExceeded, d)
+}
+
+func isFirstByteBudgetExceeded(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errFirstByteBudgetExceeded)
+}
+
 // withFirstByteTimer bounds the time an attempt waits for upstream response
 // headers without bounding body reads afterwards. This replaces the old
 // per-attempt Transport.Clone() + ResponseHeaderTimeout override, which

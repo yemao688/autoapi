@@ -1147,7 +1147,7 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// disarms on the first response header byte, so the body
 	// download is NOT cut off by the first-byte deadline — the
 	// budget is ONLY counted before the first byte is received.
-	budgetCtx, budgetCancel := context.WithDeadline(r.Context(), firstByteDeadline)
+	budgetCtx, budgetCancel := context.WithDeadlineCause(r.Context(), firstByteDeadline, errFirstByteBudgetExceeded)
 	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
@@ -1324,6 +1324,19 @@ outer:
 		retryAfter := time.Duration(0)
 	retry:
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
+			if ctxErr := r.Context().Err(); ctxErr != nil {
+				providerProbe.cancel()
+				routeProbe.cancel()
+				logEntry.StatusCode = statusClientClosed
+				logEntry.Error = "client disconnected: " + ctxErr.Error()
+				logEntry.ProviderID = c.provider.ID
+				logEntry.ProviderName = c.provider.Name
+				logEntry.Model = c.modelName
+				logEntry.RouteID = c.ruleID
+				logEntry.RouteLabel = c.ruleLabel
+				return
+			}
+
 			// Global attempt cap: stops the N×(M+1) explosion when
 			// many candidates each have a high MaxRetries. The cap is
 			// checked BEFORE the per-target circuit check and backoff
@@ -1358,7 +1371,7 @@ outer:
 			// all-candidates-exhausted path then surfaces a 503.
 			if remaining := time.Until(firstByteDeadline); remaining <= 0 {
 				if candidateAttempted {
-					recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
+					recordTargetFailure(errFirstByteBudgetExceeded, http.StatusServiceUnavailable, errFirstByteBudgetExceeded.Error())
 				}
 				providerProbe.cancel()
 				routeProbe.cancel()
@@ -1371,10 +1384,10 @@ outer:
 					TargetID:     c.targetID,
 					Status:       "budget_exceeded",
 					StatusCode:   0,
-					Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
+					Error:        firstByteBudgetError(firstByteBudget).Error(),
 					LatencyMs:    0,
 				})
-				lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
+				lastErr = firstByteBudgetError(firstByteBudget)
 				lastStatus = http.StatusServiceUnavailable
 				attemptsCapped = true
 				break
@@ -1437,14 +1450,30 @@ outer:
 							"target", c.targetID)
 						return
 					} else {
-						recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
+						if !isFirstByteBudgetExceeded(budgetCtx) {
+							slog.Debug("proxy: budget context ended without its budget cause", "cause", context.Cause(budgetCtx))
+						}
+						recordTargetFailure(errFirstByteBudgetExceeded, http.StatusServiceUnavailable, errFirstByteBudgetExceeded.Error())
 						// First-byte budget exhausted during backoff.
-						lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
+						lastErr = firstByteBudgetError(firstByteBudget)
 						lastStatus = http.StatusServiceUnavailable
 						attemptsCapped = true
+						attemptOrder++
+						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+							AttemptOrder: attemptOrder,
+							ProviderID:   c.provider.ID,
+							ProviderName: c.provider.Name,
+							ModelName:    c.modelName,
+							TargetID:     c.targetID,
+							Status:       "budget_exceeded",
+							StatusCode:   0,
+							Error:        firstByteBudgetError(firstByteBudget).Error(),
+							LatencyMs:    0,
+						})
 						slog.Warn("proxy: first-byte budget exceeded during backoff",
 							"provider", c.provider.Name,
-							"budget", firstByteBudget)
+							"budget", firstByteBudget,
+							"reason", errFirstByteBudgetExceeded.Error())
 					}
 					break outer
 				case <-time.After(delay):
@@ -1582,6 +1611,13 @@ outer:
 			}
 
 			cat := CategorizeError(attemptErr, effectiveStatus)
+			upstreamMsg := extractUpstreamError(attemptRespBody)
+			var semanticErr error
+			if effectiveStatus >= 400 && isRequestSpecificSemanticError(upstreamMsg) {
+				semanticErr = newRequestSpecificSemanticError(fmt.Sprintf("upstream %s returned status %d: %s", c.provider.Name, effectiveStatus, upstreamMsg))
+				attemptErr = semanticErr
+				cat = CategoryRetryable
+			}
 			finalCat = cat
 			finalAttemptErr = attemptErr
 			latencyMs := int(time.Since(attemptStart).Milliseconds())
@@ -1694,7 +1730,9 @@ outer:
 			// Enrich the error with the upstream's response body so the
 			// log entry carries actionable detail (e.g. "model_not_found"
 			// or "invalid_parameter") instead of just the status code.
-			if upstreamMsg := extractUpstreamError(attemptRespBody); upstreamMsg != "" {
+			if semanticErr != nil {
+				lastErr = semanticErr
+			} else if upstreamMsg != "" {
 				lastErr = fmt.Errorf("%s: %s", lastErr.Error(), upstreamMsg)
 			}
 			lastStatus = effectiveStatus
@@ -1827,7 +1865,7 @@ outer:
 				// Deterministic-for-this-target failures (404, 429/503
 				// without Retry-After, unknown 4xx) gain nothing from a
 				// same-target retry: fail over to the next candidate now.
-				if !sameTargetRetryWorthwhile(effectiveStatus, attemptHasRetryAfter) {
+				if semanticErr != nil || !sameTargetRetryWorthwhile(effectiveStatus, attemptHasRetryAfter) {
 					slog.Debug("proxy: skip same-target retry, failing over",
 						"provider", c.provider.Name,
 						"model", c.modelName,
@@ -1938,7 +1976,7 @@ func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byt
 	// first byte committed), the budget stops.
 	firstByteBudget := candidates[0].firstByteBudget
 	firstByteDeadline := time.Now().Add(firstByteBudget)
-	budgetCtx, budgetCancel := context.WithDeadline(r.Context(), firstByteDeadline)
+	budgetCtx, budgetCancel := context.WithDeadlineCause(r.Context(), firstByteDeadline, errFirstByteBudgetExceeded)
 	defer budgetCancel()
 	var lastErr error = fmt.Errorf("no candidate produced a response")
 	var lastStatus int
@@ -2106,6 +2144,19 @@ outer:
 		candidateAttempted := false
 	retry:
 		for attempt := 0; attempt <= c.maxRetries; attempt++ {
+			if ctxErr := r.Context().Err(); ctxErr != nil {
+				providerProbe.cancel()
+				routeProbe.cancel()
+				logEntry.StatusCode = statusClientClosed
+				logEntry.Error = "client disconnected: " + ctxErr.Error()
+				logEntry.ProviderID = c.provider.ID
+				logEntry.ProviderName = c.provider.Name
+				logEntry.Model = c.modelName
+				logEntry.RouteID = c.ruleID
+				logEntry.RouteLabel = c.ruleLabel
+				return
+			}
+
 			// Global attempt cap: stops the N×(M+1) explosion when
 			// many candidates each have a high MaxRetries.
 			if totalAttempts >= maxTotalAttempts {
@@ -2140,7 +2191,7 @@ outer:
 			// below where it can be distinguished via r.Context().
 			if remaining := time.Until(firstByteDeadline); remaining <= 0 {
 				if candidateAttempted {
-					recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
+					recordTargetFailure(errFirstByteBudgetExceeded, http.StatusServiceUnavailable, errFirstByteBudgetExceeded.Error())
 				}
 				routeProbe.cancel()
 				attemptOrder++
@@ -2152,10 +2203,10 @@ outer:
 					TargetID:     c.targetID,
 					Status:       "budget_exceeded",
 					StatusCode:   0,
-					Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
+					Error:        firstByteBudgetError(firstByteBudget).Error(),
 					LatencyMs:    0,
 				})
-				lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
+				lastErr = firstByteBudgetError(firstByteBudget)
 				lastStatus = http.StatusServiceUnavailable
 				attemptsCapped = true
 				break
@@ -2213,13 +2264,29 @@ outer:
 						return
 					} else {
 						// First-byte budget exhausted during backoff.
-						recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
-						lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
+						if !isFirstByteBudgetExceeded(budgetCtx) {
+							slog.Debug("proxy: stream budget context ended without its budget cause", "cause", context.Cause(budgetCtx))
+						}
+						recordTargetFailure(errFirstByteBudgetExceeded, http.StatusServiceUnavailable, errFirstByteBudgetExceeded.Error())
+						lastErr = firstByteBudgetError(firstByteBudget)
 						lastStatus = http.StatusServiceUnavailable
 						attemptsCapped = true
+						attemptOrder++
+						logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{
+							AttemptOrder: attemptOrder,
+							ProviderID:   c.provider.ID,
+							ProviderName: c.provider.Name,
+							ModelName:    c.modelName,
+							TargetID:     c.targetID,
+							Status:       "budget_exceeded",
+							StatusCode:   0,
+							Error:        firstByteBudgetError(firstByteBudget).Error(),
+							LatencyMs:    0,
+						})
 						slog.Warn("proxy: stream first-byte budget exceeded during backoff",
 							"provider", c.provider.Name,
-							"budget", firstByteBudget)
+							"budget", firstByteBudget,
+							"reason", errFirstByteBudgetExceeded.Error())
 					}
 					break outer
 				case <-time.After(delay):
@@ -2250,7 +2317,7 @@ outer:
 			}
 			if result.BudgetExceeded {
 				if candidateAttempted {
-					recordTargetFailure(context.DeadlineExceeded, http.StatusServiceUnavailable, "first-byte budget exceeded")
+					recordTargetFailure(errFirstByteBudgetExceeded, http.StatusServiceUnavailable, errFirstByteBudgetExceeded.Error())
 				}
 				providerProbe.cancel()
 				routeProbe.cancel()
@@ -2263,10 +2330,10 @@ outer:
 					TargetID:     c.targetID,
 					Status:       "budget_exceeded",
 					StatusCode:   0,
-					Error:        fmt.Sprintf("first-byte budget (%s) exceeded", firstByteBudget),
+					Error:        firstByteBudgetError(firstByteBudget).Error(),
 					LatencyMs:    0,
 				})
-				lastErr = fmt.Errorf("first-byte budget (%s) exceeded", firstByteBudget)
+				lastErr = firstByteBudgetError(firstByteBudget)
 				lastStatus = http.StatusServiceUnavailable
 				attemptsCapped = true
 				break outer
@@ -2353,6 +2420,7 @@ outer:
 				return
 			case model.AttemptOutcomeRetryable:
 				firstByteCumulativeMs += result.LatencyMs
+				requestSpecificSemantic := isRequestSpecificSemanticFailure(finalCause)
 				if result.StatusCode >= 400 {
 					lastErr = errors.New(result.Error)
 					if result.Error == "" {
@@ -2362,6 +2430,9 @@ outer:
 				} else {
 					lastErr = fmt.Errorf("upstream %s: %s", c.provider.Name, result.Error)
 					lastStatus = 0
+				}
+				if requestSpecificSemantic {
+					lastErr = finalCause
 				}
 				if c.targetID != "" {
 					if err := p.store.IncrementTargetStats(c.targetID, 0, 1); err != nil {
@@ -2383,7 +2454,7 @@ outer:
 				// Deterministic-for-this-target failures (404, 429/503
 				// without Retry-After, unknown 4xx) gain nothing from a
 				// same-target retry: fail over to the next candidate now.
-				if !sameTargetRetryWorthwhile(result.StatusCode, result.RetryAfter > 0) {
+				if requestSpecificSemantic || !sameTargetRetryWorthwhile(result.StatusCode, result.RetryAfter > 0) {
 					slog.Debug("proxy: stream skip same-target retry, failing over",
 						"provider", c.provider.Name,
 						"model", c.modelName,
@@ -2521,7 +2592,12 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		if remaining := time.Until(dl); remaining <= 0 {
-			return streamAttemptResult{Status: model.AttemptOutcomeRetryable, BudgetExceeded: true}, order
+			return streamAttemptResult{
+				Status:         model.AttemptOutcomeRetryable,
+				Error:          errFirstByteBudgetExceeded.Error(),
+				Cause:          errFirstByteBudgetExceeded,
+				BudgetExceeded: true,
+			}, order
 		} else if remaining < timeout {
 			timeout = remaining
 		}
@@ -2729,6 +2805,11 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		latencyMs := int(time.Since(attemptStart).Milliseconds())
 		attemptOrder++
+		var semanticCause error
+		if isRequestSpecificSemanticError(errStr) {
+			semanticCause = newRequestSpecificSemanticError(errStr)
+			cat = CategoryRetryable
+		}
 
 		if cat == CategoryNonRetryable || cat == CategoryClientAbort {
 			// 4xx hard stop: write upstream error to client and
@@ -2781,6 +2862,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			AttemptStarted: true,
 			StatusCode:     upstreamStatus,
 			Error:          errStr,
+			Cause:          semanticCause,
 			LatencyMs:      latencyMs,
 			RetryAfter:     retryAfter,
 		}, attemptOrder
@@ -2806,14 +2888,20 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		latencyMs := int(time.Since(attemptStart).Milliseconds())
 		attemptOrder++
 		status := model.AttemptOutcomeRetryable
+		statusCode := 0
+		errorMessage := initialErr.Error()
 		if category == CategoryClientAbort {
 			status = model.OutcomeClientAbort
+			statusCode = statusClientClosed
+			errorMessage = "client disconnected: " + initialErr.Error()
+			logEntry.StatusCode = statusClientClosed
+			logEntry.Error = errorMessage
 		}
 		if category == CategoryNonRetryable {
 			status = model.AttemptOutcomeNonRetryable
 		}
-		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: string(status), Error: initialErr.Error(), LatencyMs: latencyMs, UpstreamStarted: true, RequestCost: c.requestPrice, RequestCostAvailable: c.requestPriceAvailable})
-		return streamAttemptResult{Status: status, Error: initialErr.Error(), Cause: initialErr, AttemptStarted: true, LatencyMs: latencyMs, StatusCode: 0, Committed: false}, attemptOrder
+		logEntry.Chain = append(logEntry.Chain, model.RequestLogChainEntry{AttemptOrder: attemptOrder, ProviderID: c.provider.ID, ProviderName: c.provider.Name, ModelName: c.modelName, TargetID: c.targetID, Status: string(status), StatusCode: statusCode, Error: errorMessage, LatencyMs: latencyMs, UpstreamStarted: true, RequestCost: c.requestPrice, RequestCostAvailable: c.requestPriceAvailable})
+		return streamAttemptResult{Status: status, Error: errorMessage, Cause: initialErr, AttemptStarted: true, LatencyMs: latencyMs, StatusCode: statusCode, Committed: false}, attemptOrder
 	}
 
 	ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
@@ -3051,8 +3139,9 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 			if chainEntry.Error == "" {
 				chainEntry.Error = "upstream protocol error"
 			}
+			cause := error(errorForStreamMessage(chainEntry.Error))
 			logEntry.Chain = append(logEntry.Chain, chainEntry)
-			return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: upstreamStatus, Error: chainEntry.Error, Cause: errors.New(chainEntry.Error), AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: errors.New(chainEntry.Error), Committed: false}, attemptOrder
+			return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: upstreamStatus, Error: chainEntry.Error, Cause: cause, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: cause, Committed: false}, attemptOrder
 		}
 		if conversionErr != nil {
 			chainEntry.Status = string(model.AttemptOutcomeConversionError)
@@ -3067,8 +3156,27 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 		chainEntry.Status = "retryable"
 		chainEntry.Error = streamErr.Error()
+		if errors.Is(streamErr, context.Canceled) {
+			chainEntry.Status = string(model.OutcomeClientAbort)
+			chainEntry.StatusCode = statusClientClosed
+			chainEntry.Error = "client disconnected: " + streamErr.Error()
+			logEntry.StatusCode = statusClientClosed
+			logEntry.Error = chainEntry.Error
+			logEntry.Chain = append(logEntry.Chain, chainEntry)
+			return streamAttemptResult{
+				Status:         model.OutcomeClientAbort,
+				StatusCode:     statusClientClosed,
+				Error:          chainEntry.Error,
+				Cause:          streamErr,
+				AttemptStarted: true,
+				LatencyMs:      attemptLatencyMs,
+				StreamErr:      streamErr,
+				Committed:      false,
+			}, attemptOrder
+		}
+		cause := errorForStreamMessage(chainEntry.Error)
 		logEntry.Chain = append(logEntry.Chain, chainEntry)
-		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: upstreamStatus, Error: chainEntry.Error, Cause: streamErr, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: streamErr, Committed: false}, attemptOrder
+		return streamAttemptResult{Status: model.AttemptOutcomeRetryable, StatusCode: upstreamStatus, Error: chainEntry.Error, Cause: cause, AttemptStarted: true, LatencyMs: attemptLatencyMs, StreamErr: streamErr, Committed: false}, attemptOrder
 	}
 
 	switch {

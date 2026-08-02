@@ -25,6 +25,52 @@ const (
 	CategoryClientAbort
 )
 
+var errRequestSpecificSemantic = errors.New("request-specific semantic error")
+
+type requestSpecificSemanticError struct {
+	message string
+}
+
+func (e *requestSpecificSemanticError) Error() string { return e.message }
+func (e *requestSpecificSemanticError) Unwrap() error { return errRequestSpecificSemantic }
+
+func newRequestSpecificSemanticError(message string) error {
+	return &requestSpecificSemanticError{message: message}
+}
+
+func isRequestSpecificSemanticFailure(err error) bool {
+	return errors.Is(err, errRequestSpecificSemantic)
+}
+
+// isRequestSpecificSemanticError reports errors caused by the request's input
+// size rather than by provider health. The list is deliberately conservative:
+// unmatched messages retain the existing provider-failure behavior.
+func isRequestSpecificSemanticError(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, phrase := range []string{
+		"context window",
+		"context length",
+		"maximum context",
+		"too many tokens",
+		"input is too long",
+		"prompt is too long",
+		"reduce the length",
+		"exceeds the context",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func errorForStreamMessage(message string) error {
+	if isRequestSpecificSemanticError(message) {
+		return newRequestSpecificSemanticError(message)
+	}
+	return errors.New(message)
+}
+
 // CategorizeError classifies an upstream response. If err is non-nil, the error
 // type takes precedence over the status code. Client-side 4xx errors are
 // generally non-retryable, except 401/403/404/408/409/429 which may succeed
@@ -99,6 +145,9 @@ func sameTargetRetryWorthwhile(statusCode int, hasRetryAfter bool) bool {
 // sending malformed or oversized requests must not trip provider breakers.
 func isCircuitBreakerFailure(err error, statusCode int) bool {
 	if err != nil {
+		if isRequestSpecificSemanticFailure(err) {
+			return false
+		}
 		if errors.Is(err, context.Canceled) {
 			return false
 		}
