@@ -1737,8 +1737,10 @@ html[data-theme="dark"] .dropdown-item:focus-visible {
 .modal-overlay {
   position: fixed;
   inset: 0;
+  /* Solid background instead of backdrop-filter: blur(4px) — WebKit forces a
+     full-screen composited layer and per-frame readback+blur behind the
+     overlay, which accumulates WebContent render-process memory. */
   background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -377,7 +377,6 @@ usePolling(fetchAll, 15000)
   align-items: center;
   justify-content: center;
   background: rgba(245, 245, 247, 0.78);
-  backdrop-filter: blur(2px);
   z-index: 10;
   font-size: 14px;
   color: var(--muted, #6e6e73);

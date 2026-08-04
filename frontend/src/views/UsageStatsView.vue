@@ -80,6 +80,11 @@ const sseState = ref<"connected" | "error">("connected");
 // whenever the active mode is realtime or off.
 const nextPollAt = ref<number | null>(null);
 const pollCountdown = ref<string>("");
+// Direct DOM handle on the countdown span. The live path writes textContent
+// directly instead of going through Vue reactivity: updating a ref bound in
+// the template re-renders this whole (large) view once per second, which is
+// a full render transaction just to change a "5s" label.
+const countdownEl = ref<HTMLElement | null>(null);
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 
 function clearCountdownTimer() {
@@ -89,10 +94,22 @@ function clearCountdownTimer() {
   }
 }
 
+// Single write path for the countdown label. pollCountdown stays in sync as
+// the "pending" value (rendered on mount / used by the flush watcher below),
+// but the live update is a bare textContent write — no layout reads, no Vue
+// render transaction.
+function setCountdownLabel(label: string) {
+  pollCountdown.value = label;
+  const el = countdownEl.value;
+  if (el && el.textContent !== label) {
+    el.textContent = label;
+  }
+}
+
 function startCountdownTimer() {
   clearCountdownTimer();
   if (nextPollAt.value == null) {
-    pollCountdown.value = "";
+    setCountdownLabel("");
     return;
   }
   // Tick once immediately so the label updates without a 1s wait.
@@ -102,7 +119,7 @@ function startCountdownTimer() {
 
 function updateCountdownLabel() {
   if (nextPollAt.value == null) {
-    pollCountdown.value = "";
+    setCountdownLabel("");
     return;
   }
   const remainingMs = nextPollAt.value - Date.now();
@@ -110,12 +127,20 @@ function updateCountdownLabel() {
     // Refresh hasn't fired yet (e.g. fetchAll still in flight) — show 0
     // rather than a negative number; the next tick or mode change will
     // refresh the value.
-    pollCountdown.value = "0s";
+    setCountdownLabel("0s");
     return;
   }
   const seconds = Math.ceil(remainingMs / 1000);
-  pollCountdown.value = `${seconds}s`;
+  setCountdownLabel(`${seconds}s`);
 }
+
+// If the countdown span (re)mounts with a pending label (e.g. a deadline was
+// set before the polling-mode UI branch was rendered), flush it into the DOM.
+watch(countdownEl, (el) => {
+  if (el && el.textContent !== pollCountdown.value) {
+    el.textContent = pollCountdown.value;
+  }
+});
 
 const selectedProviderId = ref("");
 const selectedApiKeyId = ref("");
@@ -423,7 +448,7 @@ function stopPolling() {
     pollTimer = null;
   }
   nextPollAt.value = null;
-  pollCountdown.value = "";
+  setCountdownLabel("");
 }
 
 function stopRealtime() {
@@ -520,7 +545,7 @@ function applyMode(mode: SyncMode) {
   // Applymode always wipes the countdown state so transitioning from a
   // polling mode to realtime/off doesn't leave stale "5s" text behind.
   nextPollAt.value = null;
-  pollCountdown.value = "";
+  setCountdownLabel("");
   clearCountdownTimer();
   // Do not start timers or listeners while the app is backgrounded. This
   // also prevents an in-flight refreshAll().finally() that calls applyMode
@@ -785,7 +810,7 @@ watch([modelFilter, searchText], () => {
           class="sse-status polling"
           aria-live="polite"
         >
-          <span class="poll-countdown text-mono">{{ pollCountdown }}</span>
+          <span ref="countdownEl" class="poll-countdown text-mono"></span>
         </div>
         <select
           id="usage-sync-mode"
@@ -931,7 +956,6 @@ watch([modelFilter, searchText], () => {
   align-items: center;
   justify-content: center;
   background: rgba(245, 245, 247, 0.78);
-  backdrop-filter: blur(2px);
   z-index: 10;
   font-size: 14px;
   color: var(--muted, #6e6e73);
