@@ -1030,19 +1030,6 @@
   "usage": {
     "title": "Usage",
     "subtitle": "Request logs and token usage · single-page switch",
-    "sync": {
-      "label": "Auto refresh",
-      "realtime": "Realtime",
-      "seconds5": "Every 5s",
-      "seconds30": "Every 30s",
-      "off": "Off"
-    },
-    "sseStatus": {
-      "connected": "Connected",
-      "idle": "Idle",
-      "error": "Error",
-      "lastEvent": "Last event"
-    },
     "export": "Export",
     "loading": "Loading…",
     "ariaLabel": "Usage stats view",

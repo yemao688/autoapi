@@ -1030,19 +1030,6 @@
   "usage": {
     "title": "使用统计",
     "subtitle": "请求日志与 Token 用量 · 单页切换",
-    "sync": {
-      "label": "自动刷新",
-      "realtime": "实时",
-      "seconds5": "每 5 秒",
-      "seconds30": "每 30 秒",
-      "off": "关闭"
-    },
-    "sseStatus": {
-      "connected": "已连接",
-      "idle": "等待中",
-      "error": "异常",
-      "lastEvent": "上次事件"
-    },
     "export": "导出",
     "loading": "加载中…",
     "ariaLabel": "使用统计视图",
