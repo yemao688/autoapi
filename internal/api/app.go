@@ -599,15 +599,18 @@ func (a *App) wireLogEventEmitter() {
 	slog.Debug("app: log event emitter wired")
 }
 
-// PingLogEvent immediately emits a log:new Wails event so the frontend can
+// PingLogEvent immediately emits a log:ping Wails event so the frontend can
 // verify the event channel is alive without waiting for a real request log.
+// It intentionally uses a dedicated event name instead of log:new so the
+// channel check cannot be mistaken for a real log flush (which would trigger
+// an extra data refresh).
 func (a *App) PingLogEvent() {
 	if a.ctx == nil {
 		slog.Warn("app: PingLogEvent called with nil context")
 		return
 	}
 	slog.Debug("app: PingLogEvent emitted")
-	runtime.EventsEmit(a.ctx, "log:new")
+	runtime.EventsEmit(a.ctx, "log:ping")
 }
 
 // Shutdown is invoked by Wails OnShutdown. Stop the proxy cleanly.

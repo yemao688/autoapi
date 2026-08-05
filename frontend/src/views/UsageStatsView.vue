@@ -44,6 +44,10 @@ const { isVisible } = useAppVisibility();
 const isRefreshing = ref(false);
 // Wails event unsubscribe handle.
 let eventsOff: (() => void) | null = null;
+// Dedicated unsubscribe handle for the log:ping channel check, kept separate
+// from eventsOff so the ping (a pure channel liveness probe) can never be
+// mistaken for a log:new flush and trigger an extra data refresh.
+let pingOff: (() => void) | null = null;
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
 let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let lastRefreshStartedAt = 0;
@@ -352,6 +356,10 @@ function stopRealtime() {
     eventsOff();
     eventsOff = null;
   }
+  if (pingOff) {
+    pingOff();
+    pingOff = null;
+  }
   if (realtimeRefreshTimer) {
     clearTimeout(realtimeRefreshTimer);
     realtimeRefreshTimer = null;
@@ -385,6 +393,13 @@ function startRealtime() {
     }
   });
   eventsOff = typeof off === "function" ? off : () => EventsOff("log:new");
+  // Subscribe to the dedicated ping event before pinging so the liveness
+  // probe has a listener in place. The handler is intentionally a no-op:
+  // receiving log:ping proves the Wails event channel is alive, and it must
+  // not go through the log:new path (which would schedule a redundant
+  // refresh after every mount/foreground).
+  const offPing = EventsOn("log:ping", () => {});
+  pingOff = typeof offPing === "function" ? offPing : () => EventsOff("log:ping");
   // Ping the backend to verify the Wails event channel is alive.
   api.pingLogEvent().catch((e: any) => {
     console.warn("[sync] PingLogEvent failed", e);
