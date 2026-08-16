@@ -1185,8 +1185,16 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.provider-modal-card {
-  width: 960px;
+/* Wide enough for the 6-column model table to breathe at desktop sizes.
+   The modal still shrinks with the viewport via max-width; the model table
+   trims its fixed columns below 920px and switches to stacked cards below
+   800px so rows never need horizontal scrolling.
+   Note the `.modal-card` prefix: in the production bundle global rules
+   (`.modal-card.wide { width: 640px }`) are emitted after component styles,
+   so an equal-specificity selector here would lose and the dialog would
+   render at the narrow default width. */
+.modal-card.provider-modal-card {
+  width: 1080px;
   max-width: calc(100vw - 32px);
 }
 
@@ -1357,19 +1365,9 @@ onMounted(() => {
 }
 
 @media (max-width: 560px) {
-  .provider-modal-card {
+  .modal-card.provider-modal-card {
     width: 100%;
     max-width: none;
-  }
-
-  .provider-models-header {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .provider-model-actions {
-    width: 100%;
-    justify-content: flex-start;
   }
 
   .provider-model-actions .btn {
@@ -1524,13 +1522,88 @@ onMounted(() => {
   font-size: 11.5px;
 }
 
-@media (max-width: 900px) {
+/* Medium viewports (modal = 100vw - 32px here): trim the fixed columns so the
+   model-name column keeps enough room and the table never overflows. */
+@media (max-width: 920px) {
+  .provider-catalog-list .model-table th:nth-child(2) { width: 88px; }
+  .provider-catalog-list .model-table th:nth-child(3) { width: 158px; }
+  .provider-catalog-list .model-table th:nth-child(6) { width: 140px; }
+}
+
+/* Narrow viewports: the table no longer fits, so each row becomes a stacked
+   card. All row controls (toggle, test, save, delete) stay on-screen — no
+   horizontal scrolling inside the dialog. */
+@media (max-width: 800px) {
   .provider-catalog-list {
-    overflow-x: auto;
+    max-height: 380px;
   }
 
-  .provider-catalog-list .model-table {
-    min-width: 760px;
+  .provider-models-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .provider-model-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .provider-catalog-list .model-table thead {
+    display: none;
+  }
+
+  .provider-catalog-list .model-table,
+  .provider-catalog-list .model-table tbody {
+    display: block;
+  }
+
+  .provider-catalog-list .model-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 12px 12px 14px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+
+  .provider-catalog-list .model-table tr.model-row-dirty {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  }
+
+  .provider-catalog-list .model-table tbody td {
+    padding: 0;
+    border-top: 0;
+    vertical-align: middle;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(1) {
+    flex: 0 0 100%;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(2) {
+    flex: 0 1 150px;
+    min-width: 120px;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(3) {
+    flex: 1 1 200px;
+    min-width: 160px;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(4) {
+    flex: 0 0 auto;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(5) {
+    flex: 0 0 auto;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(6) {
+    flex: 1 1 auto;
   }
 }
 .btn-danger-text {
