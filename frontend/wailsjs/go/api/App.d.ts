@@ -155,6 +155,8 @@ export function QueryLogsLite(arg1:model.LogQuery):Promise<model.LogQueryResult>
 
 export function Quit():Promise<void>;
 
+export function ReloadWebView():Promise<void>;
+
 export function ReorderModelRuleTargets(arg1:string,arg2:Array<string>):Promise<model.ReorderModelRuleTargetsResult>;
 
 export function ReorderModelRules(arg1:Array<string>):Promise<model.ReorderModelRulesResult>;

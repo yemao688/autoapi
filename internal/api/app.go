@@ -700,6 +700,19 @@ func (a *App) NavigateTo(path string) {
 	runtime.EventsEmit(a.ctx, "app:navigate", path)
 }
 
+// ReloadWebView asks the frontend to reload the page. The WebView render
+// process accumulates layer-backing IOSurface buffers WebKit never reclaims
+// (see frontend/src/composables/useWebViewReset.ts); reloading rebuilds the
+// render process and discards its surface pools. This is the manual escape
+// hatch next to the automatic idle/time-based reset, wired to the tray and
+// application menus.
+func (a *App) ReloadWebView() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "app:reload-webview")
+}
+
 // RestartProxy rebinds the local HTTP listener (used after the user toggles
 // port/bind in settings, or via the tray "restart" shortcut).
 func (a *App) RestartProxy() error {

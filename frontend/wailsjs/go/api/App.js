@@ -298,6 +298,10 @@ export function Quit() {
   return window['go']['api']['App']['Quit']();
 }
 
+export function ReloadWebView() {
+  return window['go']['api']['App']['ReloadWebView']();
+}
+
 export function ReorderModelRuleTargets(arg1, arg2) {
   return window['go']['api']['App']['ReorderModelRuleTargets'](arg1, arg2);
 }

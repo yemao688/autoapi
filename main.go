@@ -52,6 +52,9 @@ func main() {
 	fileMenu.AddText("重启服务", nil, func(_ *menu.CallbackData) {
 		_ = app.RestartProxy()
 	})
+	fileMenu.AddText("重载界面", nil, func(_ *menu.CallbackData) {
+		app.ReloadWebView()
+	})
 	fileMenu.AddSeparator()
 	fileMenu.AddText("退出", keys.CmdOrCtrl("Q"), func(_ *menu.CallbackData) {
 		app.Quit()
@@ -87,6 +90,9 @@ func main() {
 			},
 			RestartProxy: func() {
 				_ = app.RestartProxy()
+			},
+			ReloadWebView: func() {
+				app.ReloadWebView()
 			},
 			Quit: func() {
 				app.Quit()

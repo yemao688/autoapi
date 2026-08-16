@@ -25,10 +25,11 @@ var icon []byte
 // so this package has no dependency on internal/api. nil fields are
 // silently ignored if the corresponding menu item is clicked.
 type Handlers struct {
-	ShowWindow   func()
-	OpenSettings func()
-	RestartProxy func()
-	Quit         func()
+	ShowWindow    func()
+	OpenSettings  func()
+	RestartProxy  func()
+	ReloadWebView func()
+	Quit          func()
 }
 
 // Run builds the tray menu and returns start/stop functions. Call
@@ -62,6 +63,7 @@ func Run(handlers Handlers) (start func(), stop func()) {
 			settingsItem := systray.AddMenuItem("设置", "Open the settings page")
 			systray.AddSeparator()
 			restartItem := systray.AddMenuItem("重启服务", "Rebind the local HTTP proxy")
+			reloadItem := systray.AddMenuItem("重载界面", "Reload the WebView to reclaim render-process memory")
 			systray.AddSeparator()
 			quitItem := systray.AddMenuItem("退出", "Quit Autoapi")
 
@@ -94,6 +96,14 @@ func Run(handlers Handlers) (start func(), stop func()) {
 					slog.Info("tray: Restart Proxy clicked")
 					if handlers.RestartProxy != nil {
 						handlers.RestartProxy()
+					}
+				}
+			}()
+			go func() {
+				for range reloadItem.ClickedCh {
+					slog.Info("tray: Reload WebView clicked")
+					if handlers.ReloadWebView != nil {
+						handlers.ReloadWebView()
 					}
 				}
 			}()
