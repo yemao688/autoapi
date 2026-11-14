@@ -1139,6 +1139,14 @@ func (p *Proxy) forwardWithFailover(w http.ResponseWriter, r *http.Request, body
 	// matcher copies the rule's setting onto every candidate).
 	firstByteBudget := candidates[0].firstByteBudget
 	firstByteDeadline := time.Now().Add(firstByteBudget)
+	// One stable identity per inbound conversation. OpenCode Go needs it on
+	// every attempt, but it must not change when history grows or when a
+	// retry/failover picks a different target. A client that already supplied
+	// a session identity skips the body parse entirely.
+	sessionID := ""
+	if !hasClientSessionHeader(r.Header) {
+		sessionID = openCodeSessionForRequest(logEntry.APIKeyID, candidates, body)
+	}
 	// budgetCtx is derived from r.Context() so client-disconnect
 	// still cancels everything, but it also carries a first-byte
 	// deadline that fires when the rule-level budget is exhausted.
@@ -1504,6 +1512,7 @@ outer:
 					req.Header.Set("Content-Type", "application/json")
 				}
 				applyExtraHeaders(req.Header, prep.ExtraHeaders)
+				maybeInjectOpenCodeSession(req.Header, c.provider, sessionID)
 				req.Header.Set("Accept-Encoding", "identity")
 			}
 
@@ -1904,6 +1913,10 @@ outer:
 // produce a malformed or duplicated stream.
 func (p *Proxy) forwardStream(w http.ResponseWriter, r *http.Request, body []byte, candidates []candidate, inputEstimate int, logEntry *model.RequestLog) {
 	logEntry.IsStream = true
+	sessionID := ""
+	if !hasClientSessionHeader(r.Header) {
+		sessionID = openCodeSessionForRequest(logEntry.APIKeyID, candidates, body)
+	}
 
 	// firstByteBudget is the rule-level maximum time the proxy is willing to
 	// wait for the first response byte from ANY upstream candidate (across all
@@ -2203,7 +2216,7 @@ outer:
 				break
 			}
 
-			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, prep, attemptOrder, inputEstimate, logEntry)
+			result, newOrder := p.streamAttempt(budgetCtx, w, r, c, upstreamKey, rewrittenBody, upstreamURL, prep, attemptOrder, inputEstimate, sessionID, logEntry)
 			attemptOrder = newOrder
 			if result.AttemptStarted {
 				candidateAttempted = true
@@ -2434,7 +2447,7 @@ outer:
 //
 // Resource safety: resp.Body.Close() is deferred immediately after a
 // successful Do, so every code path releases the upstream connection.
-func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, prep AttemptPreparation, attemptOrder int, inputEstimate int, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
+func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *http.Request, c candidate, upstreamKey string, rewrittenBody []byte, upstreamURL *url.URL, prep AttemptPreparation, attemptOrder int, inputEstimate int, sessionID string, logEntry *model.RequestLog) (result streamAttemptResult, order int) {
 	order = attemptOrder
 	emitted := false
 	committed := false
@@ -2507,6 +2520,7 @@ func (p *Proxy) streamAttempt(ctx context.Context, w http.ResponseWriter, r *htt
 		attemptReq.Header.Set("Content-Type", "application/json")
 	}
 	applyExtraHeaders(attemptReq.Header, prep.ExtraHeaders)
+	maybeInjectOpenCodeSession(attemptReq.Header, c.provider, sessionID)
 	attemptReq.Header.Set("Accept-Encoding", "identity")
 	attemptReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewrittenBody)))
 

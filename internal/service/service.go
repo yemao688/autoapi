@@ -624,6 +624,15 @@ func (s *Service) TestModelChat(providerID, modelName, protocol string, stream b
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
+	// OpenCode Go rejects inference requests that do not carry a session id
+	// (400 MissingSessionID), including the one-shot probe this test sends.
+	if store.RequiresOpenCodeSession(p.BaseURL) {
+		sessionID := testID
+		if sessionID == "" {
+			sessionID = store.NewUUID()
+		}
+		req.Header.Set("x-opencode-session", sessionID)
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
