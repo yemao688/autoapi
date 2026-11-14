@@ -7,6 +7,8 @@ version: '3'
 #   DEV=true   development build: `dev` tag (development data profile), no
 #              stripping, kept inlining. Production builds use `production`.
 #   GOOS       target OS (defaults to the host); windows builds are CGO-free.
+#   ARCH       target arch (defaults to GOARCH, then the host); windows builds
+#              generate a matching wails_windows_<arch>.syso resource.
 #   VERSION    value for main.appVersion (default "dev")
 #   BUILD      value for main.appBuild (default empty -> git hash fallback)
 
@@ -15,11 +17,9 @@ vars:
   BIN_DIR: build/bin
   PACKAGE_MANAGER: npm
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
-  GOOS: '{{.GOOS | default OS}}'
   VERSION: '{{.VERSION | default "dev"}}'
   BUILD: '{{.BUILD | default ""}}'
   VERSION_LDFLAGS: '-X main.appVersion={{.VERSION}}{{if .BUILD}} -X main.appBuild={{.BUILD}}{{end}}'
-  EXE_EXT: '{{if eq .GOOS "windows"}}.exe{{end}}'
 
 tasks:
   ## Development
@@ -37,6 +37,8 @@ tasks:
 
   run:
     summary: Builds (if needed) and runs the application
+    vars:
+      GOOS: '{{.GOOS | default OS}}'
     deps:
       - task: build
         vars:
@@ -47,13 +49,17 @@ tasks:
 
   run:built:
     summary: Runs the already-built binary for GOOS
+    vars:
+      GOOS: '{{.GOOS | default OS}}'
     cmds:
       - task: '{{if eq .GOOS "darwin"}}run:darwin{{else}}run:binary{{end}}'
 
   run:binary:
     internal: true
+    vars:
+      GOOS: '{{.GOOS | default OS}}'
     cmds:
-      - '"{{.BIN_DIR}}/{{.APP_NAME}}{{.EXE_EXT}}"'
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}{{if eq .GOOS "windows"}}.exe{{end}}"'
 
   run:darwin:
     internal: true
@@ -72,6 +78,9 @@ tasks:
 
   build:
     summary: Builds the application for GOOS (default host)
+    vars:
+      GOOS: '{{.GOOS | default OS}}'
+      TARGET_ARCH: '{{.ARCH | default .GOARCH | default ARCH}}'
     deps:
       - task: generate:bindings
       - task: generate:icons
@@ -81,16 +90,25 @@ tasks:
             ref: .DEV
     cmds:
       - mkdir -p "{{.BIN_DIR}}"
+      # Windows resources: PE subsystem, icon, version info and manifest.
+      # Plain `go build` does not generate these, so the resource object is
+      # produced here and consumed by the linker via its filename suffix
+      # (wails_windows_<arch>.syso is only linked into Windows builds).
+      - '{{if eq .GOOS "windows"}}wails3 generate syso -arch {{.TARGET_ARCH}} -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out wails_windows_{{.TARGET_ARCH}}.syso{{else}}true{{end}}'
       - >-
         go build
-        {{if eq .DEV "true"}}-tags dev -buildvcs=false -gcflags=all="-l"{{else}}-tags production -trimpath -buildvcs=false -ldflags="-w -s {{.VERSION_LDFLAGS}}"{{end}}
-        -o "{{.BIN_DIR}}/{{.APP_NAME}}{{.EXE_EXT}}" .
+        {{if eq .DEV "true"}}-tags dev -buildvcs=false -gcflags=all="-l"{{else}}-tags production -trimpath -buildvcs=false -ldflags="-w -s{{if eq .GOOS "windows"}} -H windowsgui{{end}} {{.VERSION_LDFLAGS}}"{{end}}
+        -o "{{.BIN_DIR}}/{{.APP_NAME}}{{if eq .GOOS "windows"}}.exe{{end}}" .
+      - '{{if eq .GOOS "windows"}}rm -f wails_windows_{{.TARGET_ARCH}}.syso{{else}}true{{end}}'
     env:
       GOOS: '{{.GOOS}}'
+      GOARCH: '{{.TARGET_ARCH}}'
       CGO_ENABLED: '{{if eq .GOOS "windows"}}0{{else}}1{{end}}'
-      CGO_CFLAGS: "-mmacosx-version-min=12.0"
-      CGO_LDFLAGS: "-mmacosx-version-min=12.0"
-      MACOSX_DEPLOYMENT_TARGET: "12.0"
+      # macOS deployment-target flags must not leak into Linux cgo builds:
+      # gcc rejects -mmacosx-version-min.
+      CGO_CFLAGS: '{{if eq .GOOS "darwin"}}-mmacosx-version-min=12.0{{end}}'
+      CGO_LDFLAGS: '{{if eq .GOOS "darwin"}}-mmacosx-version-min=12.0{{end}}'
+      MACOSX_DEPLOYMENT_TARGET: '{{if eq .GOOS "darwin"}}12.0{{end}}'
 
   build:frontend:
     summary: Builds the frontend bundle embedded in the binary
@@ -145,6 +163,8 @@ tasks:
 
   package:
     summary: Packages the application (macOS .app bundle; binary elsewhere)
+    vars:
+      GOOS: '{{.GOOS | default OS}}'
     deps:
       - task: build
     cmds:
@@ -152,8 +172,10 @@ tasks:
 
   package:binary:
     internal: true
+    vars:
+      GOOS: '{{.GOOS | default OS}}'
     cmds:
-      - 'echo "Packaged binary: {{.BIN_DIR}}/{{.APP_NAME}}{{.EXE_EXT}}"'
+      - 'echo "Packaged binary: {{.BIN_DIR}}/{{.APP_NAME}}{{if eq .GOOS "windows"}}.exe{{end}}"'
 
   package:darwin:
     internal: true
@@ -171,3 +193,4 @@ tasks:
     summary: Removes build artifacts
     cmds:
       - rm -rf "{{.BIN_DIR}}" frontend/dist
+      - rm -f wails_windows_*.syso

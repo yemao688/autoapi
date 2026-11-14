@@ -3,6 +3,7 @@
 # build outputs
 build/bin/
 frontend/dist/
+wails_windows_*.syso
 
 # wails3 / go-task caches
 .task/
