@@ -12,7 +12,7 @@ import { usePolling } from '../composables/usePolling'
 import { useModelTestToast, type ModelApiType } from '@/composables/useModelTestToast'
 import DropdownMenu from '@/components/DropdownMenu.vue'
 import ModelRuleTargetModal from '@/components/ModelRuleTargetModal.vue'
-import { model, type proxy } from '../../wailsjs/go/models'
+import { model, type proxy } from '@/api/models'
 
 const { t, locale } = useI18n()
 const { format } = useRelativeTime()

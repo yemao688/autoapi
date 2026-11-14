@@ -3,7 +3,10 @@
 # build outputs
 build/bin/
 frontend/dist/
-frontend/package.json.md5
+
+# wails3 / go-task caches
+.task/
+.wails/
 *.app/
 *.dmg
 *.exe

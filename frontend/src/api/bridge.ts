@@ -1,7 +1,10 @@
-import * as wails from '../../wailsjs/go/api/App'
-import type { model, proxy, api as apiModels, service, toolconfig } from '../../wailsjs/go/models'
+import * as wails from '../../bindings/autoapi/internal/api/app'
+import type { model, proxy, api as apiModels, service, toolconfig } from '@/api/models'
 
-export type ExportFormat = Parameters<typeof wails.ExportData>[0]
+// The v3 generator emits Go string-enum types as TypeScript enums, which are
+// nominal and not assignable from string literals. The UI passes the raw enum
+// values, so expose them as a string-literal union of the generated members.
+export type ExportFormat = `${model.ExportFormat}`
 
 // Temporary frontend-only type for the Phase 2 app visibility API.
 // The backend binding already exists and returns the string 'foreground' or
@@ -18,10 +21,12 @@ function normalizeProviderInput(input: model.ProviderInput): model.ProviderInput
 }
 
 function ensureWails(): void {
-  if (typeof window === 'undefined' || !(window as any).go) {
+  // Wails v3 installs the JS runtime bridge on `window._wails` when
+  // `@wailsio/runtime` is imported (see src/main.ts). There is no `window.go`.
+  if (typeof window === 'undefined' || !(window as any)._wails) {
     throw new Error(
       'Wails runtime not available — running outside of Wails webview. ' +
-        'Use `wails dev` or build with `wails build`.'
+        'Use `wails3 dev` or build with `wails3 build`.'
     )
   }
 }
@@ -232,7 +237,9 @@ export const api = {
   },
   testModelChat: (providerId: string, modelName: string, protocol: string, stream: boolean, testId: string): Promise<model.ModelChatTestResult> => {
     ensureWails()
-    return wails.TestModelChat(providerId, modelName, protocol, stream, testId)
+    // Go returns (result, error): a nil result only accompanies an error,
+    // which rejects this promise, so the resolved value is non-null.
+    return wails.TestModelChat(providerId, modelName, protocol, stream, testId) as Promise<model.ModelChatTestResult>
   },
   cancelModelTest: (testId: string): Promise<boolean> => {
     ensureWails()
@@ -294,7 +301,9 @@ export const api = {
   },
   replayLog: (id: string): Promise<model.ReplayResult> => {
     ensureWails()
-    return wails.ReplayLog(id)
+    // Go returns (result, error): a nil result only accompanies an error,
+    // which rejects this promise, so the resolved value is non-null.
+    return wails.ReplayLog(id) as Promise<model.ReplayResult>
   },
 
   // API Keys
@@ -404,7 +413,7 @@ export const api = {
   // Export
   exportData: (format: ExportFormat): Promise<apiModels.ExportResult> => {
     ensureWails()
-    return wails.ExportData(format)
+    return wails.ExportData(format as model.ExportFormat)
   },
   openStorageFolder: (): Promise<void> => {
     ensureWails()

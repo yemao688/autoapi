@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { api as apiModels, model } from '../../wailsjs/go/models'
+import type { api as apiModels, model } from '@/api/models'
 import { api } from '@/api/bridge'
 import { useApi } from '@/composables/useApi'
 import { useExportDownload } from '@/composables/useExportDownload'
@@ -10,7 +10,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useTheme } from '@/composables/useTheme'
 import { LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, type AppLocale } from '@/locales'
 import i18n from '@/locales'
-import { BrowserOpenURL } from '../../wailsjs/runtime/runtime'
+import { Browser } from '@wailsio/runtime'
 import appicon from '@/assets/appicon.png'
 
 const REPOSITORY_URL = 'https://github.com/yemao688/autoapi'
@@ -400,11 +400,11 @@ function notImplemented() {
 }
 
 function openReleases() {
-  BrowserOpenURL(RELEASES_URL)
+  Browser.OpenURL(RELEASES_URL)
 }
 
 function openRepository() {
-  BrowserOpenURL(REPOSITORY_URL)
+  Browser.OpenURL(REPOSITORY_URL)
 }
 
 onMounted(async () => {

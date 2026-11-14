@@ -1,35 +1,40 @@
 # Build Directory
 
-The build directory is used to house all the build files and assets for your application. 
+Assets and configuration for the Wails v3 build.
 
-The structure is:
+## Project config
 
-* bin - Output directory
-* darwin - macOS specific files
-* windows - Windows specific files
+`config.yml` is the Wails v3 project configuration (product name, identifier,
+version, copyright, `dev_mode`). It replaced `wails.json`. The root
+`Taskfile.yml` drives `wails3 build` / `wails3 package` / `wails3 dev`.
 
-## Mac
+After changing `info`, regenerate the platform assets:
 
-The `darwin` directory holds files specific to Mac builds.
-These may be customised and used as part of the build. To return these files to the default state, simply delete them
-and
-build with `wails build`.
+```bash
+wails3 update build-assets -name autoapi -binaryname autoapi -config build/config.yml -dir build
+wails3 generate icons -input build/appicon.png \
+  -macfilename build/darwin/icons.icns -windowsfilename build/windows/icon.ico
+```
 
-The directory contains the following files:
+`update build-assets` rewrites the generated plists/manifests. It also deletes
+`build/darwin/entitlements.plist`; re-add it if you start signing with a
+Developer ID. Re-apply the dev bundle identity if it is overwritten:
+`Info.dev.plist` should use `com.wails.autoapi.dev` / `Autoapi Dev` so the
+development build can run alongside the production app.
 
-- `Info.plist` - the main plist file used for Mac builds. It is used when building using `wails build`.
-- `Info.dev.plist` - same as the main plist file but used when building using `wails dev`.
+## Contents
 
-## Windows
+- `bin/` — build output (`autoapi`, `autoapi.app`, `autoapi.dev.app`); ignored.
+- `appicon.png` — 1024×1024 source icon.
+- `trayicon.png` — 44×44 monochrome macOS template icon for the menu bar.
+- `darwin/`
+  - `Info.plist` — production bundle metadata (`LSMinimumSystemVersion` 12.0).
+  - `Info.dev.plist` — development bundle metadata (`com.wails.autoapi.dev`).
+  - `icons.icns` — macOS app icon generated from `appicon.png`.
+- `windows/`
+  - `icon.ico`, `info.json`, `wails.exe.manifest` — Windows resources used by
+    the build/packaging tasks.
+- `linux/` — Linux packaging assets.
 
-The `windows` directory contains the manifest and rc files used when building with `wails build`.
-These may be customised for your application. To return these files to the default state, simply delete them and
-build with `wails build`.
-
-- `icon.ico` - The icon used for the application. This is used when building using `wails build`. If you wish to
-  use a different icon, simply replace this file with your own. If it is missing, a new `icon.ico` file
-  will be created using the `appicon.png` file in the build directory.
-- `installer/*` - The files used to create the Windows installer. These are used when building using `wails build`.
-- `info.json` - Application details used for Windows builds. The data here will be used by the Windows installer,
-  as well as the application itself (right click the exe -> properties -> details)
-- `wails.exe.manifest` - The main application manifest file.
+The `.app` bundles are assembled by `package:darwin` / `run:darwin` in the root
+`Taskfile.yml`.

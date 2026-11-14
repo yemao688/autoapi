@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { model } from '../../wailsjs/go/models'
+import { model } from '@/api/models'
 import { api } from '@/api/bridge'
 import { useToast } from '@/composables/useToast'
 import { useModelTestToast, type ModelApiType } from '@/composables/useModelTestToast'

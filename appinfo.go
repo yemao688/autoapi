@@ -11,7 +11,7 @@ import (
 //
 //	go build -ldflags "-X main.appVersion=0.5.1"
 //
-// Defaults to "dev" when unset (e.g. during wails dev).
+// Defaults to "dev" when unset (e.g. during wails3 dev).
 var appVersion = "dev"
 
 // appBuild is set at build time via:
@@ -37,7 +37,7 @@ func getAppInfo() model.AppInfo {
 }
 
 // buildHash extracts the VCS revision from Go's build info. This works in
-// `wails dev` and `go run` without any -ldflags. Returns "unknown" if the
+// `wails3 dev` and `go run` without any -ldflags. Returns "unknown" if the
 // revision can't be determined.
 func buildHash() string {
 	info, ok := debug.ReadBuildInfo()

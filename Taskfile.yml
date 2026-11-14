@@ -1,0 +1,173 @@
+version: '3'
+
+# Wails v3 build tasks. `wails3 build`, `wails3 package`, `wails3 run` and
+# `wails3 dev` all dispatch here (wails3 embeds the go-task runner).
+#
+# Build variables (pass as CLI vars, e.g. `wails3 task build VERSION=1.2.3`):
+#   DEV=true   development build: `dev` tag (development data profile), no
+#              stripping, kept inlining. Production builds use `production`.
+#   GOOS       target OS (defaults to the host); windows builds are CGO-free.
+#   VERSION    value for main.appVersion (default "dev")
+#   BUILD      value for main.appBuild (default empty -> git hash fallback)
+
+vars:
+  APP_NAME: autoapi
+  BIN_DIR: build/bin
+  PACKAGE_MANAGER: npm
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  GOOS: '{{.GOOS | default OS}}'
+  VERSION: '{{.VERSION | default "dev"}}'
+  BUILD: '{{.BUILD | default ""}}'
+  VERSION_LDFLAGS: '-X main.appVersion={{.VERSION}}{{if .BUILD}} -X main.appBuild={{.BUILD}}{{end}}'
+  EXE_EXT: '{{if eq .GOOS "windows"}}.exe{{end}}'
+
+tasks:
+  ## Development
+
+  dev:
+    summary: Runs the application in development mode (hot reload)
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  dev:frontend:
+    summary: Runs the Vite dev server (WAILS_VITE_PORT is set by wails3 dev)
+    dir: frontend
+    cmds:
+      - npm run dev
+
+  run:
+    summary: Builds (if needed) and runs the application
+    deps:
+      - task: build
+        vars:
+          DEV:
+            ref: .DEV
+    cmds:
+      - task: run:built
+
+  run:built:
+    summary: Runs the already-built binary for GOOS
+    cmds:
+      - task: '{{if eq .GOOS "darwin"}}run:darwin{{else}}run:binary{{end}}'
+
+  run:binary:
+    internal: true
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}{{.EXE_EXT}}"'
+
+  run:darwin:
+    internal: true
+    platforms: [darwin]
+    cmds:
+      - rm -rf "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources/"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/"
+      - cp build/darwin/Info.dev.plist "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
+      - xattr -cr "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
+
+  ## Build
+
+  build:
+    summary: Builds the application for GOOS (default host)
+    deps:
+      - task: generate:bindings
+      - task: generate:icons
+      - task: build:frontend
+        vars:
+          DEV:
+            ref: .DEV
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}"
+      - >-
+        go build
+        {{if eq .DEV "true"}}-tags dev -buildvcs=false -gcflags=all="-l"{{else}}-tags production -trimpath -buildvcs=false -ldflags="-w -s {{.VERSION_LDFLAGS}}"{{end}}
+        -o "{{.BIN_DIR}}/{{.APP_NAME}}{{.EXE_EXT}}" .
+    env:
+      GOOS: '{{.GOOS}}'
+      CGO_ENABLED: '{{if eq .GOOS "windows"}}0{{else}}1{{end}}'
+      CGO_CFLAGS: "-mmacosx-version-min=12.0"
+      CGO_LDFLAGS: "-mmacosx-version-min=12.0"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+  build:frontend:
+    summary: Builds the frontend bundle embedded in the binary
+    deps:
+      - task: install:frontend:deps
+    cmds:
+      # Dev builds are served by Vite, so a production bundle is only needed
+      # the first time (//go:embed requires frontend/dist to exist).
+      - '{{if eq .DEV "true"}}test -f frontend/dist/index.html || (cd frontend && npm run build){{else}}cd frontend && npm run build{{end}}'
+
+  install:frontend:deps:
+    summary: Installs frontend dependencies
+    dir: frontend
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    cmds:
+      - npm install
+
+  generate:bindings:
+    summary: Regenerates the TypeScript bindings from the Go service
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - frontend/bindings/**/*
+    cmds:
+      # No -i: class models keep the `new model.Foo({...})` construction style
+      # used throughout the Vue code.
+      - wails3 generate bindings -ts -clean
+
+  generate:icons:
+    summary: Regenerates the platform icons from build/appicon.png
+    dir: build
+    sources:
+      - appicon.png
+    generates:
+      - darwin/icons.icns
+      - windows/icon.ico
+    cmds:
+      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico
+
+  generate:
+    summary: Alias for generate:bindings
+    cmds:
+      - task: generate:bindings
+
+  ## Packaging
+
+  package:
+    summary: Packages the application (macOS .app bundle; binary elsewhere)
+    deps:
+      - task: build
+    cmds:
+      - task: '{{if eq .GOOS "darwin"}}package:darwin{{else}}package:binary{{end}}'
+
+  package:binary:
+    internal: true
+    cmds:
+      - 'echo "Packaged binary: {{.BIN_DIR}}/{{.APP_NAME}}{{.EXE_EXT}}"'
+
+  package:darwin:
+    internal: true
+    platforms: [darwin]
+    cmds:
+      - rm -rf "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/"
+      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/"
+      - xattr -cr "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+
+  clean:
+    summary: Removes build artifacts
+    cmds:
+      - rm -rf "{{.BIN_DIR}}" frontend/dist

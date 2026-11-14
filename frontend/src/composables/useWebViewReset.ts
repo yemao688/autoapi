@@ -1,5 +1,5 @@
 import { useRouter } from 'vue-router'
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { Events } from '@wailsio/runtime'
 
 // ============================================================================
 // WebView memory pressure reset
@@ -122,8 +122,8 @@ let manualReloadBound = false
 function bindManualReload() {
   if (manualReloadBound) return
   manualReloadBound = true
-  const off = EventsOn('app:reload-webview', onManualReloadRequested)
-  manualReloadOff = typeof off === 'function' ? off : () => EventsOff('app:reload-webview')
+  const off = Events.On('app:reload-webview', onManualReloadRequested)
+  manualReloadOff = typeof off === 'function' ? off : () => Events.Off('app:reload-webview')
 }
 
 /**

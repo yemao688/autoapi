@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { model } from "../../wailsjs/go/models";
+import { model } from '@/api/models';
 import { api } from "@/api/bridge";
 import { useApi } from "@/composables/useApi";
 import { useExportDownload } from "@/composables/useExportDownload";
@@ -11,7 +11,7 @@ import { useTabKeyboard } from "@/composables/useTabKeyboard";
 import { useCompactNumber } from "@/composables/useCompactNumber";
 import { useAppVisibility } from "@/composables/useAppVisibility";
 import type { ProviderOption } from "@/types/usage";
-import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
+import { Events } from "@wailsio/runtime";
 import TokensPane from "@/components/usage/TokensPane.vue";
 import LogsPane from "@/components/usage/LogsPane.vue";
 import LogFilters, {
@@ -369,7 +369,7 @@ function stopRealtime() {
 
 function startRealtime() {
   stopRealtime();
-  const off = EventsOn("log:new", () => {
+  const off = Events.On("log:new", () => {
     try {
       // Guard against events that were already queued when the app was
       // backgrounded before the listener is removed.
@@ -392,14 +392,14 @@ function startRealtime() {
       console.warn("[sync] log:new handler error", e);
     }
   });
-  eventsOff = typeof off === "function" ? off : () => EventsOff("log:new");
+  eventsOff = typeof off === "function" ? off : () => Events.Off("log:new");
   // Subscribe to the dedicated ping event before pinging so the liveness
   // probe has a listener in place. The handler is intentionally a no-op:
   // receiving log:ping proves the Wails event channel is alive, and it must
   // not go through the log:new path (which would schedule a redundant
   // refresh after every mount/foreground).
-  const offPing = EventsOn("log:ping", () => {});
-  pingOff = typeof offPing === "function" ? offPing : () => EventsOff("log:ping");
+  const offPing = Events.On("log:ping", () => {});
+  pingOff = typeof offPing === "function" ? offPing : () => Events.Off("log:ping");
   // Ping the backend to verify the Wails event channel is alive.
   api.pingLogEvent().catch((e: any) => {
     console.warn("[sync] PingLogEvent failed", e);

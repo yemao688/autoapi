@@ -130,7 +130,7 @@ function formatChartDate(dateStr: string): string {
   return date.toLocaleDateString(locale.value, { month: 'short', day: 'numeric' })
 }
 
-function formatSuccessRate(rate: number | undefined): string {
+function formatSuccessRate(rate: number | null | undefined): string {
   if (rate === undefined || rate === null) return '—'
   return rate.toFixed(1) + '%'
 }

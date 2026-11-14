@@ -1,6 +1,6 @@
 import { readonly, ref } from 'vue'
 import { api, type AppVisibilityState } from '@/api/bridge'
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { Events } from '@wailsio/runtime'
 
 // The backend already exposes App.GetAppVisibilityState() returning the
 // string 'foreground' or 'background', and emits the same string via the
@@ -37,10 +37,10 @@ export function useAppVisibility() {
     // Subscribe first so we cannot miss a state change that happens while
     // the initial query is in flight. The event handler owns the source of
     // truth; it bumps the generation counter on every event.
-    const off = EventsOn('app:visibility', (state: string) => {
-      setVisible(state === 'foreground')
+    const off = Events.On('app:visibility', (event) => {
+      setVisible(event.data === 'foreground')
     })
-    eventsOff = typeof off === 'function' ? off : () => EventsOff('app:visibility')
+    eventsOff = typeof off === 'function' ? off : () => Events.Off('app:visibility')
 
     // Capture the generation at the moment the query starts. If an event
     // fires during the query (eventGen changes), the query result is stale

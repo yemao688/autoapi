@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@/api/bridge'
-import type { model } from '../../wailsjs/go/models'
+import type { model } from '@/api/models'
 
 const { t, locale } = useI18n()
 

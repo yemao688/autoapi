@@ -1,30 +1,38 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"log/slog"
+	"runtime"
 
+	"autoapi/internal/api"
 	"autoapi/internal/config"
-	"autoapi/internal/tray"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/menu"
-	"github.com/wailsapp/wails/v2/pkg/menu/keys"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// trayIcon is a 44×44 monochrome template image: pure black (#000000) with
+// anti-aliased alpha and a fully transparent background. macOS renders
+// template icons as a single-colour silhouette and applies the appropriate
+// foreground (dark on light menu bar, light on dark), so a colour PNG would
+// appear as an opaque blob. Three connected nodes (equilateral triangle)
+// represent routing requests across providers.
+//
+//go:embed build/trayicon.png
+var trayIcon []byte
+
 func main() {
-	app := NewApp()
+	rt := api.NewRuntime()
+	app := NewApp(rt)
 	profile := config.Current()
 
-	// Resolve static lifecycle options from persisted settings before
-	// wails.Run. These options are evaluated once by Wails at startup and
-	// cannot be changed at runtime, so setting changes only take effect
+	// Resolve static lifecycle options from persisted settings before the
+	// application starts. These options are evaluated once by Wails at startup
+	// and cannot be changed at runtime, so setting changes only take effect
 	// after an app restart.
 	settings, sErr := app.GetSettings()
 	cfg := resolveLaunchConfig(settings)
@@ -33,130 +41,126 @@ func main() {
 		slog.Warn("launch: failed to read settings, using safe defaults", "error", sErr)
 	}
 
-	// Build the application menu (top-of-screen on macOS, window menu on
-	// Windows/Linux). The Wails v2.12.0 release used here does not expose a
-	// public system-tray API — the internal menumanager has an AddTrayMenu
-	// entry point but it is unexported, and options.App has no TrayIcon
-	// field. We therefore register the same menu structure as the
-	// application menu, which gives the user a discoverable "Autoapi"
-	// entry on every supported platform.
-	trayMenu := menu.NewMenu()
-	fileMenu := trayMenu.AddSubmenu("Autoapi")
-	fileMenu.AddText("显示主窗口", keys.CmdOrCtrl("O"), func(_ *menu.CallbackData) {
-		_ = app.ShowApp()
-	})
-	fileMenu.AddText("设置", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
-		_ = app.ShowApp()
-		app.NavigateTo("/settings")
-	})
-	fileMenu.AddText("重启服务", nil, func(_ *menu.CallbackData) {
-		_ = app.RestartProxy()
-	})
-	fileMenu.AddText("重载界面", nil, func(_ *menu.CallbackData) {
-		app.ReloadWebView()
-	})
-	fileMenu.AddSeparator()
-	fileMenu.AddText("退出", keys.CmdOrCtrl("Q"), func(_ *menu.CallbackData) {
-		app.Quit()
-	})
-
-	// Edit menu: Wails v2 on macOS requires a native, role-based Edit
-	// submenu for Cmd+C/Cmd+V/Cmd+X/Cmd+A/Cmd+Z to reach the webview's
-	// text fields. menu.EditMenu() produces items routed through the
-	// standard Cocoa selectors (copy:/paste:/cut:/undo:/redo:/
-	// selectAll:) which propagate via the NSApp responder chain to the
-	// WKWebView first responder, where they are handled natively.
-	//
-	// IMPORTANT: do NOT build this menu via AddText("Copy",
-	// keys.CmdOrCtrl("c"), emptyCallback). AddText creates custom
-	// NSMenuItems with @selector(handleClick) that INTERCEPT the
-	// keystroke at the NSMenu level and route it to an empty Go
-	// callback, preventing it from ever reaching the webview. The
-	// role-based EditMenu() is the only correct way. Do not change.
-	trayMenu.Append(menu.EditMenu())
-
-	// System tray — conditionally initialized based on menu_bar_item setting.
-	// When disabled, the user has no tray icon to restore a hidden window,
-	// so resolveLaunchConfig also forces visible window + quit-on-close.
-	var stopTray func()
-	if cfg.enableTray {
-		start, stop := tray.Run(tray.Handlers{
-			ShowWindow: func() {
-				_ = app.ShowApp()
-			},
-			OpenSettings: func() {
-				_ = app.ShowApp()
-				app.NavigateTo("/settings")
-			},
-			RestartProxy: func() {
-				_ = app.RestartProxy()
-			},
-			ReloadWebView: func() {
-				app.ReloadWebView()
-			},
-			Quit: func() {
-				app.Quit()
-			},
-		})
-		stopTray = stop
-		start()
-	}
-
-	err := wails.Run(&options.App{
-		Title:       "Autoapi",
-		Width:       1280,
-		Height:      800,
-		MinWidth:    480,
-		MinHeight:   400,
-		StartHidden: cfg.startHidden,
-		// Close interception is the sole hide-on-close mechanism when tray
-		// mode is enabled. Wails' HideWindowOnClose is intentionally disabled
-		// to avoid competing native transitions.
-		HideWindowOnClose: false,
-		OnBeforeClose: func(_ context.Context) bool {
-			// If the user explicitly chose Quit from the app menu or tray,
-			// allow the window to close. Otherwise, when the tray is enabled,
-			// treat the close button as "hide to background".
-			if app.IsQuitting() {
-				return false
-			}
-			if !cfg.enableTray {
-				return false
-			}
-			if err := app.EnterBackground(); err != nil {
-				slog.Warn("lifecycle: failed to enter background", "error", err)
-			}
-			return true
+	// The application menu (top-of-screen on macOS, window menu on
+	// Windows/Linux). The "Autoapi" submenu carries our lifecycle actions; the
+	// standard Edit role submenu is required on macOS so Cmd+C/Cmd+V/Cmd+X/
+	// Cmd+A/Cmd+Z reach the webview's text fields through the Cocoa responder
+	// chain. Wails v3 emits the standard selectors (copy:, paste:, ...) for
+	// role-based items, exactly like v2's menu.EditMenu().
+	wailsApp := application.New(application.Options{
+		Name:        "Autoapi",
+		Description: "AI 模型路由桌面应用",
+		Services: []application.Service{
+			application.NewService(app),
 		},
-		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: singleInstanceLockID(profile),
-			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
+		},
+		Mac: application.MacOptions{
+			// With no tray icon there is no way to restore a hidden window, so
+			// closing the last window must terminate. With the tray enabled the
+			// window close is intercepted below and the app stays in the
+			// background.
+			ApplicationShouldTerminateAfterLastWindowClosed: !cfg.enableTray,
+		},
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: singleInstanceLockID(profile),
+			OnSecondInstanceLaunch: func(_ application.SecondInstanceData) {
 				if err := app.ShowApp(); err != nil {
 					slog.Warn("launch: failed to show window for second instance", "error", err)
 				}
 			},
 		},
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 245, G: 245, B: 247, A: 1},
-		OnStartup:        app.Startup,
-		OnShutdown: func(ctx context.Context) {
-			if stopTray != nil {
-				stopTray()
-			}
-			app.Shutdown(ctx)
-		},
-		Bind: []interface{}{
-			app,
-		},
-		Menu: trayMenu,
-		Mac: &mac.Options{
-			TitleBar: mac.TitleBarHiddenInset(),
+	})
+
+	menuManager := wailsApp.Menu
+	mainMenu := application.NewMenu()
+	autoapiMenu := mainMenu.AddSubmenu("Autoapi")
+	autoapiMenu.Add("显示主窗口").
+		SetAccelerator("CmdOrCtrl+O").
+		OnClick(func(_ *application.Context) { _ = app.ShowApp() })
+	autoapiMenu.Add("设置").
+		SetAccelerator("CmdOrCtrl+,").
+		OnClick(func(_ *application.Context) {
+			_ = app.ShowApp()
+			app.NavigateTo("/settings")
+		})
+	autoapiMenu.Add("重启服务").
+		OnClick(func(_ *application.Context) { _ = app.RestartProxy() })
+	autoapiMenu.Add("重载界面").
+		OnClick(func(_ *application.Context) { app.ReloadWebView() })
+	autoapiMenu.AddSeparator()
+	autoapiMenu.Add("退出").
+		SetAccelerator("CmdOrCtrl+Q").
+		OnClick(func(_ *application.Context) { app.Quit() })
+	mainMenu.AddRole(application.EditMenu)
+	menuManager.SetApplicationMenu(mainMenu)
+
+	// Main window. Hidden is resolved from the persisted startup action; the
+	// frontend restores its own route and state when it loads.
+	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:             "main",
+		Title:            "Autoapi",
+		Width:            1280,
+		Height:           800,
+		MinWidth:         480,
+		MinHeight:        400,
+		Hidden:           cfg.startHidden,
+		BackgroundColour: application.NewRGB(245, 245, 247),
+		URL:              "/",
+		// Windows/Linux render the application menu inside the window; macOS
+		// always uses the global menu bar.
+		UseApplicationMenu: true,
+		Mac: application.MacWindow{
+			TitleBar: application.MacTitleBarHiddenInset,
 		},
 	})
 
-	if err != nil {
-		println("Error:", err.Error())
+	rt.Attach(wailsApp, mainWindow)
+
+	// Close interception is the sole hide-on-close mechanism when tray mode is
+	// enabled. An explicit Quit (menu / tray) sets the quitting flag first and
+	// lets the window close for real.
+	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if app.IsQuitting() {
+			return
+		}
+		if !cfg.enableTray {
+			return
+		}
+		if err := app.EnterBackground(); err != nil {
+			slog.Warn("lifecycle: failed to enter background", "error", err)
+		}
+		e.Cancel()
+	})
+
+	// System tray — conditionally created based on the menu_bar_item setting.
+	// When disabled, the user has no tray icon to restore a hidden window, so
+	// resolveLaunchConfig also forces a visible window + quit-on-close.
+	if cfg.enableTray {
+		trayMenu := application.NewMenu()
+		trayMenu.Add("显示主窗口").OnClick(func(_ *application.Context) { _ = app.ShowApp() })
+		trayMenu.Add("设置").OnClick(func(_ *application.Context) {
+			_ = app.ShowApp()
+			app.NavigateTo("/settings")
+		})
+		trayMenu.AddSeparator()
+		trayMenu.Add("重启服务").OnClick(func(_ *application.Context) { _ = app.RestartProxy() })
+		trayMenu.Add("重载界面").OnClick(func(_ *application.Context) { app.ReloadWebView() })
+		trayMenu.AddSeparator()
+		trayMenu.Add("退出").OnClick(func(_ *application.Context) { app.Quit() })
+
+		tray := wailsApp.SystemTray.New()
+		tray.SetTooltip("Autoapi")
+		if runtime.GOOS == "darwin" {
+			tray.SetTemplateIcon(trayIcon)
+		} else {
+			tray.SetIcon(trayIcon)
+		}
+		tray.SetMenu(trayMenu)
+	}
+
+	if err := wailsApp.Run(); err != nil {
+		slog.Error("application exited with error", "error", err)
 	}
 }

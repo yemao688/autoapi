@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { model } from '../../../wailsjs/go/models'
+import type { model } from '@/api/models'
 import { api } from '@/api/bridge'
 
 import { useProviderStyle } from '@/composables/useProviderStyle'

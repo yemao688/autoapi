@@ -5,7 +5,7 @@ import SidebarNav from './SidebarNav.vue'
 import StatusBar from './StatusBar.vue'
 import DropdownMenu from './DropdownMenu.vue'
 import { useTheme } from '@/composables/useTheme'
-import { EventsOn } from '../../wailsjs/runtime/runtime'
+import { Events } from '@wailsio/runtime'
 
 const { loadFromSettings, activeTheme, saveTheme } = useTheme()
 const router = useRouter()
@@ -16,8 +16,8 @@ onMounted(() => {
   // "app:navigate" Wails event when the user picks an item from the
   // application menu / future tray menu. Forward the path to vue-router
   // so the view actually changes.
-  const off = EventsOn('app:navigate', (path: string) => {
-    void router.replace(path)
+  const off = Events.On('app:navigate', (event) => {
+    void router.replace(event.data as string)
   })
   onUnmounted(() => {
     off()

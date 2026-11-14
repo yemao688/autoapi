@@ -37,11 +37,11 @@
 <details>
 <summary>展开构建步骤</summary>
 
-**前置要求**：Go 1.25+、Node.js 20+、Wails CLI v2.12+
+**前置要求**：Go 1.27.4+、Node.js 20+、Wails CLI v3.1+
 
 ```bash
 # 安装 Wails CLI（仅需一次）
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 
 # 克隆仓库
 git clone https://github.com/yemao688/autoapi.git
@@ -51,12 +51,16 @@ cd autoapi
 cd frontend && npm install && cd ..
 
 # 开发模式（热重载）
-wails dev
+wails3 dev
 
-# 生产构建
-wails build -platform darwin/universal -clean    # macOS
-wails build -platform windows/amd64 -clean       # Windows
-wails build -platform linux/amd64 -clean         # Linux
+# 生产构建（当前平台，产物在 build/bin/）
+wails3 build
+
+# macOS .app 打包
+wails3 package
+
+# 交叉编译 Windows 二进制（CGO-free）
+GOOS=windows wails3 task build
 ```
 
 </details>
@@ -122,7 +126,7 @@ curl -X POST http://localhost:8344/v1/chat/completions \
 
 ## 🏗️ 架构
 
-- **后端**：Go 1.25 · Wails v2 · chi/v5 · modernc.org/sqlite
+- **后端**：Go 1.27.4 · Wails v3 · chi/v5 · modernc.org/sqlite
 - **前端**：Vue 3.5 · Vite 8 · TypeScript 6 · vue-router 4 · Chart.js
 - **安全**：Argon2id 主密码 · AES-256-GCM 密钥加密 · SQLite WAL
 - **界面**：Apple 设计语言 · CSS 变量主题 · 响应式布局
@@ -135,14 +139,14 @@ curl -X POST http://localhost:8344/v1/chat/completions \
 | 应用日志 | `~/.autoapi/logs/autoapi.log` |
 | AES 密钥 | `~/.autoapi/` |
 
-> `wails dev` 使用独立开发实例：Bundle ID `com.wails.autoapi.dev`、数据目录 `~/.autoapi-dev/`、代理端口 `18344` 和独立单实例锁，不影响正式环境。
+> `wails3 dev` 使用独立开发实例：Bundle ID `com.wails.autoapi.dev`、数据目录 `~/.autoapi-dev/`、代理端口 `18344` 和独立单实例锁，不影响正式环境。
 
 ## 📝 开发
 
 ```bash
 go test ./internal/...     # 后端测试
 cd frontend && npm run build   # 前端类型检查 + 构建
-wails build                 # 完整构建
+wails3 build                # 完整构建
 ```
 
 详见 [AGENTS.md](AGENTS.md)。
@@ -186,19 +190,19 @@ OpenAI 兼容的本地代理网关 + 可视化管理面板，wails v2 + Go + Vue
 │   │   ├── composables/             # 逻辑复用（useApi/useTheme/useToast/useMasterGate/...）
 │   │   ├── views/                   # 6 个页面
 │   │   └── styles.css               # 设计系统（Apple 风格 CSS 变量 + dark 模式）
-│   └── wailsjs/                     # 自动生成的 binding
+│   └── bindings/                    # 由 wails3 generate bindings 生成
 └── build/                           # 构建产物与平台资源
 
 ```
 
 ## 前置要求
 
-- Go 1.25+
+- Go 1.27.4+
 - Node.js 20+
-- Wails CLI v2.12+
+- Wails CLI v3.1+
 
 ```bash
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 ```
 
 ## 运行 / 开发
@@ -212,11 +216,10 @@ cd frontend && npm install
 ### 2. 热重载开发模式
 
 ```bash
-wails dev
+wails3 dev
 ```
 
-- Wails DevServer: http://localhost:34115
-- Vite DevServer:  http://localhost:5173
+- Vite DevServer:  http://localhost:9245（`WAILS_VITE_PORT`，可被 `-port` 覆盖）
 - 开发代理端口:    http://localhost:18344
 
 开发构建会自动打开 `Autoapi Dev` 窗口；前端保存即时热重载，Go 修改后自动重新编译。开发版使用 `~/.autoapi-dev/autoapi.db` 和独立 Bundle ID，可与正式版同时运行。
@@ -224,17 +227,17 @@ wails dev
 ### 3. 生产构建
 
 ```bash
-# macOS universal 二进制
-wails build -platform darwin/universal -clean
+# 当前平台构建（产物 build/bin/autoapi）
+wails3 build
 
-# macOS 当前架构
-wails build -platform darwin -clean
+# macOS .app 打包（产物 build/bin/autoapi.app）
+wails3 package
 
-# Windows
-wails build -platform windows/amd64 -clean
+# 交叉编译 Windows 二进制（CGO-free）
+GOOS=windows wails3 task build
 
-# Linux
-wails build -platform linux/amd64 -clean
+# Linux 需在 Linux 上构建（CGO/WebKitGTK）
+GOOS=linux wails3 task build
 ```
 
 构建产物在 `build/bin/autoapi.app`（macOS）或 `build/bin/autoapi.exe`（Windows）。
@@ -306,10 +309,10 @@ curl -X POST http://localhost:8344/v1/chat/completions \
 
 ## 技术栈
 
-- 后端：Go 1.25 + Wails v2 + chi/v5 + modernc.org/sqlite
+- 后端：Go 1.27.4 + Wails v3 + chi/v5 + modernc.org/sqlite
 - 前端：Vue 3.5 + Vite 8 + TypeScript 6 + vue-router 4
 - 安全：argon2id 主密码 + AES-256-GCM 密钥加密
-- 构建：wails build（跨平台）
+- 构建：wails3 build / wails3 package（Taskfile 驱动）
 
 ## 许可证
 

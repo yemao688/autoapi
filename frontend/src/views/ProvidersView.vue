@@ -9,7 +9,7 @@ import { useToast } from '../composables/useToast'
 import { useModelTestToast, type ModelApiType } from '../composables/useModelTestToast'
 import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
-import type { model } from '../../wailsjs/go/models'
+import type { model } from '@/api/models'
 
 const { t } = useI18n()
 const { color: providerColor, initial: providerLetter } = useProviderStyle()
