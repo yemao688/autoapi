@@ -67,7 +67,7 @@ func TestStreamConversionFirstWriteErrorDiscardsReturnedBytes(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
 	rec := httptest.NewRecorder()
 	logEntry := &model.RequestLog{}
-	result, _ := p.streamAttempt(context.Background(), rec, req, c, "key", prep.Body, upstreamURL, prep, 0, 0, logEntry)
+	result, _ := p.streamAttempt(context.Background(), rec, req, c, "key", prep.Body, upstreamURL, prep, 0, 0, "", logEntry)
 	if result.Status != model.AttemptOutcomeConversionError || result.Committed || result.StreamErr != streamPoisonErr {
 		t.Fatalf("first conversion error result=%+v", result)
 	}
@@ -92,7 +92,7 @@ func TestStreamConversionLaterWriteErrorPreservesOnlyPriorBytes(t *testing.T) {
 	}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
 	rec := httptest.NewRecorder()
-	result, _ := p.streamAttempt(context.Background(), rec, req, c, "key", prep.Body, upstreamURL, prep, 0, 0, &model.RequestLog{})
+	result, _ := p.streamAttempt(context.Background(), rec, req, c, "key", prep.Body, upstreamURL, prep, 0, 0, "", &model.RequestLog{})
 	if result.Status != model.AttemptOutcomeConversionError || !result.Committed || result.StreamErr != streamPoisonErr {
 		t.Fatalf("later conversion error result=%+v", result)
 	}

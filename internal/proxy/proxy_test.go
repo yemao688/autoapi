@@ -5293,7 +5293,7 @@ func TestStreamAttemptExpiredBudgetDoesNotStartAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	logEntry := &model.RequestLog{}
-	result, _ := p.streamAttempt(ctx, httptest.NewRecorder(), req, c, "key", prep.Body, upstreamURL, prep, 0, 0, logEntry)
+	result, _ := p.streamAttempt(ctx, httptest.NewRecorder(), req, c, "key", prep.Body, upstreamURL, prep, 0, 0, "", logEntry)
 	if !result.BudgetExceeded || result.AttemptStarted {
 		t.Fatalf("expired budget result=%+v", result)
 	}
