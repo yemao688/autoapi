@@ -9,7 +9,7 @@ import { useToast } from '../composables/useToast'
 import { useModelTestToast, type ModelApiType } from '../composables/useModelTestToast'
 import { useConfirm } from '../composables/useConfirm'
 import DropdownMenu from '@/components/DropdownMenu.vue'
-import type { model } from '../../wailsjs/go/models'
+import type { model } from '@/api/models'
 
 const { t } = useI18n()
 const { color: providerColor, initial: providerLetter } = useProviderStyle()
@@ -101,6 +101,7 @@ const form = ref<model.ProviderInput>({
   responses_enabled: false,
   messages_enabled: false,
   gemini_enabled: false,
+  fix_empty_assistant: false,
 })
 
 const filteredProviders = computed(() => {
@@ -496,6 +497,26 @@ async function saveModelRow(row: EditableModelRow) {
   }
 }
 
+async function saveModelApiType(row: EditableModelRow) {
+  if (row.saving || row.deleting || row.capabilitiesLoading || !editingId.value) return
+  const providerId = editingId.value
+  const persistedModelName = row.model.name
+  row.saving = true
+  try {
+    for (const protocol of modelApiTypeOptions) {
+      await api.setModelCapability(providerId, persistedModelName, protocol.value, 'native', protocol.value === row.apiType)
+    }
+    row.originalApiType = row.apiType
+    toast.push(t('providers.modal.modelUpdated', { name: persistedModelName }), 'success')
+  } catch (e: any) {
+    row.apiType = row.originalApiType
+    const messageError = e?.message || String(e)
+    toast.push(t('providers.modal.capabilitiesSaveFailed', { error: messageError }), 'error')
+  } finally {
+    row.saving = false
+  }
+}
+
 async function deleteModelConfirm(row: EditableModelRow) {
   if (row.saving || row.deleting) return
   const ok = await confirm.open({
@@ -587,7 +608,7 @@ function openAdd(isCustom: boolean) {
   resetModalState()
   modalMode.value = 'add'
   editingId.value = ''
-  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false, messages_enabled: false, gemini_enabled: false }
+  form.value = { name: '', base_url: '', upstream_key: '', is_custom: isCustom, responses_enabled: false, messages_enabled: false, gemini_enabled: false, fix_empty_assistant: false }
   modalOpen.value = true
 }
 
@@ -604,6 +625,7 @@ function openEdit(provider: model.Provider) {
     responses_enabled: provider.responses_enabled,
     messages_enabled: provider.messages_enabled,
     gemini_enabled: provider.gemini_enabled,
+    fix_empty_assistant: provider.fix_empty_assistant,
   }
   loadingKey.value = true
   modelRows.value = []
@@ -658,6 +680,7 @@ async function saveProvider() {
       responses_enabled: form.value.responses_enabled,
       messages_enabled: form.value.messages_enabled,
       gemini_enabled: form.value.gemini_enabled,
+      fix_empty_assistant: form.value.fix_empty_assistant,
     }
     if (modalMode.value === 'edit' && !keyDirty.value) {
       payload.upstream_key = ''
@@ -892,7 +915,7 @@ onMounted(() => {
   <!-- Provider modal -->
   <Teleport to="body">
     <div v-if="modalOpen" class="modal-overlay" @click.self="closeModal">
-      <div class="modal-card wide modal-card-scroll">
+      <div class="modal-card wide modal-card-scroll provider-modal-card">
         <div class="modal-title">{{ modalMode === 'edit' ? t('providers.modal.edit') : (form.is_custom ? t('providers.modal.addCustom') : t('providers.modal.add')) }}</div>
         <div class="field">
           <label class="field-label">{{ t('providers.modal.name') }}</label>
@@ -903,12 +926,12 @@ onMounted(() => {
           <input v-model="form.base_url" class="input mono" :placeholder="t('providers.modal.baseUrlPlaceholder')">
         </div>
         <div class="field">
-          <div class="row-between" style="margin-bottom: 6px;">
-            <label class="field-label" style="margin: 0;">{{ t('providers.modal.upstreamKey') }}</label>
-            <div class="row" style="gap: 4px;">
+          <div class="row-between provider-field-head">
+            <label class="field-label">{{ t('providers.modal.upstreamKey') }}</label>
+            <div class="provider-key-actions">
               <button
                 type="button"
-                class="btn btn-icon"
+                class="btn btn-icon provider-key-action"
                 :title="keyVisible ? t('providers.modal.hideKey') : t('providers.modal.showKey')"
                 :aria-label="keyVisible ? t('providers.modal.hideKey') : t('providers.modal.showKey')"
                 @click="toggleKeyVisibility"
@@ -918,7 +941,7 @@ onMounted(() => {
               </button>
               <button
                 type="button"
-                class="btn btn-icon"
+                class="btn btn-icon provider-key-action"
                 :title="t('providers.modal.copyKey')"
                 :aria-label="t('providers.modal.copyKey')"
                 :disabled="!form.upstream_key"
@@ -939,13 +962,24 @@ onMounted(() => {
           >
           <div class="field-help">{{ t('providers.modal.upstreamKeyHelp') }}</div>
         </div>
-        <div v-if="modalMode === 'edit'" class="field">
-          <div class="row-between" style="margin-bottom: 8px;">
-            <label class="field-label">{{ t('providers.modal.availableModels') }}</label>
-            <div class="row" style="gap: 6px;">
+        <div class="field provider-fix-field">
+          <label class="provider-option-row">
+            <span class="provider-option-copy">
+              <span class="field-label">{{ t('providers.modal.fixEmptyAssistant') }}</span>
+              <span class="field-help">{{ t('providers.modal.fixEmptyAssistantHelp') }}</span>
+            </span>
+            <span class="toggle provider-option-toggle">
+              <input type="checkbox" v-model="form.fix_empty_assistant">
+              <span class="toggle-slider blue"></span>
+            </span>
+          </label>
+        </div>
+        <div v-if="modalMode === 'edit'" class="field provider-models-section">
+          <div class="row-between provider-models-header">
+            <label class="field-label provider-section-label">{{ t('providers.modal.availableModels') }}</label>
+            <div class="provider-model-actions">
               <button
                 class="btn btn-secondary"
-                style="padding: 4px 10px; font-size: 12px;"
                 :disabled="manualAddVisible"
                 @click="openManualAdd"
               >
@@ -954,7 +988,6 @@ onMounted(() => {
               </button>
               <button
                 class="btn btn-secondary"
-                style="padding: 4px 10px; font-size: 12px;"
                 :disabled="fetchingModels"
                 @click="fetchModels"
               >
@@ -963,7 +996,6 @@ onMounted(() => {
               </button>
               <button
                 class="btn btn-danger-text"
-                style="padding: 4px 10px; font-size: 12px;"
                 :disabled="mutationBusy || models.length === 0"
                 @click="clearAllModels"
               >
@@ -973,18 +1005,16 @@ onMounted(() => {
           </div>
 
           <!-- Inline manual-add input row -->
-          <div v-if="manualAddVisible" class="row" style="gap: 6px; margin-bottom: 8px;">
+          <div v-if="manualAddVisible" class="provider-manual-add-row">
             <input
               v-model="manualAddName"
               class="input mono"
-              style="flex: 1; font-size: 12.5px;"
               :placeholder="t('providers.modal.manualAddPlaceholder')"
               @keydown.enter="confirmManualAdd"
             >
             <button
               type="button"
               class="btn btn-primary"
-              style="padding: 5px 14px; font-size: 12.5px;"
               :disabled="!manualAddName.trim()"
               @click="confirmManualAdd"
             >{{ t('providers.modal.manualAddConfirm') }}</button>
@@ -999,7 +1029,7 @@ onMounted(() => {
             </button>
           </div>
 
-          <div class="model-list">
+          <div class="model-list provider-catalog-list">
             <div v-if="fetchingModels" class="model-empty">{{ t('providers.modal.loading') }}</div>
             <div v-else-if="!models.length" class="model-empty">{{ t('providers.modal.empty') }}</div>
             <table v-else class="model-table">
@@ -1049,6 +1079,7 @@ onMounted(() => {
                       class="select model-inline-select"
                       :aria-label="t('providers.modal.apiType')"
                       :disabled="row.saving || row.deleting || row.capabilitiesLoading"
+                      @change="saveModelApiType(row)"
                     >
                       <option v-for="option in modelApiTypeOptions" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
                     </select>
@@ -1091,7 +1122,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 20px;">
+        <div class="provider-modal-footer">
           <button class="btn btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveProvider">{{ saving ? t('common.processing') : (modalMode === 'add' ? t('providers.modal.createAndContinue') : t('common.save')) }}</button>
         </div>
@@ -1154,11 +1185,267 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.model-table {
-  min-width: 780px;
+/* Wide enough for the 6-column model table to breathe at desktop sizes.
+   The modal still shrinks with the viewport via max-width; the model table
+   trims its fixed columns below 920px and switches to stacked cards below
+   800px so rows never need horizontal scrolling.
+   Note the `.modal-card` prefix: in the production bundle global rules
+   (`.modal-card.wide { width: 640px }`) are emitted after component styles,
+   so an equal-specificity selector here would lose and the dialog would
+   render at the narrow default width. */
+.modal-card.provider-modal-card {
+  width: 1080px;
+  max-width: calc(100vw - 32px);
 }
-.model-table td {
+
+.provider-modal-card > .field {
+  margin-bottom: 18px;
+}
+
+.provider-field-head {
+  align-items: center;
+  margin-bottom: 7px;
+}
+
+.provider-field-head .field-label {
+  margin: 0;
+}
+
+.provider-key-actions {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.provider-key-action {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+.provider-key-action:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.provider-fix-field {
+  margin-top: 2px;
+}
+
+.provider-option-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.provider-option-row:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.provider-option-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.provider-option-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.provider-option-copy .field-label {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.provider-option-copy .field-help {
+  margin-top: 0;
+  line-height: 1.45;
+}
+
+.provider-option-toggle {
+  margin-top: 1px;
+}
+
+.provider-modal-card .toggle input:focus-visible + .toggle-slider {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+.provider-modal-card .toggle input:disabled + .toggle-slider {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-models-section {
+  margin-top: 22px;
+  margin-bottom: 0 !important;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.provider-models-header {
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.provider-section-label {
+  margin: 3px 0 0;
+  white-space: nowrap;
+}
+
+.provider-model-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.provider-model-actions .btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.provider-manual-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.provider-manual-add-row .input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.provider-manual-add-row .btn-primary {
+  padding: 5px 14px;
+  font-size: 12.5px;
+}
+
+.provider-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.provider-modal-card .btn:focus-visible,
+.provider-modal-card .input:focus-visible,
+.provider-modal-card .select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+.provider-modal-card .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-modal-card .btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+@media (max-width: 560px) {
+  .modal-card.provider-modal-card {
+    width: 100%;
+    max-width: none;
+  }
+
+  .provider-model-actions .btn {
+    flex: 1 1 auto;
+  }
+
+  .provider-manual-add-row {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .provider-manual-add-row .input {
+    flex-basis: 100%;
+  }
+
+  .provider-manual-add-row .btn-primary {
+    flex: 1;
+  }
+}
+
+.provider-catalog-list {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.provider-catalog-list .model-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+.provider-catalog-list .model-table th,
+.provider-catalog-list .model-table td {
+  min-width: 0;
+}
+.provider-catalog-list .model-table th:nth-child(1) { width: auto; }
+.provider-catalog-list .model-table th:nth-child(2) { width: 100px; }
+.provider-catalog-list .model-table th:nth-child(3) { width: 170px; }
+.provider-catalog-list .model-table th:nth-child(4) { width: 56px; }
+.provider-catalog-list .model-table th:nth-child(5) { width: 56px; }
+.provider-catalog-list .model-table th:nth-child(6) { width: 160px; }
+.provider-catalog-list .model-table td {
   vertical-align: top;
+}
+.provider-catalog-list .model-table td:nth-child(-n + 3) {
+  overflow: hidden;
+}
+.provider-catalog-list .model-inline-input,
+.provider-catalog-list .model-inline-select {
+  min-width: 0;
+  max-width: 100%;
+}
+.provider-catalog-list .model-inline-input {
+  width: 100%;
+}
+.provider-catalog-list .model-inline-select {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+.provider-catalog-list .model-price-control {
+  width: 100%;
+  min-width: 0;
+}
+.provider-catalog-list .model-price-input {
+  flex: 1;
+  width: auto;
+}
+.provider-catalog-list .model-row-error {
+  overflow-wrap: anywhere;
+}
+.provider-catalog-list .model-owner {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-catalog-list .model-row-actions {
+  min-width: 0;
 }
 .model-row-dirty {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
@@ -1199,7 +1486,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 3px;
-  min-width: 112px;
+  min-width: 0;
   color: var(--muted);
   font-size: 12px;
 }
@@ -1233,6 +1520,91 @@ onMounted(() => {
   min-height: 30px;
   padding: 4px 9px;
   font-size: 11.5px;
+}
+
+/* Medium viewports (modal = 100vw - 32px here): trim the fixed columns so the
+   model-name column keeps enough room and the table never overflows. */
+@media (max-width: 920px) {
+  .provider-catalog-list .model-table th:nth-child(2) { width: 88px; }
+  .provider-catalog-list .model-table th:nth-child(3) { width: 158px; }
+  .provider-catalog-list .model-table th:nth-child(6) { width: 140px; }
+}
+
+/* Narrow viewports: the table no longer fits, so each row becomes a stacked
+   card. All row controls (toggle, test, save, delete) stay on-screen — no
+   horizontal scrolling inside the dialog. */
+@media (max-width: 800px) {
+  .provider-catalog-list {
+    max-height: 380px;
+  }
+
+  .provider-models-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .provider-model-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .provider-catalog-list .model-table thead {
+    display: none;
+  }
+
+  .provider-catalog-list .model-table,
+  .provider-catalog-list .model-table tbody {
+    display: block;
+  }
+
+  .provider-catalog-list .model-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 12px 12px 14px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+
+  .provider-catalog-list .model-table tr.model-row-dirty {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  }
+
+  .provider-catalog-list .model-table tbody td {
+    padding: 0;
+    border-top: 0;
+    vertical-align: middle;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(1) {
+    flex: 0 0 100%;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(2) {
+    flex: 0 1 150px;
+    min-width: 120px;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(3) {
+    flex: 1 1 200px;
+    min-width: 160px;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(4) {
+    flex: 0 0 auto;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(5) {
+    flex: 0 0 auto;
+  }
+
+  .provider-catalog-list .model-table td:nth-child(6) {
+    flex: 1 1 auto;
+  }
 }
 .btn-danger-text {
   background: transparent;

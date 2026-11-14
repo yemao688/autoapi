@@ -185,6 +185,54 @@ func TestProviderCRUD(t *testing.T) {
 //  Model CRUD
 // ---------------------------------------------------------------------------
 
+func TestProviderFixEmptyAssistantRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create persists the opt-in flag.
+	p, err := s.CreateProvider(model.ProviderInput{
+		Name:              "Strict Provider",
+		BaseURL:           "https://strict.example.com",
+		FixEmptyAssistant: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	if !p.FixEmptyAssistant {
+		t.Fatal("expected FixEmptyAssistant=true on create")
+	}
+	got, err := s.GetProvider(p.ID)
+	if err != nil {
+		t.Fatalf("GetProvider: %v", err)
+	}
+	if !got.FixEmptyAssistant {
+		t.Fatal("GetProvider did not round-trip FixEmptyAssistant=true")
+	}
+
+	// Update toggles it off (and back).
+	if _, err := s.UpdateProvider(p.ID, model.ProviderInput{Name: p.Name, BaseURL: p.BaseURL, FixEmptyAssistant: false}); err != nil {
+		t.Fatalf("UpdateProvider(false): %v", err)
+	}
+	got, err = s.GetProvider(p.ID)
+	if err != nil || got.FixEmptyAssistant {
+		t.Fatalf("UpdateProvider(false) not persisted: %+v %v", got, err)
+	}
+	if _, err := s.UpdateProvider(p.ID, model.ProviderInput{Name: p.Name, BaseURL: p.BaseURL, FixEmptyAssistant: true}); err != nil {
+		t.Fatalf("UpdateProvider(true): %v", err)
+	}
+
+	// List includes the column.
+	list, err := s.ListProviders()
+	if err != nil || len(list) != 1 || !list[0].FixEmptyAssistant {
+		t.Fatalf("ListProviders did not round-trip: %+v %v", list, err)
+	}
+
+	// Batched routing load includes the column too.
+	batch, err := s.GetProvidersForIDs([]string{p.ID})
+	if err != nil || len(batch) != 1 || !batch[0].FixEmptyAssistant {
+		t.Fatalf("GetProvidersForIDs did not round-trip: %+v %v", batch, err)
+	}
+}
+
 func TestModels(t *testing.T) {
 	s := newTestStore(t)
 

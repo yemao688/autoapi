@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { model } from '../../../wailsjs/go/models'
+import type { model } from '@/api/models'
 import { api } from '@/api/bridge'
 
 import { useProviderStyle } from '@/composables/useProviderStyle'
@@ -348,12 +348,12 @@ function apiKeyLabel(log: model.RequestLog): string {
     <thead>
       <tr>
         <th>{{ t('usage.logTable.time') }}</th>
-        <th>{{ t('usage.logTable.status') }}</th>
         <th>{{ t('usage.logTable.requestModel') }}</th>
         <th>{{ t('usage.logTable.hitModel') }}</th>
         <th class="right">{{ t('usage.logTable.latencyTtft') }}</th>
         <th class="right">{{ t('usage.logTable.input') }}</th>
         <th class="right">{{ t('usage.logTable.output') }}</th>
+        <th>{{ t('usage.logTable.token') }}</th>
         <th class="right">{{ t('usage.logTable.totalCost') }}</th>
       </tr>
     </thead>
@@ -369,45 +369,45 @@ function apiKeyLabel(log: model.RequestLog): string {
           @keydown.enter.prevent="toggleRow(log)"
           @keydown.space.prevent="toggleRow(log)"
         >
-          <!-- 1. Time -->
-          <td><span class="text-mono" style="font-size: 12.5px;">{{ formatTime(log.timestamp) }}</span></td>
-
-          <!-- 2. Status -->
-          <td>
-            <template v-if="topLevel2xxOutcome(log) === 'truncated'">
-              <span class="badge warn" :title="t('usage.logTable.partialTruncatedTitle')">
-                <span class="dot amber"></span>~{{ log.status_code }}
-              </span>
-            </template>
-            <template v-else-if="topLevel2xxOutcome(log) === 'downstream_error'">
-              <span class="badge warn" :title="t('usage.logTable.partialDownstreamTitle')">
-                <span class="dot amber"></span>~{{ log.status_code }}
-              </span>
-            </template>
-            <template v-else-if="topLevel2xxOutcome(log) === 'client_abort'">
-              <span class="badge warn" :title="t('usage.logTable.partialClientAbortTitle')">
-                <span class="dot amber"></span>~{{ log.status_code }}
-              </span>
-            </template>
-            <template v-else>
-              <span class="badge" :class="statusBadgeClass(log.status_code)">
-                <span :class="'dot ' + statusDotClass(log.status_code)"></span>{{ statusText(log.status_code) }}
-              </span>
-            </template>
-            <span
-              v-if="showRetryIndicator(log)"
-              class="retry-indicator"
-              :title="t('usage.logTable.triedTargets', { n: log.chain_count })"
-              aria-hidden="true"
-            >↻</span>
+          <!-- 1. Time + status -->
+          <td class="log-time-cell">
+            <span class="log-time-status">
+              <span class="text-mono" style="font-size: 12.5px;">{{ formatTime(log.timestamp) }}</span>
+              <template v-if="topLevel2xxOutcome(log) === 'truncated'">
+                <span class="badge warn" :title="t('usage.logTable.partialTruncatedTitle')">
+                  <span class="dot amber"></span>~{{ log.status_code }}
+                </span>
+              </template>
+              <template v-else-if="topLevel2xxOutcome(log) === 'downstream_error'">
+                <span class="badge warn" :title="t('usage.logTable.partialDownstreamTitle')">
+                  <span class="dot amber"></span>~{{ log.status_code }}
+                </span>
+              </template>
+              <template v-else-if="topLevel2xxOutcome(log) === 'client_abort'">
+                <span class="badge warn" :title="t('usage.logTable.partialClientAbortTitle')">
+                  <span class="dot amber"></span>~{{ log.status_code }}
+                </span>
+              </template>
+              <template v-else>
+                <span class="badge" :class="statusBadgeClass(log.status_code)">
+                  <span :class="'dot ' + statusDotClass(log.status_code)"></span>{{ statusText(log.status_code) }}
+                </span>
+              </template>
+              <span
+                v-if="showRetryIndicator(log)"
+                class="retry-indicator"
+                :title="t('usage.logTable.triedTargets', { n: log.chain_count })"
+                aria-hidden="true"
+              >↻</span>
+            </span>
           </td>
 
-          <!-- 3. Request model (rule name → upstream model fallback) -->
+          <!-- 2. Request model (rule name → upstream model fallback) -->
           <td>
             <span class="text-mono cell-request-model">{{ log.route_label || log.model }}</span>
           </td>
 
-          <!-- 4. Hit model (last successful chain entry) -->
+          <!-- 3. Hit model (last successful chain entry) -->
           <td>
             <template v-for="hit in [hitModel(log)]" :key="'hit'">
               <div v-if="hit" class="hit-model-cell">
@@ -427,7 +427,7 @@ function apiKeyLabel(log: model.RequestLog): string {
             </template>
           </td>
 
-          <!-- 5. TTFT / Latency + stream suffix + expand chevron -->
+          <!-- 4. TTFT / Latency + stream suffix + expand chevron -->
           <td class="right cell-timing">
             <div class="timing-values">
               <template v-if="log.first_token_ms > 0">
@@ -449,7 +449,7 @@ function apiKeyLabel(log: model.RequestLog): string {
             >›</span>
           </td>
 
-          <!-- 6. Input (with cache sub-line) -->
+          <!-- 5. Input (with cache sub-line) -->
           <td class="num">
             <div class="cell-tokens">
               <span :title="log.input_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.input_tokens > 0 ? log.input_tokens.toLocaleString() : '—' }}</span>
@@ -457,8 +457,17 @@ function apiKeyLabel(log: model.RequestLog): string {
             </div>
           </td>
 
-          <!-- 7. Output -->
+          <!-- 6. Output -->
           <td class="num"><span :title="log.output_tokens > 0 ? '' : t('usage.logTable.usageUnavailable')">{{ log.output_tokens > 0 ? log.output_tokens.toLocaleString() : '—' }}</span></td>
+
+          <!-- 7. API token -->
+          <td>
+            <span
+              class="log-token-cell"
+              :class="{ 'text-muted': apiKeyLabel(log) === '—' }"
+              :title="apiKeyLabel(log)"
+            >{{ apiKeyLabel(log) }}</span>
+          </td>
 
           <!-- 8. Total cost -->
           <td class="num"><span :title="costTitle(log.cost_available)">{{ costLabel(log.cost, log.cost_available, 3) }}</span></td>
@@ -467,7 +476,6 @@ function apiKeyLabel(log: model.RequestLog): string {
           <td :colspan="columns">
             <div class="log-detail">
               <div class="log-detail-grid">
-                <div class="log-detail-item"><span class="log-detail-label">{{ t('usage.logTable.token') }}</span><span class="log-detail-value">{{ apiKeyLabel(log) }}</span></div>
                 <div class="log-detail-item">
                   <span class="log-detail-label">{{ t('usage.logTable.requestId') }}</span>
                   <span class="log-detail-value text-mono">{{ log.request_id || '—' }}</span>
@@ -604,25 +612,45 @@ function apiKeyLabel(log: model.RequestLog): string {
    .tbl-wrap, the wrapper's overflow-x:auto kicks in and the table
    scrolls horizontally instead of breaking layout.
 
-   The widths are tuned to comfortably hold the largest realistic
-   content per column (status badge, model name, hit-model icon+name,
-   token numbers, latency/TTFT suffix, etc.). */
+   The widths are tuned for the merged time/status cell, model names,
+   hit-model icon+name, latency/TTFT suffix, token numbers, API token,
+   and total cost without adding a separate status column. */
 .tbl th:nth-child(1),
-.tbl td:nth-child(1) { min-width: 78px; }   /* Time             (07/10 23:28) */
+.tbl td:nth-child(1) { min-width: 112px; }  /* Time + status    (07/10 23:28 ● 200) */
 .tbl th:nth-child(2),
-.tbl td:nth-child(2) { min-width: 64px; }   /* Status           (● 200) */
+.tbl td:nth-child(2) { min-width: 112px; }  /* Request model    (minimax-m3 / claude-3-5-…) */
 .tbl th:nth-child(3),
-.tbl td:nth-child(3) { min-width: 120px; }  /* Request model    (minimax-m3 / claude-3-5-…) */
+.tbl td:nth-child(3) { min-width: 132px; }  /* Hit model        (provider + model) */
 .tbl th:nth-child(4),
-.tbl td:nth-child(4) { min-width: 150px; }  /* Hit model        (provider + model) */
+.tbl td:nth-child(4) { min-width: 120px; }  /* Latency/TTFT     (3.2s/6.8s · stream) */
 .tbl th:nth-child(5),
-.tbl td:nth-child(5) { min-width: 130px; }  /* Latency/TTFT     (3.2s/6.8s · stream) */
+.tbl td:nth-child(5) { min-width: 58px; }   /* Input            (12345 + cache sub) */
 .tbl th:nth-child(6),
-.tbl td:nth-child(6) { min-width: 64px; }   /* Input            (12345 + cache sub) */
+.tbl td:nth-child(6) { min-width: 58px; }   /* Output           (1234) */
 .tbl th:nth-child(7),
-.tbl td:nth-child(7) { min-width: 64px; }   /* Output           (1234) */
+.tbl td:nth-child(7) { min-width: 92px; }   /* API token        (token name / —) */
 .tbl th:nth-child(8),
-.tbl td:nth-child(8) { min-width: 72px; }   /* Total cost       ($0.123) */
+.tbl td:nth-child(8) { min-width: 68px; }   /* Total cost       ($0.123) */
+
+.log-time-cell {
+  width: 1%;
+  white-space: nowrap;
+}
+.log-time-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.log-token-cell {
+  display: inline-block;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
 
 /* nowrap on the header cells prevents the column titles from
    character-wrapping even before min-widths are reached. */

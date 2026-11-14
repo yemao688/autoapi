@@ -1,18 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { model } from "../../wailsjs/go/models";
+import { model } from '@/api/models';
 import { api } from "@/api/bridge";
 import { useApi } from "@/composables/useApi";
 import { useExportDownload } from "@/composables/useExportDownload";
-import { useLiveSync, type SyncMode } from "@/composables/useLiveSync";
 import { useToast } from "@/composables/useToast";
 import { useConfirm } from "@/composables/useConfirm";
 import { useTabKeyboard } from "@/composables/useTabKeyboard";
 import { useCompactNumber } from "@/composables/useCompactNumber";
 import { useAppVisibility } from "@/composables/useAppVisibility";
 import type { ProviderOption } from "@/types/usage";
-import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
+import { Events } from "@wailsio/runtime";
 import TokensPane from "@/components/usage/TokensPane.vue";
 import LogsPane from "@/components/usage/LogsPane.vue";
 import LogFilters, {
@@ -39,83 +38,21 @@ const {
 } = useApi(() => api.usageStats(usageFilter.value || undefined));
 
 const activePane = ref<"logs" | "tokens">("logs");
-// liveSync is the shared, persisted refresh mode for this view. Allowed
-// values: 'realtime', '5s', '30s', 'off'. The composable owns the
-// localStorage read/write logic.
-const { liveSync } = useLiveSync();
 const { isVisible } = useAppVisibility();
-// isRefreshing guards against overlapping refreshes from realtime events
-// or polling timers when multiple triggers land in quick succession.
+// isRefreshing guards against overlapping refreshes when multiple realtime
+// events land in quick succession.
 const isRefreshing = ref(false);
-// SSE/polling timers and the Wails event unsubscribe handle.
+// Wails event unsubscribe handle.
 let eventsOff: (() => void) | null = null;
-// Polling timer: recursive setTimeout is more robust than setInterval in
-// Wails WebKit because it cannot stack overlapping calls and is less likely
-// to be throttled/suspended.
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
+// Dedicated unsubscribe handle for the log:ping channel check, kept separate
+// from eventsOff so the ping (a pure channel liveness probe) can never be
+// mistaken for a log:new flush and trigger an extra data refresh.
+let pingOff: (() => void) | null = null;
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
 let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let lastRefreshStartedAt = 0;
 let pendingRefresh = false;
 const REALTIME_MIN_REFRESH_MS = 2000;
-
-// Generation token for polling. stopPolling increments this; any in-flight
-// poll tick whose captured token no longer matches is abandoned instead of
-// scheduling the next tick or restarting the countdown.
-let pollGen = 0;
-
-const POLL_MS: Record<Exclude<SyncMode, "realtime" | "off">, number> = {
-  "5s": 5000,
-  "30s": 30000,
-};
-
-// SSE state: 'connected' while the listener is subscribed, 'error' if the
-// handler threw. We intentionally do not use 'idle' based on time, because a
-// quiet period without traffic is normal and was confusing users.
-const sseState = ref<"connected" | "error">("connected");
-
-// Polling countdown state. We anchor on an absolute deadline instead of a
-// decrementing counter so a pause (e.g. tab backgrounded) snaps back to the
-// real remaining time on the next tick — no drift. nextPollAt is null
-// whenever the active mode is realtime or off.
-const nextPollAt = ref<number | null>(null);
-const pollCountdown = ref<string>("");
-let countdownTimer: ReturnType<typeof setInterval> | null = null;
-
-function clearCountdownTimer() {
-  if (countdownTimer) {
-    clearInterval(countdownTimer);
-    countdownTimer = null;
-  }
-}
-
-function startCountdownTimer() {
-  clearCountdownTimer();
-  if (nextPollAt.value == null) {
-    pollCountdown.value = "";
-    return;
-  }
-  // Tick once immediately so the label updates without a 1s wait.
-  updateCountdownLabel();
-  countdownTimer = setInterval(updateCountdownLabel, 1000);
-}
-
-function updateCountdownLabel() {
-  if (nextPollAt.value == null) {
-    pollCountdown.value = "";
-    return;
-  }
-  const remainingMs = nextPollAt.value - Date.now();
-  if (remainingMs <= 0) {
-    // Refresh hasn't fired yet (e.g. fetchAll still in flight) — show 0
-    // rather than a negative number; the next tick or mode change will
-    // refresh the value.
-    pollCountdown.value = "0s";
-    return;
-  }
-  const seconds = Math.ceil(remainingMs / 1000);
-  pollCountdown.value = `${seconds}s`;
-}
 
 const selectedProviderId = ref("");
 const selectedApiKeyId = ref("");
@@ -397,7 +334,7 @@ async function refreshAll() {
       refreshTimeout = null;
     }
     isRefreshing.value = false;
-    if (pendingRefresh && liveSync.value === "realtime" && isVisible.value) {
+    if (pendingRefresh && isVisible.value) {
       pendingRefresh = false;
       scheduleRealtimeRefresh();
     }
@@ -409,21 +346,9 @@ function scheduleRealtimeRefresh() {
   const remaining = Math.max(0, REALTIME_MIN_REFRESH_MS - (Date.now() - lastRefreshStartedAt));
   realtimeRefreshTimer = setTimeout(() => {
     realtimeRefreshTimer = null;
-    if (liveSync.value !== "realtime" || !isVisible.value) return;
+    if (!isVisible.value) return;
     void refreshAll();
   }, remaining);
-}
-
-function stopPolling() {
-  // Invalidate any in-flight tick scheduling so backgrounding or a mode
-  // change cannot be undone by a finally() that fires after we stop.
-  pollGen++;
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-  nextPollAt.value = null;
-  pollCountdown.value = "";
 }
 
 function stopRealtime() {
@@ -431,60 +356,24 @@ function stopRealtime() {
     eventsOff();
     eventsOff = null;
   }
+  if (pingOff) {
+    pingOff();
+    pingOff = null;
+  }
   if (realtimeRefreshTimer) {
     clearTimeout(realtimeRefreshTimer);
     realtimeRefreshTimer = null;
   }
   pendingRefresh = false;
-  sseState.value = "connected";
-}
-
-function startPolling(mode: Exclude<SyncMode, "realtime" | "off">) {
-  stopPolling();
-  const ms = POLL_MS[mode];
-  if (!ms) return;
-
-  // Capture the generation at the moment polling starts. Any stop/apply mode
-  // change increments pollGen and invalidates this tick chain.
-  const gen = pollGen;
-
-  function tick() {
-    if (liveSync.value !== mode || !isVisible.value || gen !== pollGen) {
-      return;
-    }
-    // Set the next deadline BEFORE refreshing so the countdown never blanks
-    // out while the request is in flight. Do NOT clear pollCountdown — let
-    // the running interval update it from the new deadline.
-    nextPollAt.value = Date.now() + ms;
-    updateCountdownLabel();
-    void refreshAll().finally(() => {
-      if (liveSync.value !== mode || !isVisible.value || gen !== pollGen) {
-        return;
-      }
-      startCountdownTimer();
-      pollTimer = setTimeout(tick, ms);
-    });
-  }
-
-  // Kick off an immediate refresh, then schedule the next tick.
-  void refreshAll().finally(() => {
-    if (liveSync.value !== mode || !isVisible.value || gen !== pollGen) {
-      return;
-    }
-    nextPollAt.value = Date.now() + ms;
-    startCountdownTimer();
-    pollTimer = setTimeout(tick, ms);
-  });
 }
 
 function startRealtime() {
   stopRealtime();
-  const off = EventsOn("log:new", () => {
+  const off = Events.On("log:new", () => {
     try {
-      sseState.value = "connected";
       // Guard against events that were already queued when the app was
-      // backgrounded (or if the mode changed) before the listener is removed.
-      if (liveSync.value !== "realtime" || !isVisible.value) {
+      // backgrounded before the listener is removed.
+      if (!isVisible.value) {
         return;
       }
       if (
@@ -501,38 +390,20 @@ function startRealtime() {
       void refreshAll();
     } catch (e: any) {
       console.warn("[sync] log:new handler error", e);
-      sseState.value = "error";
     }
   });
-  eventsOff = typeof off === "function" ? off : () => EventsOff("log:new");
-  // Mark as 'connected' only after the listener is in place so the UI
-  // reflects that the subscription is active, not just the user's intent.
-  sseState.value = "connected";
+  eventsOff = typeof off === "function" ? off : () => Events.Off("log:new");
+  // Subscribe to the dedicated ping event before pinging so the liveness
+  // probe has a listener in place. The handler is intentionally a no-op:
+  // receiving log:ping proves the Wails event channel is alive, and it must
+  // not go through the log:new path (which would schedule a redundant
+  // refresh after every mount/foreground).
+  const offPing = Events.On("log:ping", () => {});
+  pingOff = typeof offPing === "function" ? offPing : () => Events.Off("log:ping");
   // Ping the backend to verify the Wails event channel is alive.
   api.pingLogEvent().catch((e: any) => {
     console.warn("[sync] PingLogEvent failed", e);
   });
-}
-
-function applyMode(mode: SyncMode) {
-  stopPolling();
-  stopRealtime();
-  // Applymode always wipes the countdown state so transitioning from a
-  // polling mode to realtime/off doesn't leave stale "5s" text behind.
-  nextPollAt.value = null;
-  pollCountdown.value = "";
-  clearCountdownTimer();
-  // Do not start timers or listeners while the app is backgrounded. This
-  // also prevents an in-flight refreshAll().finally() that calls applyMode
-  // after backgrounding from restarting work.
-  if (!isVisible.value) {
-    return;
-  }
-  if (mode === "realtime") {
-    startRealtime();
-  } else if (mode === "5s" || mode === "30s") {
-    startPolling(mode);
-  }
 }
 
 function switchPane(paneId: "logs" | "tokens") {
@@ -642,11 +513,12 @@ const { handleKeydown: handleTabKeydown } = useTabKeyboard(
 );
 
 onMounted(() => {
-  // Only refresh immediately if the app window is visible. When the app
-  // is backgrounded, the visibility watcher below will refresh once when
-  // it becomes visible again.
+  // Only refresh immediately and subscribe to live events if the app window
+  // is visible. When the app is backgrounded, the visibility watcher below
+  // will refresh and subscribe once it becomes visible again.
   if (isVisible.value) {
     void refreshAll();
+    startRealtime();
   }
   void fetchModelRules().catch((e) =>
     toast.push(e?.message || String(e), "error"),
@@ -661,34 +533,24 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  stopPolling();
   stopRealtime();
-  clearCountdownTimer();
   if (searchDebounce) clearTimeout(searchDebounce);
 });
 
-// Start/stop the correct refresh mechanism whenever the user changes sync mode,
-// but only while the app window is visible. When hidden, timers and listeners stay
-// stopped until visibility returns.
-watch(liveSync, (mode) => {
-  if (isVisible.value) {
-    applyMode(mode);
-  }
-}, { immediate: true });
-
-// Pause all auto-refresh while the app is backgrounded; resume once with a
-// refresh and the selected sync mode when it comes back to the foreground.
+// Pause the live subscription while the app is backgrounded; resume with a
+// refresh and re-subscribe to live events when it comes back to the
+// foreground.
 watch(isVisible, (visible) => {
   if (visible) {
-    // Refresh once with current filters, then re-apply the selected mode.
+    // Refresh once with current filters, then re-subscribe to live events.
     // refreshAll's isRefreshing guard prevents duplicate in-flight requests.
     void refreshAll().finally(() => {
-      applyMode(liveSync.value);
+      if (isVisible.value) {
+        startRealtime();
+      }
     });
   } else {
-    stopPolling();
     stopRealtime();
-    clearCountdownTimer();
   }
 });
 
@@ -765,40 +627,6 @@ watch([modelFilter, searchText], () => {
         </svg>
         {{ t("usage.clearAllConfirm") }}
       </button>
-      <div class="sync-control">
-        <!--
-          Status indicator lives LEFT of the dropdown. Three modes:
-          - realtime: green dot + "Connected" label, with the pulse animation
-          - polling (5s/30s): countdown like "5s" / "4s" using an absolute deadline
-          - off: nothing rendered
-        -->
-        <div
-          v-if="liveSync === 'realtime'"
-          class="sse-status"
-          :class="sseState"
-          aria-live="polite"
-        >
-          <span class="sse-dot" :class="sseState"></span>
-        </div>
-        <div
-          v-else-if="liveSync === '5s' || liveSync === '30s'"
-          class="sse-status polling"
-          aria-live="polite"
-        >
-          <span class="poll-countdown text-mono">{{ pollCountdown }}</span>
-        </div>
-        <select
-          id="usage-sync-mode"
-          v-model="liveSync"
-          class="select sync-select"
-          :aria-label="t('usage.sync.label')"
-        >
-          <option value="realtime">{{ t("usage.sync.realtime") }}</option>
-          <option value="5s">{{ t("usage.sync.seconds5") }}</option>
-          <option value="30s">{{ t("usage.sync.seconds30") }}</option>
-          <option value="off">{{ t("usage.sync.off") }}</option>
-        </select>
-      </div>
     </div>
   </header>
 
@@ -931,105 +759,9 @@ watch([modelFilter, searchText], () => {
   align-items: center;
   justify-content: center;
   background: rgba(245, 245, 247, 0.78);
-  backdrop-filter: blur(2px);
   z-index: 10;
   font-size: 14px;
   color: var(--muted, #6e6e73);
-}
-
-.sync-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sync-select {
-  width: auto;
-  min-width: 110px;
-  padding: 5px 28px 5px 10px;
-  font-size: 13px;
-  background-position: right 8px center;
-  background-size: 14px;
-}
-
-.sse-status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 36px;
-  min-height: 28px;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.sse-status .sse-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--border-strong);
-}
-
-.sse-status.connected .sse-dot {
-  position: relative;
-  background: var(--positive);
-}
-
-.sse-status.connected .sse-dot::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.18);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.sse-status.error .sse-dot {
-  background: var(--negative);
-}
-
-.sse-status .sse-label {
-  font-weight: 500;
-  min-width: 52px;
-}
-
-.sse-status.connected .sse-label {
-  color: var(--positive);
-}
-
-.sse-status.error .sse-label {
-  color: var(--negative);
-}
-
-/* Polling countdown: small mono badge, no animation. The text is already
-   tabular so it doesn't shift as the digits decrement. */
-.sse-status.polling .poll-countdown {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 5px;
-  background: rgba(0, 0, 0, 0.05);
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
-}
-
-html[data-theme="dark"] .sse-status.polling .poll-countdown {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--fg);
-}
-
-@media (max-width: 640px) {
-  .sync-control {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .sse-status {
-    width: auto;
-  }
 }
 
 .btn-danger {

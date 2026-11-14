@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import type { model } from '../../../wailsjs/go/models'
+import type { model } from '@/api/models'
 import LogTable from './LogTable.vue'
 import Pagination from './Pagination.vue'
 import UsageTrendChart from './UsageTrendChart.vue'

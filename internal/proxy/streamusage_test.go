@@ -26,9 +26,9 @@ func TestStreamUsageAccumulatorProducedOutput(t *testing.T) {
 		{"chat content", `data: {"choices":[{"delta":{"content":"hi"}}]}
 
 `, true},
-		{"chat tool", `data: {"choices":[{"delta":{"tool_calls":[{"id":"x"}]}}]}
+		{"chat tool skeleton", `data: {"choices":[{"delta":{"tool_calls":[{"id":"x"}]}}]}
 
-`, true},
+`, false},
 		{"chat refusal", `data: {"choices":[{"delta":{"refusal":"no"}}]}
 
 `, true},
@@ -53,9 +53,9 @@ func TestStreamUsageAccumulatorProducedOutput(t *testing.T) {
 		{"anthropic empty text block", `data: {"type":"content_block_start","content_block":{"type":"text","text":""}}
 
 `, true},
-		{"anthropic tool block", `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"t"}}
+		{"anthropic tool block skeleton", `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"t"}}
 
-`, true},
+`, false},
 		{"chat null function call", `data: {"choices":[{"delta":{"function_call":null,"audio":null}}]}
 
 `, false},

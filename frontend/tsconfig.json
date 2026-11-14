@@ -24,9 +24,8 @@
     "src/**/*.d.ts",
     "src/**/*.tsx",
     "src/**/*.vue",
-    "wailsjs/**/*.ts",
-    "wailsjs/**/*.d.ts",
-    "wailsjs/**/*.js"
+    "bindings/**/*.ts",
+    "bindings/**/*.d.ts"
   ],
   "references": [
     {

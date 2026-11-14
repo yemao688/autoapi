@@ -440,6 +440,8 @@
       "upstreamKey": "上游密钥",
       "upstreamKeyCurrent": "当前：{key}",
       "upstreamKeyHelp": "用于向该上游转发请求的加密密钥。留空可保持现有密钥不变。",
+      "fixEmptyAssistant": "修复空 assistant 消息",
+      "fixEmptyAssistantHelp": "为严格上游（如 Kimi）删除无工具调用的空 assistant 消息，避免 400 报错。",
       "showKey": "显示密钥",
       "hideKey": "隐藏密钥",
       "copyKey": "复制密钥",
@@ -1028,19 +1030,6 @@
   "usage": {
     "title": "使用统计",
     "subtitle": "请求日志与 Token 用量 · 单页切换",
-    "sync": {
-      "label": "自动刷新",
-      "realtime": "实时",
-      "seconds5": "每 5 秒",
-      "seconds30": "每 30 秒",
-      "off": "关闭"
-    },
-    "sseStatus": {
-      "connected": "已连接",
-      "idle": "等待中",
-      "error": "异常",
-      "lastEvent": "上次事件"
-    },
     "export": "导出",
     "loading": "加载中…",
     "ariaLabel": "使用统计视图",

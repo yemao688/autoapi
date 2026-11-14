@@ -1,9 +1,9 @@
-.PHONY: all install dev build build-all build-macos build-windows build-linux test test-go test-frontend vet fmt generate clean help
+.PHONY: all install dev build package build-macos build-windows build-linux test test-go test-frontend vet fmt generate clean help
 
-# App version injected via ldflags. Override with: make build VERSION=1.0.0
-VERSION ?= $(shell grep productVersion wails.json | sed 's/.*: *"//;s/".*//')
+# App version is owned by build/config.yml (Wails v3 project config).
+VERSION ?= $(shell sed -n 's/^  version: "\(.*\)"/\1/p' build/config.yml | head -1)
 BUILD ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-LDFLAGS := -X main.appVersion=$(VERSION) -X main.appBuild=$(BUILD)
+TASK_VARS := VERSION=$(VERSION) BUILD=$(BUILD)
 
 # Default target: run everything a CI-like check would run.
 all: fmt vet test build
@@ -14,26 +14,27 @@ install:
 
 ## Development
 dev:
-	wails dev
+	wails3 dev
 
 ## Code generation
 generate:
-	wails generate module
+	wails3 generate bindings -ts -clean
 
 ## Production builds
 build:
-	wails build -ldflags "$(LDFLAGS)"
+	wails3 task build $(TASK_VARS)
 
-build-all: build-macos build-windows build-linux
+package:
+	wails3 task package $(TASK_VARS)
 
 build-macos:
-	wails build -platform darwin/universal -clean -ldflags "$(LDFLAGS)"
+	wails3 task package $(TASK_VARS)
 
 build-windows:
-	wails build -platform windows/amd64 -clean -ldflags "$(LDFLAGS)"
+	GOOS=windows GOARCH=amd64 wails3 task build $(TASK_VARS)
 
 build-linux:
-	wails build -platform linux/amd64 -clean -ldflags "$(LDFLAGS)"
+	GOOS=linux wails3 task build $(TASK_VARS)
 
 ## Testing
 test: test-go test-frontend
@@ -46,24 +47,25 @@ test-frontend:
 
 ## Go checks
 vet:
-	go vet ./internal/...
+	go vet ./...
 
 fmt:
 	gofmt -w ./internal ./main.go ./app.go
 
 ## Maintenance
 clean:
-	rm -rf build/bin
-	rm -rf frontend/dist
-	rm -rf frontend/package.json.md5
+	wails3 task clean
 
 help:
 	@echo "Available targets:"
 	@echo "  install        - install frontend dependencies"
-	@echo "  dev            - run wails dev (hot reload)"
+	@echo "  dev            - run wails3 dev (hot reload)"
 	@echo "  generate       - regenerate Wails TS bindings"
 	@echo "  build          - build current platform"
-	@echo "  build-all      - build macOS/Windows/Linux"
+	@echo "  package        - package current platform (macOS .app)"
+	@echo "  build-macos    - package the macOS .app"
+	@echo "  build-windows  - cross-compile the Windows binary (CGO-free)"
+	@echo "  build-linux    - build the Linux binary (run on Linux; CGO)"
 	@echo "  test           - run Go tests and frontend build"
 	@echo "  test-go        - run Go tests only"
 	@echo "  test-frontend  - run frontend typecheck + build only"

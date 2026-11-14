@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Wails v3 migration**: upgraded the desktop framework from Wails v2.12 to Wails v3.1.0. Requires Go 1.27.4+ and macOS 12+.
+  - Builds are Taskfile-driven: `wails3 dev`, `wails3 build`, `wails3 package` (the `make` targets wrap them). `wails.json` was replaced by `build/config.yml`, and release builds use the `production` build tag.
+  - TypeScript bindings are generated under `frontend/bindings/` by `wails3 generate bindings`; the frontend calls them through the `@wailsio/runtime` package. The generated `wailsjs/` directory and `window.go`/`window.runtime` globals are gone.
+  - The application menu and menu-bar tray are native v3 objects in `main.go`; the `fyne.io/systray` integration (`internal/tray`) was removed. Close-to-hide is now a window-close hook.
+  - `api.App` implements the v3 service lifecycle (`ServiceStartup` / `ServiceShutdown`) and talks to the runtime through `internal/api/runtime.go`.
+
+### Fixed
+
+- **Data export download**: decode the base64 `ExportResult.data` payload before creating the Blob (Go `[]byte` crosses the bridge as a base64 string).
+
 ## [0.6.0] - 2026-07-18
 
 ### Added

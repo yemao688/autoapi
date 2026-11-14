@@ -16,8 +16,9 @@ func TestCategorizeError_StatusCodes(t *testing.T) {
 	}{
 		// Non-retryable: explicit list. Per RFC 9110 / OpenAI
 		// semantics, these are "request itself is malformed" — no
-		// other provider will succeed.
-		{400, CategoryRetryable},
+		// other provider will succeed. 400 invalid_request_error is
+		// a deterministic request-shape error in the same class.
+		{400, CategoryNonRetryable},
 		{405, CategoryNonRetryable},
 		{406, CategoryNonRetryable},
 		{413, CategoryNonRetryable},
@@ -84,11 +85,16 @@ func TestIsCircuitBreakerFailure(t *testing.T) {
 	if !isCircuitBreakerFailure(nil, 429) {
 		t.Fatal("expected 429 to be a breaker failure")
 	}
-	if !isCircuitBreakerFailure(nil, 400) {
-		t.Fatal("expected 400 to be a breaker failure")
+	if !isCircuitBreakerFailure(nil, 401) || !isCircuitBreakerFailure(nil, 403) {
+		t.Fatal("expected 401/403 to remain breaker failures (auth/quota are provider issues)")
 	}
-	if !isCircuitBreakerFailure(nil, 422) {
-		t.Fatal("expected non-retryable 4xx (422) to be a breaker failure")
+	for _, status := range []int{400, 404, 413, 422} {
+		if isCircuitBreakerFailure(nil, status) {
+			t.Fatalf("expected deterministic client error %d to be breaker-neutral", status)
+		}
+	}
+	if !isCircuitBreakerFailure(nil, 451) {
+		t.Fatal("expected unknown 4xx (451) to remain a breaker failure")
 	}
 	if !isCircuitBreakerFailure(io.ErrUnexpectedEOF, 400) || !isCircuitBreakerFailure(syscall.ECONNRESET, 200) {
 		t.Fatal("expected premature termination and connection reset to be provider failures")

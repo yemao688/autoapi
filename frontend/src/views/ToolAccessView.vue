@@ -7,7 +7,7 @@ import { useToast } from '@/composables/useToast'
 import OmoSlimModal from '@/components/OmoSlimModal.vue'
 import OpencodeWorkbenchModal from '@/components/OpencodeWorkbenchModal.vue'
 import ToolWorkbenchModal from '@/components/ToolWorkbenchModal.vue'
-import type { service, toolconfig } from '../../wailsjs/go/models'
+import type { service, toolconfig } from '@/api/models'
 
 type ToolName = 'opencode' | 'codex' | 'claude'
 

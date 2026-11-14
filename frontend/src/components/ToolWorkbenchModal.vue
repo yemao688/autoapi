@@ -5,8 +5,8 @@ import { api } from '@/api/bridge'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import DiffPreview from '@/components/DiffPreview.vue'
-import { service, toolconfig } from '../../wailsjs/go/models'
-import type { model } from '../../wailsjs/go/models'
+import { service, toolconfig } from '@/api/models'
+import type { model } from '@/api/models'
 
 type Tool = 'codex' | 'claude'
 type Section = 'provider' | 'common'
@@ -127,7 +127,12 @@ function rowsFromPreset(preset: toolconfig.Preset | null, kind: 'direct' | 'auto
 function createDraft(view: service.ToolProviderView | null, key: DraftKey, isNew = false): ProviderDraft {
   const preset = view?.Preset || null
   const kind = preset?.Kind === 'autoapi' ? 'autoapi' : 'direct'
-  const extra = { ...(preset?.Extra || {}) }
+  // The v3 generator types Go map values as optional, but a map[string]string
+  // never carries undefined values at runtime.
+  const extra: Record<string, string> = {}
+  for (const [extraKey, extraValue] of Object.entries(preset?.Extra || {})) {
+    if (extraValue !== undefined) extra[extraKey] = extraValue
+  }
   if (props.tool === 'codex' && !extra.wire_api) extra.wire_api = 'responses'
   return {
     key,

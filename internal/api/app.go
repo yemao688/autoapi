@@ -1,9 +1,9 @@
 // Package api exposes the application's business logic to the Vue frontend
-// through Wails Bind. Every exported method on App becomes callable from the
-// frontend as window.go.main.App.<Method>(...).
+// through a Wails v3 service. Every exported method on App becomes callable
+// from the generated frontend bindings under frontend/bindings/autoapi.
 //
 // Two-surface contract (per oracle review §2.3):
-//   - The WebView talks to Go ONLY through this bridge (window.go.*).
+//   - The WebView talks to Go ONLY through this bridge.
 //   - External OpenAI-compatible clients talk to Go ONLY through the HTTP
 //     proxy on 0.0.0.0:8344.
 //   - The UI never fetches 8344 directly; metrics/logs flow through methods here.
@@ -40,7 +40,7 @@ import (
 	"autoapi/internal/store"
 	"autoapi/internal/toolconfig"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 func requestCost(m *model.Model, attempts int) model.EffectiveCost {
@@ -59,6 +59,7 @@ type Deps struct {
 	Proxy      ProxyService
 	Checkpoint interface{ Stop() }
 	Metrics    MetricsRegistry
+	Runtime    *Runtime
 }
 
 type MetricsRegistry interface {
@@ -226,11 +227,13 @@ type targetBreakerStatusProvider interface {
 
 type targetBreakerResetter interface{ ResetTargetBreakers() }
 
-// App is the single struct bound to the Wails runtime. All methods here are
-// auto-generated as TypeScript bindings under frontend/wailsjs/go/main/App.
+// App is the single struct bound to the Wails runtime. All exported methods
+// here are auto-generated as TypeScript bindings under frontend/bindings.
+// ServiceStartup / ServiceShutdown implement the Wails v3 service lifecycle
+// interfaces and are not exposed to the frontend.
 type App struct {
-	ctx                 context.Context
 	deps                Deps
+	runtime             *Runtime
 	appInfo             model.AppInfo
 	visibilityMu        sync.Mutex
 	visibility          string
@@ -491,7 +494,8 @@ func routeLabel(k model.RouteModeKey) string {
 	return k.InboundProtocol + " -> " + k.UpstreamProtocol
 }
 
-// SetInitialVisibility records Wails' StartHidden option before startup.
+// SetInitialVisibility records the initial hidden/background preference
+// resolved from settings before startup.
 func (a *App) SetInitialVisibility(background bool) { a.initiallyBackground = background }
 
 // GetAppVisibilityState returns the native lifecycle state for startup
@@ -503,8 +507,8 @@ func (a *App) GetAppVisibilityState() string {
 }
 
 func (a *App) EnterBackground() error {
-	if a.ctx == nil {
-		return fmt.Errorf("app: EnterBackground called before Startup")
+	if a.runtime == nil {
+		return fmt.Errorf("app: EnterBackground called before runtime attach")
 	}
 	a.visibilityMu.Lock()
 	if a.visibility == "background" {
@@ -513,16 +517,16 @@ func (a *App) EnterBackground() error {
 	}
 	a.visibility = "background"
 	a.visibilityMu.Unlock()
-	runtime.WindowHide(a.ctx)
-	runtime.Hide(a.ctx)
+	a.runtime.hideWindow()
+	a.runtime.hideApp()
 	dock.HideDockIcon()
-	runtime.EventsEmit(a.ctx, "app:visibility", "background")
+	a.runtime.emit("app:visibility", "background")
 	return nil
 }
 
 func (a *App) EnterForeground() error {
-	if a.ctx == nil {
-		return fmt.Errorf("app: EnterForeground called before Startup")
+	if a.runtime == nil {
+		return fmt.Errorf("app: EnterForeground called before runtime attach")
 	}
 	a.visibilityMu.Lock()
 	if a.visibility == "foreground" {
@@ -532,35 +536,36 @@ func (a *App) EnterForeground() error {
 	a.visibility = "foreground"
 	a.visibilityMu.Unlock()
 	dock.ShowDockIcon()
-	runtime.Show(a.ctx)
-	runtime.WindowShow(a.ctx)
-	runtime.WindowUnminimise(a.ctx)
-	runtime.EventsEmit(a.ctx, "app:visibility", "foreground")
+	a.runtime.showApp()
+	a.runtime.showWindow()
+	a.runtime.unminimiseWindow()
+	a.runtime.emit("app:visibility", "foreground")
 	return nil
 }
 
 // NewApp constructs an App with the given dependencies. Pass Deps{} (zero) to
 // get a contract-only instance that returns ErrNotImplemented from every call.
 func NewApp(deps Deps) *App {
-	return &App{deps: deps, visibility: "foreground"}
+	return &App{deps: deps, runtime: deps.Runtime, visibility: "foreground"}
 }
 
 // SetAppInfo injects build-time version metadata. Called from main after
-// NewApp but before wails.Run.
+// NewApp but before app.Run.
 func (a *App) SetAppInfo(info model.AppInfo) {
 	a.appInfo = info
 }
 
-// Startup is invoked by Wails OnStartup. We save the ctx for runtime calls
-// (events, dialogs) and start the proxy if configured. Also wires a debounced
-// "log:new" Wails event so the dashboard refreshes after new request logs are
-// persisted, without the frontend having to poll QueryLogs.
-func (a *App) Startup(ctx context.Context) {
-	a.ctx = ctx
+// ServiceStartup is invoked by Wails v3 once services are registered and
+// before windows run. It applies the initial background preference and starts
+// the proxy if configured. Also wires a debounced "log:new" Wails event so the
+// dashboard refreshes after new request logs are persisted, without the
+// frontend having to poll QueryLogs.
+func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
 	slog.Info("app: starting up")
-	// Wails may have created the window hidden before OnStartup. Route the
-	// initial state through the same authority so Dock visibility and the
-	// frontend event are consistent from the first callback onward.
+	// The window is created with Hidden=true when the user chose a hidden
+	// start. Route the initial state through the same authority so Dock
+	// visibility and the frontend event are consistent from the first
+	// callback onward.
 	if a.initiallyBackground {
 		_ = a.EnterBackground()
 	}
@@ -572,6 +577,7 @@ func (a *App) Startup(ctx context.Context) {
 		}
 		a.wireLogEventEmitter()
 	}
+	return nil
 }
 
 // wireLogEventEmitter subscribes a debounced real-time log event to the proxy's
@@ -588,30 +594,30 @@ func (a *App) wireLogEventEmitter() {
 			debounce.Stop()
 		}
 		debounce = time.AfterFunc(200*time.Millisecond, func() {
-			if a.ctx == nil {
-				slog.Debug("app: skipping log:new emit, context nil")
-				return
-			}
 			slog.Debug("app: emitting log:new event")
-			runtime.EventsEmit(a.ctx, "log:new")
+			a.runtime.emit("log:new")
 		})
 	})
 	slog.Debug("app: log event emitter wired")
 }
 
-// PingLogEvent immediately emits a log:new Wails event so the frontend can
+// PingLogEvent immediately emits a log:ping Wails event so the frontend can
 // verify the event channel is alive without waiting for a real request log.
+// It intentionally uses a dedicated event name instead of log:new so the
+// channel check cannot be mistaken for a real log flush (which would trigger
+// an extra data refresh).
 func (a *App) PingLogEvent() {
-	if a.ctx == nil {
-		slog.Warn("app: PingLogEvent called with nil context")
+	if a.runtime == nil {
+		slog.Warn("app: PingLogEvent called before runtime attach")
 		return
 	}
 	slog.Debug("app: PingLogEvent emitted")
-	runtime.EventsEmit(a.ctx, "log:new")
+	a.runtime.emit("log:ping")
 }
 
-// Shutdown is invoked by Wails OnShutdown. Stop the proxy cleanly.
-func (a *App) Shutdown(ctx context.Context) {
+// ServiceShutdown is invoked by Wails v3 during application shutdown. Stop the
+// proxy cleanly.
+func (a *App) ServiceShutdown() error {
 	slog.Info("app: shutting down")
 	if a.deps.Checkpoint != nil {
 		a.deps.Checkpoint.Stop()
@@ -625,6 +631,7 @@ func (a *App) Shutdown(ctx context.Context) {
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		t.CloseIdleConnections()
 	}
+	return nil
 }
 
 // ----- Lifecycle / system -----
@@ -643,17 +650,14 @@ func (a *App) GetSystemHealth() (model.ServiceHealth, error) {
 
 // ----- Window / app control (used by the tray / application menu) -----
 //
-// These methods are the bridge between the Wails native menu (or, in builds
-// that support it, a system tray icon) and the Go side. They all check
-// a.ctx for nil because menu callbacks may fire before OnStartup populated it
-// (e.g. when the menu is built at startup time and the user clicks an item
-// while the runtime is still wiring up), and runtime.* helpers below would
-// otherwise log.Fatal on a nil context.
+// These methods are the bridge between the Wails v3 native menu / system tray
+// and the Go side. They no-op when the runtime handles have not been attached
+// yet (e.g. a menu callback during early startup).
 
-// ShowWindow restores and activates the main window. runtime.Show is needed
-// on macOS because HideWindowOnClose hides the entire application (NSApp),
-// not just the window. WindowShow handles the case where the window was
-// individually hidden via WindowHide. WindowUnminimise handles minimised state.
+// ShowWindow restores and activates the main window. App.Show is needed on
+// macOS because hiding to the background hides the entire application (NSApp),
+// not just the window. Window.Show handles an individually hidden window and
+// UnMinimise handles minimised state.
 func (a *App) ShowWindow() error {
 	return a.EnterForeground()
 }
@@ -664,24 +668,19 @@ func (a *App) HideWindow() error {
 	return a.EnterBackground()
 }
 
-// Quit terminates the application. The Wails runtime.Quit helper requires a
-// non-nil ctx; we silently no-op when the context has not been set yet
-// (e.g. the menu is clicked during shutdown), which is preferable to the
-// log.Fatal that runtime.Quit would otherwise trigger.
+// Quit terminates the application. The runtime handle may be absent during
+// tests or very early startup; in that case only the quit intent is recorded.
 func (a *App) Quit() {
 	// Record the explicit quit intent before asking the runtime to close so
-	// OnBeforeClose can distinguish a menu/tray Quit from a window close.
+	// the window-close hook can distinguish a menu/tray Quit from a close.
 	a.quitting.Store(true)
-	if a.ctx == nil {
-		return
-	}
-	runtime.Quit(a.ctx)
+	a.runtime.quit()
 }
 
 // IsQuitting reports whether an explicit quit intent has been recorded (e.g.
 // from the application menu, tray menu, or frontend binding). It is safe for
-// concurrent use and is intended for lifecycle handlers such as
-// OnBeforeClose.
+// concurrent use and is intended for lifecycle handlers such as the window
+// close hook.
 func (a *App) IsQuitting() bool {
 	return a.quitting.Load()
 }
@@ -691,10 +690,23 @@ func (a *App) IsQuitting() bool {
 // WebView; the AppWindow component listens for the "navigate" event and
 // forwards the path to vue-router.
 func (a *App) NavigateTo(path string) {
-	if a.ctx == nil {
+	if a.runtime == nil {
 		return
 	}
-	runtime.EventsEmit(a.ctx, "app:navigate", path)
+	a.runtime.emit("app:navigate", path)
+}
+
+// ReloadWebView asks the frontend to reload the page. The WebView render
+// process accumulates layer-backing IOSurface buffers WebKit never reclaims
+// (see frontend/src/composables/useWebViewReset.ts); reloading rebuilds the
+// render process and discards its surface pools. This is the manual escape
+// hatch next to the automatic idle/time-based reset, wired to the tray and
+// application menus.
+func (a *App) ReloadWebView() {
+	if a.runtime == nil {
+		return
+	}
+	a.runtime.emit("app:reload-webview")
 }
 
 // RestartProxy rebinds the local HTTP listener (used after the user toggles

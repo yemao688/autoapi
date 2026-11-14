@@ -1,0 +1,54 @@
+# Wails v3 project configuration.
+# Regenerate the platform assets after changing `info` with:
+#   wails3 update build-assets -name autoapi -binaryname autoapi -config build/config.yml -dir build
+# Note: that command rewrites build/darwin and build/windows assets — re-apply
+# the dev bundle identity in build/darwin/Info.dev.plist (com.wails.autoapi.dev)
+# and the matching Info.plist values if they are overwritten.
+version: '3'
+
+info:
+  companyName: "yemao688"
+  productName: "Autoapi"
+  productIdentifier: "com.wails.autoapi"
+  description: "AI 模型路由桌面应用"
+  copyright: "Copyright © 2026"
+  comments: "AI 模型路由桌面应用"
+  version: "0.6.0"
+
+# Dev mode configuration consumed by `wails3 dev`.
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 700
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - bin
+      - build/bin
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    # DEV=true drops the `production` tag and adds the project's `dev` tag
+    # (see the build task in the root Taskfile.yml), selecting the development
+    # profile in internal/config.
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task dev:frontend
+      type: background
+      readiness:
+        http: "http://localhost:9245/"
+        timeout: "60s"
+        interval: "200ms"
+    - cmd: wails3 task run:built
+      type: primary
+      exit_policy: shutdown
+
+fileAssociations:

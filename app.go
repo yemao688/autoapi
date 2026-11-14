@@ -21,7 +21,7 @@ import (
 )
 
 // NewApp constructs the bound App with real store, service, and proxy dependencies.
-func NewApp() *api.App {
+func NewApp(rt *api.Runtime) *api.App {
 	ctx := context.Background()
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -105,6 +105,7 @@ func NewApp() *api.App {
 		Proxy:      prx,
 		Checkpoint: checkpoint,
 		Metrics:    metricRegistry,
+		Runtime:    rt,
 	})
 	app.SetAppInfo(getAppInfo())
 	return app

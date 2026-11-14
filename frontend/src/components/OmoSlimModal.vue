@@ -7,8 +7,8 @@ import DiffPreview from '@/components/DiffPreview.vue'
 import TriStateTagEditor from '@/components/omo-slim/TriStateTagEditor.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
-import { toolconfig } from '../../wailsjs/go/models'
-import type { service } from '../../wailsjs/go/models'
+import { toolconfig } from '@/api/models'
+import type { service } from '@/api/models'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: []; applied: [] }>()

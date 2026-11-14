@@ -85,5 +85,10 @@ func targetFailure(err error, status int) bool {
 	if err != nil {
 		return isCircuitBreakerFailure(err, status)
 	}
-	return status >= 400
+	// Deterministic client errors (400/413/422) are caused by the request,
+	// not the target: they must not trip the target breaker (otherwise a few
+	// malformed/oversized client requests would open the breaker and block
+	// the target for everyone). 404 model_not_found KEEPS its penalty on
+	// purpose: it means the target is misconfigured for this model.
+	return status >= 400 && status != 400 && status != 413 && status != 422
 }

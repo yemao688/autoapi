@@ -263,6 +263,103 @@ func TestResponsesToChatStreamToolUse(t *testing.T) {
 	}
 }
 
+func TestStreamEventProducesOutputToolCallArguments(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  string
+		data string
+		want bool
+	}{
+		{
+			name: "Responses function call skeleton",
+			typ:  "response.output_item.added",
+			data: `{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":""}}`,
+			want: false,
+		},
+		{
+			name: "Responses first arguments delta",
+			typ:  "response.function_call_arguments.delta",
+			data: `{"type":"response.function_call_arguments.delta","delta":"{\"q\":\"x\"}"}`,
+			want: true,
+		},
+		{
+			name: "Chat tool call skeleton",
+			data: `{"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"lookup","arguments":""}}]}}]}`,
+			want: false,
+		},
+		{
+			name: "Chat first arguments delta",
+			data: `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\"x\"}"}}]}}]}`,
+			want: true,
+		},
+		{
+			name: "Anthropic empty tool input",
+			typ:  "content_block_start",
+			data: `{"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}`,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := streamEventProducesOutput([]byte(tt.data), tt.typ); got != tt.want {
+				t.Fatalf("streamEventProducesOutput()=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResponsesToChatStreamBuffersToolCallUntilArguments(t *testing.T) {
+	c := newResponsesToChatStreamConverter()
+	skeleton := responsesSSE("response.created", `{"type":"response.created","response":{"id":"r","model":"m"}}`) +
+		responsesSSE("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_0","call_id":"call_abc","name":"lookup","arguments":""}}`)
+	out, err := c.Write([]byte(skeleton))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "tool_calls") {
+		t.Fatalf("skeleton emitted a tool call: %s", out)
+	}
+	out, err = c.Write([]byte(responsesSSE("response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"q\":\"x\"}"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `"id":"call_abc"`) || !strings.Contains(got, `"name":"lookup"`) || !strings.Contains(got, `"arguments":"{\"q\":\"x\"}"`) {
+		t.Fatalf("first argument delta did not include the buffered call metadata: %s", out)
+	}
+}
+
+func TestResponsesToChatStreamSkeletonThenEndReturnsError(t *testing.T) {
+	t.Run("completed", func(t *testing.T) {
+		c := newResponsesToChatStreamConverter()
+		input := responsesSSE("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_0","call_id":"call_abc","name":"lookup"}}`) +
+			responsesSSE("response.completed", `{"type":"response.completed","response":{"stop_reason":"tool_use"}}`)
+		out, err := c.Write([]byte(input))
+		if err == nil || !strings.Contains(err.Error(), "incomplete function call arguments") {
+			t.Fatalf("expected incomplete skeleton error, out=%s err=%v", out, err)
+		}
+		if strings.Contains(string(out), "tool_calls") || strings.Contains(string(out), "finish_reason") {
+			t.Fatalf("skeleton produced a usable tool call or terminal output: %s", out)
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		c := newResponsesToChatStreamConverter()
+		out, err := c.Write([]byte(responsesSSE("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_0","call_id":"call_abc","name":"lookup"}}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tail, err := c.Close()
+		out = append(out, tail...)
+		if err == nil || !strings.Contains(err.Error(), "incomplete function call arguments") {
+			t.Fatalf("expected close error for stalled skeleton, out=%s err=%v", out, err)
+		}
+		if strings.Contains(string(out), "tool_calls") {
+			t.Fatalf("stalled skeleton emitted a tool call: %s", out)
+		}
+	})
+}
+
 func TestResponsesToChatStreamIncomplete(t *testing.T) {
 	t.Run("max_output_tokens", func(t *testing.T) {
 		c := newResponsesToChatStreamConverter()
@@ -275,6 +372,9 @@ func TestResponsesToChatStreamIncomplete(t *testing.T) {
 		}
 		if !strings.Contains(string(out), "\"finish_reason\":\"length\"") {
 			t.Fatalf("expected length finish_reason: %s", out)
+		}
+		if !strings.Contains(string(out), "data: [DONE]") {
+			t.Fatalf("expected [DONE] after max_output_tokens: %s", out)
 		}
 	})
 	t.Run("content_filter", func(t *testing.T) {
@@ -289,6 +389,21 @@ func TestResponsesToChatStreamIncomplete(t *testing.T) {
 			t.Fatalf("expected content_filter finish_reason: %s", out)
 		}
 	})
+}
+
+func TestResponsesToChatStreamIncompleteMidToolArgumentsReturnsError(t *testing.T) {
+	c := newResponsesToChatStreamConverter()
+	input := responsesSSE("response.created", `{"type":"response.created","response":{"id":"r","model":"m"}}`) +
+		responsesSSE("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_0","call_id":"call_abc","name":"lookup"}}`) +
+		responsesSSE("response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"q\":\"x\"}"}`) +
+		responsesSSE("response.incomplete", `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}`)
+	out, err := c.Write([]byte(input))
+	if err == nil || !strings.Contains(err.Error(), "incomplete function call arguments") {
+		t.Fatalf("expected mid-tool truncation error, out=%s err=%v", out, err)
+	}
+	if strings.Contains(string(out), `"finish_reason":"length"`) || strings.Contains(string(out), "data: [DONE]") {
+		t.Fatalf("incomplete tool arguments were presented as completed: %s", out)
+	}
 }
 
 func TestResponsesToChatStreamRejectsFailedAndUnsupported(t *testing.T) {

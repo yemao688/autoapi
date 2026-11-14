@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import type { model } from '../../../wailsjs/go/models'
+import type { model } from '@/api/models'
 import { useCompactNumber } from '@/composables/useCompactNumber'
 import ModelDonutChart from './ModelDonutChart.vue'
 

@@ -5,8 +5,8 @@ import { api } from '@/api/bridge'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import DiffPreview from '@/components/DiffPreview.vue'
-import { service, toolconfig } from '../../wailsjs/go/models'
-import type { model } from '../../wailsjs/go/models'
+import { service, toolconfig } from '@/api/models'
+import type { model } from '@/api/models'
 
 type Section = 'provider' | 'global'
 type VariantRow = { name: string; reasoningEffort: string }
@@ -104,7 +104,7 @@ function rowsFromPreset(preset: toolconfig.Preset | null, kind: 'direct' | 'auto
       output: item.limit?.output != null ? String(item.limit.output) : '',
       modalities: (item.modalities || []).join(', '),
       reasoning: !!item.reasoning,
-      variants: Object.entries(item.variants || {}).map(([variantName, variant]) => ({ name: variantName, reasoningEffort: variant.reasoningEffort || '' })),
+      variants: Object.entries(item.variants || {}).map(([variantName, variant]) => ({ name: variantName, reasoningEffort: variant?.reasoningEffort || '' })),
     }))
   }
   if (!preset && kind === 'autoapi') {
