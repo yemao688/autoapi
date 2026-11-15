@@ -1,4 +1,4 @@
-.PHONY: all install dev build package build-macos dmg dmg-universal build-windows build-linux test test-go test-frontend vet fmt generate clean help
+.PHONY: all install dev build package build-macos dmg dmg-universal release-macos build-windows build-linux test test-go test-frontend vet fmt generate clean help
 
 # App version is owned by build/config.yml (Wails v3 project config).
 VERSION ?= $(shell sed -n 's/^  version: "\(.*\)"/\1/p' build/config.yml | head -1)
@@ -36,6 +36,9 @@ dmg:
 dmg-universal:
 	wails3 task package:universal $(TASK_VARS)
 
+release-macos:
+	wails3 task package:release $(TASK_VARS)
+
 build-windows:
 	GOOS=windows GOARCH=amd64 wails3 task build $(TASK_VARS)
 
@@ -72,6 +75,7 @@ help:
 	@echo "  build-macos    - package the macOS .app"
 	@echo "  dmg            - package the macOS .app and wrap it in a DMG"
 	@echo "  dmg-universal  - build arm64 + amd64 and wrap them in one universal DMG"
+	@echo "  release-macos  - universal DMG + auto-update zip + SHA256SUMS"
 	@echo "  build-windows  - cross-compile the Windows binary (CGO-free)"
 	@echo "  build-linux    - build the Linux binary (run on Linux; CGO)"
 	@echo "  test           - run Go tests and frontend build"

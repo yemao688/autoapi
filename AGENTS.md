@@ -5,7 +5,7 @@ Compact ramp-up guide for OpenCode sessions working in this repo.
 ## Project type & entrypoints
 
 - **Wails v3 desktop app** (`v3.1.0`, Go 1.27.4): Go backend + Vue 3 + TypeScript frontend.
-- Product name: `Autoapi`, version in `build/config.yml` (currently 0.7.0).
+- Product name: `Autoapi`, version in `build/config.yml` (currently 0.7.1).
 - Backend entry: `main.go` (`application.New` / `app.Run`, native menu + tray wiring) and `app.go` (dependency wiring).
 - Frontend entry: `frontend/src/main.ts` → `App.vue` → `router.ts`.
 - Local OpenAI-compatible proxy: `internal/proxy/proxy.go`, listens on `0.0.0.0:8344` by default. The UI never fetches 8344 directly; metrics/logs flow through bound `App` methods in `internal/api/app.go`.
@@ -130,6 +130,7 @@ go build -tags dev ./...
 - After any Go model change, verify `frontend/bindings/autoapi/internal/**/models.ts` is regenerated and `npm run build` still passes.
 - `wails3 dev` opens the macOS window automatically; it is the fastest way to verify UI changes. It builds with the `dev` tag (development data profile) and Vite serves the frontend.
 - Release builds **must** use `wails3 build` / `-tags production`; a bare `go build` compiles the development code path (dev logger/assets/devtools).
+- **Auto-update**: `main.go` wires Wails v3's built-in updater to GitHub Releases (menu/tray “检查更新” plus a silent daily check). A release must ship `autoapi-<version>-darwin-universal.zip` — the updater only installs `.zip` archives, never the DMG — and a `SHA256SUMS` asset covering it. `make release-macos` builds the universal DMG, the zip, and `SHA256SUMS` in one step. The asset matcher is custom because the universal zip name carries no per-architecture token, which the provider's default matcher requires.
 - The proxy uses a chi router. Request IDs are available via `middleware.GetReqID(r.context())`.
 - **Edit menu must stay role-based.** macOS copy/paste/cut/selectAll/undo/redo in the webview rely on `mainMenu.AddRole(application.EditMenu)` in `main.go`. v3 emits NSMenuItems with standard Cocoa selectors (`copy:`, `paste:`, …) that propagate via the responder chain to the WKWebView first responder. Do NOT replace it with hand-rolled `OnClick` items: they use `@selector(handleClick)`, which INTERCEPTS the keystroke at the NSMenu level and routes it to the Go callback, swallowing the event so the webview never sees it. This was a real regression in v2; see the comment in `main.go`.
 - **Close-to-hide** is a window hook (`mainWindow.RegisterHook(events.Common.WindowClosing, …)` + `e.Cancel()`), not `OnBeforeClose`. `app.Quit()` bypasses the hook. `Mac.ApplicationShouldTerminateAfterLastWindowClosed` is `false` whenever the tray is enabled.

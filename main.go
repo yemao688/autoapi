@@ -1,15 +1,21 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"errors"
 	"log/slog"
 	"runtime"
+	"strings"
+	"time"
 
 	"autoapi/internal/api"
 	"autoapi/internal/config"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/updater"
+	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 )
 
 //go:embed all:frontend/dist
@@ -89,12 +95,21 @@ func main() {
 		OnClick(func(_ *application.Context) { _ = app.RestartProxy() })
 	autoapiMenu.Add("重载界面").
 		OnClick(func(_ *application.Context) { app.ReloadWebView() })
+	autoapiMenu.Add("检查更新").
+		OnClick(func(_ *application.Context) { checkForUpdates(wailsApp) })
 	autoapiMenu.AddSeparator()
 	autoapiMenu.Add("退出").
 		SetAccelerator("CmdOrCtrl+Q").
 		OnClick(func(_ *application.Context) { app.Quit() })
 	mainMenu.AddRole(application.EditMenu)
 	menuManager.SetApplicationMenu(mainMenu)
+
+	// Auto-update: Wails v3's built-in updater reads this repository's GitHub
+	// releases. Only release builds participate — a dev build has no semver
+	// for the updater to compare against.
+	if err := initUpdater(wailsApp); err != nil {
+		slog.Info("updater: disabled", "reason", err)
+	}
 
 	// Main window. Hidden is resolved from the persisted startup action; the
 	// frontend restores its own route and state when it loads.
@@ -147,6 +162,7 @@ func main() {
 		trayMenu.AddSeparator()
 		trayMenu.Add("重启服务").OnClick(func(_ *application.Context) { _ = app.RestartProxy() })
 		trayMenu.Add("重载界面").OnClick(func(_ *application.Context) { app.ReloadWebView() })
+		trayMenu.Add("检查更新").OnClick(func(_ *application.Context) { checkForUpdates(wailsApp) })
 		trayMenu.AddSeparator()
 		trayMenu.Add("退出").OnClick(func(_ *application.Context) { app.Quit() })
 
@@ -162,5 +178,89 @@ func main() {
 
 	if err := wailsApp.Run(); err != nil {
 		slog.Error("application exited with error", "error", err)
+	}
+}
+
+// updaterReady reports whether initUpdater configured the built-in updater.
+// Dev builds leave it false, and the menu/tray entry stays a no-op there.
+var updaterReady bool
+
+// initUpdater wires the built-in updater to GitHub Releases. Releases ship
+// two macOS artifacts: autoapi-<version>-universal.dmg for a manual install
+// and autoapi-<version>-darwin-universal.zip, which is what the updater
+// downloads and swaps in. The zip is universal, so its name carries no
+// per-architecture token and the default asset matcher cannot find it.
+func initUpdater(app *application.App) error {
+	if appVersion == "" || appVersion == "dev" {
+		return errors.New("development build")
+	}
+	if runtime.GOOS != "darwin" {
+		return errors.New("no update feed for " + runtime.GOOS)
+	}
+	provider, err := github.New(github.Config{
+		Repository:    "yemao688/autoapi",
+		ChecksumAsset: "SHA256SUMS",
+		AssetMatcher:  updateAssetMatcher,
+	})
+	if err != nil {
+		return err
+	}
+	if err := app.Updater.Init(updater.Config{
+		CurrentVersion: appVersion,
+		Providers:      []updater.Provider{provider},
+	}); err != nil {
+		return err
+	}
+	updaterReady = true
+	go watchForUpdates(app)
+	return nil
+}
+
+// updateAssetMatcher picks the auto-update archive out of a release's
+// assets. The archive is universal, so its name carries no per-architecture
+// token and the provider's default matcher (which requires one) would skip
+// it; matching darwin + .zip is enough because one archive serves both
+// architectures.
+func updateAssetMatcher(req updater.CheckRequest, assets []github.ReleaseAsset) int {
+	if req.Platform != "" && req.Platform != "darwin" {
+		// The release feed only carries macOS artifacts today.
+		return -1
+	}
+	for i, asset := range assets {
+		name := strings.ToLower(asset.Name)
+		if strings.HasSuffix(name, ".zip") && strings.Contains(name, "darwin") {
+			return i
+		}
+	}
+	return -1
+}
+
+// checkForUpdates opens the updater window for a user-initiated check.
+func checkForUpdates(app *application.App) {
+	if !updaterReady {
+		return
+	}
+	go func() {
+		if err := app.Updater.CheckAndInstall(context.Background()); err != nil {
+			slog.Warn("updater: check failed", "error", err)
+		}
+	}()
+}
+
+// watchForUpdates polls silently in the background. A found release opens the
+// updater window; an up-to-date result stays invisible. The first check waits
+// for launch to settle.
+func watchForUpdates(app *application.App) {
+	const interval = 24 * time.Hour
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	for range timer.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		release, err := app.Updater.Check(ctx)
+		cancel()
+		if err == nil && release != nil {
+			checkForUpdates(app)
+		}
+		timer.Reset(interval)
 	}
 }

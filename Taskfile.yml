@@ -218,6 +218,20 @@ tasks:
       - wails3 tool package -format dmg -name {{.APP_NAME}} -out {{.BIN_DIR}} -volume-icon build/darwin/icons.icns
       - mv -f "{{.BIN_DIR}}/{{.APP_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}-universal.dmg"
 
+  package:release:
+    summary: Builds the macOS release artifacts (universal DMG + auto-update zip + SHA256SUMS)
+    platforms: [darwin]
+    deps:
+      - task: package:universal
+    cmds:
+      # The updater only installs .zip archives; the DMG stays the manual
+      # install. Both hashes land in SHA256SUMS, which the updater's GitHub
+      # provider reads (ChecksumAsset) to verify the download.
+      # The updater rejects archives with more than one top-level entry, so no
+      # --sequesterRsrc: that flag adds a __MACOSX/ sidecar tree.
+      - ditto -c -k --keepParent "{{.BIN_DIR}}/{{.APP_NAME}}.app" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}-darwin-universal.zip"
+      - cd "{{.BIN_DIR}}" && shasum -a 256 "{{.APP_NAME}}-{{.VERSION}}-darwin-universal.zip" "{{.APP_NAME}}-{{.VERSION}}-universal.dmg" > SHA256SUMS
+
   clean:
     summary: Removes build artifacts
     cmds:

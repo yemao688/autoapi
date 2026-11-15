@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.1] - 2026-11-15
+
+### Added
+
+- **In-app updates**: the app now uses Wails v3's built-in updater against GitHub Releases — a “检查更新” item in the application and tray menus, plus a silent daily check that only surfaces when a newer version exists. Releases ship an `autoapi-<version>-darwin-universal.zip` for the updater (the DMG remains the manual install) and a `SHA256SUMS` asset used to verify the download; `make release-macos` produces all three artifacts.
+- This is the first release that can update itself; earlier versions must be replaced manually once.
+
 ## [0.7.0] - 2026-11-15
 
 ### Added
