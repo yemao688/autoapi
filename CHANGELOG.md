@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.2] - 2026-11-15
+
+### Added
+
+- **In-app update flow**: 设置 → 关于 → 检查更新 now checks GitHub Releases, shows the new version with its release notes and download size, downloads with a live progress bar, and offers 立即重启 to install and relaunch. The menu/tray 检查更新 entry triggers the same flow. Nothing is installed in the background.
+
+### Changed
+
+- **macOS bundle name**: the application bundle is now `Autoapi.app` (the mounted DMG volume is `Autoapi`) and `CFBundleDisplayName` is `Autoapi`; the executable inside stays `autoapi`, so `CFBundleExecutable` is unchanged. Installs that update in place keep their existing folder name — reinstall from the DMG if you want the renamed bundle.
+- **Release artifacts**: `make release-macos` builds the universal DMG, the updater zip (`autoapi-<version>-darwin-universal.zip`) and `SHA256SUMS` in one step.
+
 ## [0.7.1] - 2026-11-15
 
 ### Added
