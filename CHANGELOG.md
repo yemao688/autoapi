@@ -2,7 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-15
+
+### Added
+
+- **Tool access workbench**: manage OpenCode / OMO Slim / Codex / Claude configuration from the app — tool provider presets with enable/disable and interface-format vendors, batch import of existing providers as presets, staged edits with diff previews, source-directory backups before apply, and live OpenCode/OMO state projections.
+- **OMO Slim editor**: rebuilt OMO editing as a preset-aware workbench covering agent skills, MCPs, and custom agents with a preview-confirm flow; OMO was renamed to OMO Slim.
+- **Per-target routing controls**: target-level rolling circuit breakers with configurable behavior, target success rates, and a per-target test action in model rules; per-model protocol and API type are editable inline.
+- **Upstream monitoring**: upstream model catalog monitoring and probes, with reasoning-token accounting and a visible test endpoint.
+- **API key scoping**: restrict API keys by model rules.
+- **LAN access toggle**, per-card backup separation, and prettier-style config formatting.
+- **DMG packaging**: `make dmg` / `wails3 task package:dmg` builds the macOS `.app` and wraps it in a versioned DMG.
 
 ### Changed
 
@@ -11,10 +21,20 @@ All notable changes to this project will be documented in this file.
   - TypeScript bindings are generated under `frontend/bindings/` by `wails3 generate bindings`; the frontend calls them through the `@wailsio/runtime` package. The generated `wailsjs/` directory and `window.go`/`window.runtime` globals are gone.
   - The application menu and menu-bar tray are native v3 objects in `main.go`; the `fyne.io/systray` integration (`internal/tray`) was removed. Close-to-hide is now a window-close hook.
   - `api.App` implements the v3 service lifecycle (`ServiceStartup` / `ServiceShutdown`) and talks to the runtime through `internal/api/runtime.go`.
+- **cc-switch-inspired workbench upgrades**: tier env, `wire_api`, shared common config, and model catalog edits across tool presets.
+- **Usage stats sync is event-driven**; the log table merges status into the time column and adds an API token column.
+- **Desktop shell**: manual WebView reload from the tray/app menu, time-based state auto-reset, and lower WebKit render memory pressure.
 
 ### Fixed
 
+- **OpenCode Go session header**: providers on `opencode.ai/inference/go` and `opencode.ai/zen/go` rejected requests with `400 MissingSessionID`; the proxy now derives a stable per-conversation `x-opencode-session` from `(api_key_id, system, first user message)` when the client did not supply one, and the in-app model probe does the same.
+- **Provider opt-in sanitizer**: strip empty assistant messages for strict upstreams.
+- **Deterministic 4xx fast-fail**: deterministic upstream 4xx no longer retries the same target needlessly; pre-commit cancels are classified separately and semantic upstream errors are typed.
+- **Streaming**: fail-closed tool-call streaming (no empty-argument commits); `response.incomplete` is treated as a successful terminal; configurable post-commit stall timeout; empty streaming responses are rejected; pre-commit stream errors fail over.
+- **Routing**: upstream 4xx counts toward provider and target breakers; route polling leaks stopped; shared transport pool with a first-byte timer; upstream compression mismatch and TLS stability fixes.
+- **Model rules and UI**: disabled providers and rules sort last; model table overflow and inline row editing fixed; literal `@` in i18n no longer crashes production builds; stale `OmoModal.vue` removed; dead-button and stale-state issues on the tool access page fixed.
 - **Data export download**: decode the base64 `ExportResult.data` payload before creating the Blob (Go `[]byte` crosses the bridge as a base64 string).
+- **Protocol conversion**: broader Responses/Messages coverage (tool auto, capability replay), and reasoning effort is preserved across protocols and conversions.
 
 ## [0.6.0] - 2026-07-18
 

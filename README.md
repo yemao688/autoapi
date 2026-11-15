@@ -26,11 +26,19 @@
 
 前往 [Releases](https://github.com/yemao688/autoapi/releases) 下载最新版本：
 
-- **macOS**：`autoapi.app`（Universal，支持 Intel / Apple Silicon）
-- **Windows**：`autoapi.exe`
-- **Linux**：`autoapi.deb` / `autoapi.tar.gz`
+- **macOS**：`autoapi-<version>-universal.dmg`（Universal，Intel / Apple Silicon 通用）
 
-下载后拖入 Applications（macOS）或双击安装即可。
+打开 DMG，把 `autoapi.app` 拖进 Applications 即可。本项目**未做 Apple 公证（notarization）**，首次启动会被 Gatekeeper 拦截，任选一种方式放行：
+
+```bash
+# 方式一：移除下载隔离属性（推荐）
+xattr -dr com.apple.quarantine /Applications/autoapi.app
+
+# 方式二：在 Applications 里右键 app → 打开 → 再点“打开”
+#          （macOS 15+ 也可在「系统设置 → 隐私与安全性」里点“仍要打开”）
+```
+
+Windows / Linux 产物暂未随 Release 提供，请从源码构建（见下）。
 
 ### 从源码构建
 
@@ -58,6 +66,10 @@ wails3 build
 
 # macOS .app 打包
 wails3 package
+
+# macOS DMG（当前架构 / Universal）
+make dmg
+make dmg-universal
 
 # 交叉编译 Windows 二进制（CGO-free）
 GOOS=windows wails3 task build

@@ -1,12 +1,12 @@
 {
 	"fixed": {
-		"file_version": "0.6.0",
-		"product_version": "0.6.0"
+		"file_version": "0.7.0",
+		"product_version": "0.7.0"
 	},
 	"info": {
 		"0409": {
-			"FileVersion": "0.6.0",
-			"ProductVersion": "0.6.0",
+			"FileVersion": "0.7.0",
+			"ProductVersion": "0.7.0",
 			"CompanyName": "yemao688",
 			"FileDescription": "AI 模型路由桌面应用",
 			"LegalCopyright": "Copyright © 2026",

@@ -90,6 +90,9 @@ tasks:
             ref: .DEV
     cmds:
       - mkdir -p "{{.BIN_DIR}}"
+      # Go 1.27 refuses to overwrite an existing fat Mach-O with a thin one,
+      # so a leftover universal build would break every later build.
+      - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}{{if eq .GOOS "windows"}}.exe{{end}}"
       # Windows resources: PE subsystem, icon, version info and manifest.
       # Plain `go build` does not generate these, so the resource object is
       # produced here and consumed by the linker via its filename suffix
@@ -188,6 +191,32 @@ tasks:
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/"
       - xattr -cr "{{.BIN_DIR}}/{{.APP_NAME}}.app"
       - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+
+  package:dmg:
+    summary: Builds the macOS .app and wraps it in a DMG (build/bin/<app>.dmg)
+    platforms: [darwin]
+    deps:
+      - task: package
+    cmds:
+      # `wails3 tool package` expects build/bin/<app>.app and writes <app>.dmg.
+      - wails3 tool package -format dmg -name {{.APP_NAME}} -out {{.BIN_DIR}} -volume-icon build/darwin/icons.icns
+      - mv -f "{{.BIN_DIR}}/{{.APP_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}.dmg"
+
+  package:universal:
+    summary: Builds a universal (arm64 + amd64) macOS .app and DMG
+    platforms: [darwin]
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}"
+      - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}-arm64" "{{.BIN_DIR}}/{{.APP_NAME}}-amd64"
+      - GOOS=darwin GOARCH=arm64 wails3 task build VERSION={{.VERSION}} BUILD={{.BUILD}}
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
+      - GOOS=darwin GOARCH=amd64 wails3 task build VERSION={{.VERSION}} BUILD={{.BUILD}}
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}-amd64"
+      - wails3 tool lipo -output "{{.BIN_DIR}}/{{.APP_NAME}}" -input "{{.BIN_DIR}}/{{.APP_NAME}}-arm64" -input "{{.BIN_DIR}}/{{.APP_NAME}}-amd64"
+      - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}-arm64" "{{.BIN_DIR}}/{{.APP_NAME}}-amd64"
+      - task: package:darwin
+      - wails3 tool package -format dmg -name {{.APP_NAME}} -out {{.BIN_DIR}} -volume-icon build/darwin/icons.icns
+      - mv -f "{{.BIN_DIR}}/{{.APP_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}-universal.dmg"
 
   clean:
     summary: Removes build artifacts
