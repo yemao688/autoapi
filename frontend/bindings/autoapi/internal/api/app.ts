@@ -53,9 +53,20 @@ export function CancelModelTest(testID: string): $CancellablePromise<boolean> {
     return $Call.ByID(3144320649, testID);
 }
 
+/**
+ * CheckForUpdate asks the configured update provider for a newer release.
+ * It only performs the check: downloading and installing stay explicit user
+ * actions (DownloadUpdate, then RestartToUpdate).
+ */
+export function CheckForUpdate(): $CancellablePromise<$models.UpdateInfo | null> {
+    return $Call.ByID(3391747844).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
 export function CheckToolDrift(tool: string): $CancellablePromise<service$0.DriftState[]> {
     return $Call.ByID(3519110051, tool).then(($result: any) => {
-        return $$createType1($result);
+        return $$createType3($result);
     });
 }
 
@@ -75,25 +86,25 @@ export function ClearProviderModels(providerID: string): $CancellablePromise<voi
 
 export function CreateAPIKey($in: model$0.ApiKeyInput): $CancellablePromise<model$0.ApiKey | null> {
     return $Call.ByID(373252245, $in).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType5($result);
     });
 }
 
 export function CreateModelRule($in: model$0.ModelRuleInput): $CancellablePromise<model$0.ModelRule | null> {
     return $Call.ByID(1819974745, $in).then(($result: any) => {
-        return $$createType5($result);
+        return $$createType7($result);
     });
 }
 
 export function CreateProvider($in: model$0.ProviderInput): $CancellablePromise<model$0.Provider | null> {
     return $Call.ByID(3522050503, $in).then(($result: any) => {
-        return $$createType7($result);
+        return $$createType9($result);
     });
 }
 
 export function CreateToolPreset(preset: toolconfig$0.Preset, plaintextKey: string): $CancellablePromise<toolconfig$0.Preset | null> {
     return $Call.ByID(2819562347, preset, plaintextKey).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType11($result);
     });
 }
 
@@ -130,13 +141,23 @@ export function DeleteToolPreset(id: number): $CancellablePromise<void> {
 
 export function DisableToolPreset(tool: string, providerID: string): $CancellablePromise<service$0.ToolApplyResult> {
     return $Call.ByID(1419625087, tool, providerID).then(($result: any) => {
-        return $$createType10($result);
+        return $$createType12($result);
     });
+}
+
+/**
+ * DownloadUpdate downloads, verifies and stages the release found by the last
+ * CheckForUpdate. Progress is reported on the updater's Wails events
+ * (wails:updater:download-progress); errors surface here and as
+ * wails:updater:error.
+ */
+export function DownloadUpdate(): $CancellablePromise<void> {
+    return $Call.ByID(1905888479);
 }
 
 export function EnableToolPreset(id: number): $CancellablePromise<service$0.ToolApplyResult> {
     return $Call.ByID(741685480, id).then(($result: any) => {
-        return $$createType10($result);
+        return $$createType12($result);
     });
 }
 
@@ -150,19 +171,19 @@ export function EnterForeground(): $CancellablePromise<void> {
 
 export function ExportData(format: model$0.ExportFormat): $CancellablePromise<$models.ExportResult> {
     return $Call.ByID(1377387132, format).then(($result: any) => {
-        return $$createType11($result);
+        return $$createType13($result);
     });
 }
 
 export function ExportToolSnippet(id: number): $CancellablePromise<toolconfig$0.Snippet> {
     return $Call.ByID(2819308455, id).then(($result: any) => {
-        return $$createType12($result);
+        return $$createType14($result);
     });
 }
 
 export function FetchUpstreamModels(providerID: string): $CancellablePromise<model$0.Model[]> {
     return $Call.ByID(3866312061, providerID).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType16($result);
     });
 }
 
@@ -171,7 +192,7 @@ export function FetchUpstreamModels(providerID: string): $CancellablePromise<mod
  */
 export function GetAppInfo(): $CancellablePromise<model$0.AppInfo> {
     return $Call.ByID(2542537489).then(($result: any) => {
-        return $$createType15($result);
+        return $$createType17($result);
     });
 }
 
@@ -185,7 +206,7 @@ export function GetAppVisibilityState(): $CancellablePromise<string> {
 
 export function GetDashboard(): $CancellablePromise<model$0.DashboardData | null> {
     return $Call.ByID(3894315834).then(($result: any) => {
-        return $$createType17($result);
+        return $$createType19($result);
     });
 }
 
@@ -195,13 +216,13 @@ export function GetDashboard(): $CancellablePromise<model$0.DashboardData | null
  */
 export function GetLocalIPv4Addresses(): $CancellablePromise<string[]> {
     return $Call.ByID(3586775266).then(($result: any) => {
-        return $$createType18($result);
+        return $$createType20($result);
     });
 }
 
 export function GetModelRule(id: string): $CancellablePromise<model$0.ModelRule | null> {
     return $Call.ByID(2671476297, id).then(($result: any) => {
-        return $$createType5($result);
+        return $$createType7($result);
     });
 }
 
@@ -211,31 +232,31 @@ export function GetModelRule(id: string): $CancellablePromise<model$0.ModelRule 
  */
 export function GetModelRuleShadowComparisons(): $CancellablePromise<model$0.ModelRuleShadowComparison[]> {
     return $Call.ByID(820348157).then(($result: any) => {
-        return $$createType20($result);
+        return $$createType22($result);
     });
 }
 
 export function GetOmoSlimConfig(): $CancellablePromise<service$0.OmoSlimConfigView> {
     return $Call.ByID(605945872).then(($result: any) => {
-        return $$createType21($result);
+        return $$createType23($result);
     });
 }
 
 export function GetOpencodeGlobalSettings(): $CancellablePromise<toolconfig$0.OpencodeGlobalSettings> {
     return $Call.ByID(3054619961).then(($result: any) => {
-        return $$createType22($result);
+        return $$createType24($result);
     });
 }
 
 export function GetOpencodeLiveState(): $CancellablePromise<service$0.OpencodeLiveState> {
     return $Call.ByID(1037985158).then(($result: any) => {
-        return $$createType23($result);
+        return $$createType25($result);
     });
 }
 
 export function GetProvider(id: string): $CancellablePromise<model$0.Provider | null> {
     return $Call.ByID(4246597015, id).then(($result: any) => {
-        return $$createType7($result);
+        return $$createType9($result);
     });
 }
 
@@ -248,13 +269,13 @@ export function GetProviderKey(providerID: string): $CancellablePromise<string> 
 
 export function GetProxyStatus(): $CancellablePromise<$models.ProxyStatus> {
     return $Call.ByID(36591256).then(($result: any) => {
-        return $$createType24($result);
+        return $$createType26($result);
     });
 }
 
 export function GetRequestLog(id: string): $CancellablePromise<model$0.RequestLog | null> {
     return $Call.ByID(4282396247, id).then(($result: any) => {
-        return $$createType26($result);
+        return $$createType28($result);
     });
 }
 
@@ -263,13 +284,13 @@ export function GetRequestLog(id: string): $CancellablePromise<model$0.RequestLo
  */
 export function GetRuntimePaths(): $CancellablePromise<$models.RuntimePaths> {
     return $Call.ByID(986413894).then(($result: any) => {
-        return $$createType27($result);
+        return $$createType29($result);
     });
 }
 
 export function GetSettings(): $CancellablePromise<model$0.Settings | null> {
     return $Call.ByID(1373643103).then(($result: any) => {
-        return $$createType29($result);
+        return $$createType31($result);
     });
 }
 
@@ -278,7 +299,7 @@ export function GetSettings(): $CancellablePromise<model$0.Settings | null> {
  */
 export function GetSystemHealth(): $CancellablePromise<model$0.ServiceHealth> {
     return $Call.ByID(43919573).then(($result: any) => {
-        return $$createType30($result);
+        return $$createType32($result);
     });
 }
 
@@ -288,7 +309,7 @@ export function GetSystemHealth(): $CancellablePromise<model$0.ServiceHealth> {
  */
 export function GetTargetBreakerStatuses(): $CancellablePromise<proxy$0.TargetBreakerStatus[]> {
     return $Call.ByID(2854121483).then(($result: any) => {
-        return $$createType32($result);
+        return $$createType34($result);
     });
 }
 
@@ -297,7 +318,7 @@ export function GetTargetBreakerStatuses(): $CancellablePromise<proxy$0.TargetBr
  */
 export function GetTargetDiagnostics(): $CancellablePromise<model$0.TargetShadowScore[]> {
     return $Call.ByID(3596991505).then(($result: any) => {
-        return $$createType34($result);
+        return $$createType36($result);
     });
 }
 
@@ -307,7 +328,7 @@ export function GetToolCommonConfig(tool: string): $CancellablePromise<string> {
 
 export function GetUsageStats(q: model$0.LogQuery): $CancellablePromise<model$0.UsageStats | null> {
     return $Call.ByID(758853132, q).then(($result: any) => {
-        return $$createType36($result);
+        return $$createType38($result);
     });
 }
 
@@ -320,7 +341,7 @@ export function GetUsageStats(q: model$0.LogQuery): $CancellablePromise<model$0.
  */
 export function GetUsageTrends(q: model$0.UsageTrendsQuery): $CancellablePromise<model$0.UsageTrends | null> {
     return $Call.ByID(730892633, q).then(($result: any) => {
-        return $$createType38($result);
+        return $$createType40($result);
     });
 }
 
@@ -353,73 +374,73 @@ export function IsQuitting(): $CancellablePromise<boolean> {
 
 export function ListAPIKeys(): $CancellablePromise<model$0.ApiKey[]> {
     return $Call.ByID(33075778).then(($result: any) => {
-        return $$createType39($result);
+        return $$createType41($result);
     });
 }
 
 export function ListEndpoints(): $CancellablePromise<model$0.Endpoint[]> {
     return $Call.ByID(3515911972).then(($result: any) => {
-        return $$createType41($result);
+        return $$createType43($result);
     });
 }
 
 export function ListModelCapabilities(providerID: string, modelName: string): $CancellablePromise<model$0.ModelCapability[]> {
     return $Call.ByID(1909879709, providerID, modelName).then(($result: any) => {
-        return $$createType43($result);
+        return $$createType45($result);
     });
 }
 
 export function ListModelRules(): $CancellablePromise<model$0.ModelRule[]> {
     return $Call.ByID(702514542).then(($result: any) => {
-        return $$createType44($result);
+        return $$createType46($result);
     });
 }
 
 export function ListModels(providerID: string): $CancellablePromise<model$0.Model[]> {
     return $Call.ByID(711175212, providerID).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType16($result);
     });
 }
 
 export function ListProviderCapabilities(providerID: string): $CancellablePromise<model$0.ProviderCapability[]> {
     return $Call.ByID(2229643517, providerID).then(($result: any) => {
-        return $$createType46($result);
+        return $$createType48($result);
     });
 }
 
 export function ListProviders(): $CancellablePromise<model$0.Provider[]> {
     return $Call.ByID(2967154764).then(($result: any) => {
-        return $$createType47($result);
+        return $$createType49($result);
     });
 }
 
 export function ListToolBackups(tool: string): $CancellablePromise<service$0.ToolBackupInfo[]> {
     return $Call.ByID(1470027995, tool).then(($result: any) => {
-        return $$createType49($result);
+        return $$createType51($result);
     });
 }
 
 export function ListToolPresets(tool: string): $CancellablePromise<toolconfig$0.Preset[]> {
     return $Call.ByID(4257549400, tool).then(($result: any) => {
-        return $$createType50($result);
+        return $$createType52($result);
     });
 }
 
 export function ListToolProviders(tool: string): $CancellablePromise<service$0.ToolProviderView[]> {
     return $Call.ByID(2766358678, tool).then(($result: any) => {
-        return $$createType52($result);
+        return $$createType54($result);
     });
 }
 
 export function ListToolStatuses(): $CancellablePromise<toolconfig$0.ToolStatus[]> {
     return $Call.ByID(3887132118).then(($result: any) => {
-        return $$createType54($result);
+        return $$createType56($result);
     });
 }
 
 export function ListUpstreamMonitorModels(): $CancellablePromise<model$0.UpstreamMonitorModel[]> {
     return $Call.ByID(2543725285).then(($result: any) => {
-        return $$createType56($result);
+        return $$createType58($result);
     });
 }
 
@@ -450,13 +471,13 @@ export function PingLogEvent(): $CancellablePromise<void> {
 
 export function PreviewOpencodeConfigChange(plan: service$0.OpencodeConfigPlan): $CancellablePromise<service$0.OmoSlimPreview> {
     return $Call.ByID(1214141949, plan).then(($result: any) => {
-        return $$createType57($result);
+        return $$createType59($result);
     });
 }
 
 export function PreviewToolConfigChange(tool: string, plan: service$0.ToolConfigPlan): $CancellablePromise<service$0.ToolFilePreview[]> {
     return $Call.ByID(1732912366, tool, plan).then(($result: any) => {
-        return $$createType59($result);
+        return $$createType61($result);
     });
 }
 
@@ -466,19 +487,19 @@ export function PreviewToolConfigChange(tool: string, plan: service$0.ToolConfig
  */
 export function PreviewToolOmoSlimChange(change: toolconfig$0.OmoSlimChange): $CancellablePromise<service$0.OmoSlimPreview> {
     return $Call.ByID(1079269480, change).then(($result: any) => {
-        return $$createType57($result);
+        return $$createType59($result);
     });
 }
 
 export function ProbeUpstreamMonitorModel(row: model$0.UpstreamMonitorSelection): $CancellablePromise<model$0.UpstreamMonitorResult> {
     return $Call.ByID(1406573462, row).then(($result: any) => {
-        return $$createType60($result);
+        return $$createType62($result);
     });
 }
 
 export function ProbeUpstreamMonitorModels(rows: model$0.UpstreamMonitorSelection[]): $CancellablePromise<model$0.UpstreamMonitorBatch | null> {
     return $Call.ByID(3755436415, rows).then(($result: any) => {
-        return $$createType62($result);
+        return $$createType64($result);
     });
 }
 
@@ -488,13 +509,13 @@ export function PurgeLogs(olderThanDays: number): $CancellablePromise<number> {
 
 export function QueryLogs(q: model$0.LogQuery): $CancellablePromise<model$0.LogQueryResult | null> {
     return $Call.ByID(1840233265, q).then(($result: any) => {
-        return $$createType64($result);
+        return $$createType66($result);
     });
 }
 
 export function QueryLogsLite(q: model$0.LogQuery): $CancellablePromise<model$0.LogQueryResult | null> {
     return $Call.ByID(2298976013, q).then(($result: any) => {
-        return $$createType64($result);
+        return $$createType66($result);
     });
 }
 
@@ -525,7 +546,7 @@ export function ReloadWebView(): $CancellablePromise<void> {
  */
 export function ReorderModelRuleTargets(ruleID: string, orderedTargetIDs: string[]): $CancellablePromise<model$0.ReorderModelRuleTargetsResult> {
     return $Call.ByID(3715067890, ruleID, orderedTargetIDs).then(($result: any) => {
-        return $$createType65($result);
+        return $$createType67($result);
     });
 }
 
@@ -536,7 +557,7 @@ export function ReorderModelRuleTargets(ruleID: string, orderedTargetIDs: string
  */
 export function ReorderModelRules(orderedIDs: string[]): $CancellablePromise<model$0.ReorderModelRulesResult> {
     return $Call.ByID(1750632301, orderedIDs).then(($result: any) => {
-        return $$createType66($result);
+        return $$createType68($result);
     });
 }
 
@@ -546,7 +567,7 @@ export function ReorderModelRules(orderedIDs: string[]): $CancellablePromise<mod
  */
 export function ReplayLog(id: string): $CancellablePromise<model$0.ReplayResult | null> {
     return $Call.ByID(843151589, id).then(($result: any) => {
-        return $$createType68($result);
+        return $$createType70($result);
     });
 }
 
@@ -555,7 +576,7 @@ export function ReplayLog(id: string): $CancellablePromise<model$0.ReplayResult 
  */
 export function ResetSettings(): $CancellablePromise<model$0.Settings | null> {
     return $Call.ByID(701446700).then(($result: any) => {
-        return $$createType29($result);
+        return $$createType31($result);
     });
 }
 
@@ -569,6 +590,14 @@ export function ResetTargetBreakers(): $CancellablePromise<void> {
  */
 export function RestartProxy(): $CancellablePromise<void> {
     return $Call.ByID(895240231);
+}
+
+/**
+ * RestartToUpdate hands the staged update to the updater's helper and quits;
+ * the helper swaps the application bundle and relaunches the new build.
+ */
+export function RestartToUpdate(): $CancellablePromise<void> {
+    return $Call.ByID(1687834705);
 }
 
 export function RestoreToolBackup(tool: string, resource: string, backupPath: string): $CancellablePromise<void> {
@@ -662,49 +691,49 @@ export function StopProxy(): $CancellablePromise<void> {
 
 export function TestAllProviders(): $CancellablePromise<model$0.ProviderTestResult[]> {
     return $Call.ByID(952928909).then(($result: any) => {
-        return $$createType70($result);
+        return $$createType72($result);
     });
 }
 
 export function TestModelChat(providerID: string, modelName: string, protocol: string, stream: boolean, testID: string): $CancellablePromise<model$0.ModelChatTestResult | null> {
     return $Call.ByID(2002488253, providerID, modelName, protocol, stream, testID).then(($result: any) => {
-        return $$createType72($result);
+        return $$createType74($result);
     });
 }
 
 export function TestModelLatency(providerID: string, modelName: string): $CancellablePromise<model$0.ModelTestResult | null> {
     return $Call.ByID(1669792795, providerID, modelName).then(($result: any) => {
-        return $$createType74($result);
+        return $$createType76($result);
     });
 }
 
 export function TestProvider(id: string): $CancellablePromise<model$0.ProviderTestResult | null> {
     return $Call.ByID(3578975539, id).then(($result: any) => {
-        return $$createType75($result);
+        return $$createType77($result);
     });
 }
 
 export function UpdateAPIKey(id: string, $in: model$0.ApiKeyInput): $CancellablePromise<model$0.ApiKey | null> {
     return $Call.ByID(3597797668, id, $in).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType5($result);
     });
 }
 
 export function UpdateEnabledToolPreset(preset: toolconfig$0.Preset, plaintextKey: string): $CancellablePromise<toolconfig$0.Preset | null> {
     return $Call.ByID(1239619205, preset, plaintextKey).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType11($result);
     });
 }
 
 export function UpdateModelRule(id: string, $in: model$0.ModelRuleInput): $CancellablePromise<model$0.ModelRule | null> {
     return $Call.ByID(3870110314, id, $in).then(($result: any) => {
-        return $$createType5($result);
+        return $$createType7($result);
     });
 }
 
 export function UpdateProvider(id: string, $in: model$0.ProviderInput): $CancellablePromise<model$0.Provider | null> {
     return $Call.ByID(1125800486, id, $in).then(($result: any) => {
-        return $$createType7($result);
+        return $$createType9($result);
     });
 }
 
@@ -717,84 +746,86 @@ export function UpdateProviderModel($in: model$0.ProviderModelUpdate): $Cancella
 
 export function UpdateToolPreset(preset: toolconfig$0.Preset, plaintextKey: string): $CancellablePromise<toolconfig$0.Preset | null> {
     return $Call.ByID(604177890, preset, plaintextKey).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType11($result);
     });
 }
 
 // Private type creation functions
-const $$createType0 = service$0.DriftState.createFrom;
-const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = model$0.ApiKey.createFrom;
-const $$createType3 = $Create.Nullable($$createType2);
-const $$createType4 = model$0.ModelRule.createFrom;
+const $$createType0 = $models.UpdateInfo.createFrom;
+const $$createType1 = $Create.Nullable($$createType0);
+const $$createType2 = service$0.DriftState.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = model$0.ApiKey.createFrom;
 const $$createType5 = $Create.Nullable($$createType4);
-const $$createType6 = model$0.Provider.createFrom;
+const $$createType6 = model$0.ModelRule.createFrom;
 const $$createType7 = $Create.Nullable($$createType6);
-const $$createType8 = toolconfig$0.Preset.createFrom;
+const $$createType8 = model$0.Provider.createFrom;
 const $$createType9 = $Create.Nullable($$createType8);
-const $$createType10 = service$0.ToolApplyResult.createFrom;
-const $$createType11 = $models.ExportResult.createFrom;
-const $$createType12 = toolconfig$0.Snippet.createFrom;
-const $$createType13 = model$0.Model.createFrom;
-const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = model$0.AppInfo.createFrom;
-const $$createType16 = model$0.DashboardData.createFrom;
-const $$createType17 = $Create.Nullable($$createType16);
-const $$createType18 = $Create.Array($Create.Any);
-const $$createType19 = model$0.ModelRuleShadowComparison.createFrom;
-const $$createType20 = $Create.Array($$createType19);
-const $$createType21 = service$0.OmoSlimConfigView.createFrom;
-const $$createType22 = toolconfig$0.OpencodeGlobalSettings.createFrom;
-const $$createType23 = service$0.OpencodeLiveState.createFrom;
-const $$createType24 = $models.ProxyStatus.createFrom;
-const $$createType25 = model$0.RequestLog.createFrom;
-const $$createType26 = $Create.Nullable($$createType25);
-const $$createType27 = $models.RuntimePaths.createFrom;
-const $$createType28 = model$0.Settings.createFrom;
-const $$createType29 = $Create.Nullable($$createType28);
-const $$createType30 = model$0.ServiceHealth.createFrom;
-const $$createType31 = proxy$0.TargetBreakerStatus.createFrom;
-const $$createType32 = $Create.Array($$createType31);
-const $$createType33 = model$0.TargetShadowScore.createFrom;
+const $$createType10 = toolconfig$0.Preset.createFrom;
+const $$createType11 = $Create.Nullable($$createType10);
+const $$createType12 = service$0.ToolApplyResult.createFrom;
+const $$createType13 = $models.ExportResult.createFrom;
+const $$createType14 = toolconfig$0.Snippet.createFrom;
+const $$createType15 = model$0.Model.createFrom;
+const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = model$0.AppInfo.createFrom;
+const $$createType18 = model$0.DashboardData.createFrom;
+const $$createType19 = $Create.Nullable($$createType18);
+const $$createType20 = $Create.Array($Create.Any);
+const $$createType21 = model$0.ModelRuleShadowComparison.createFrom;
+const $$createType22 = $Create.Array($$createType21);
+const $$createType23 = service$0.OmoSlimConfigView.createFrom;
+const $$createType24 = toolconfig$0.OpencodeGlobalSettings.createFrom;
+const $$createType25 = service$0.OpencodeLiveState.createFrom;
+const $$createType26 = $models.ProxyStatus.createFrom;
+const $$createType27 = model$0.RequestLog.createFrom;
+const $$createType28 = $Create.Nullable($$createType27);
+const $$createType29 = $models.RuntimePaths.createFrom;
+const $$createType30 = model$0.Settings.createFrom;
+const $$createType31 = $Create.Nullable($$createType30);
+const $$createType32 = model$0.ServiceHealth.createFrom;
+const $$createType33 = proxy$0.TargetBreakerStatus.createFrom;
 const $$createType34 = $Create.Array($$createType33);
-const $$createType35 = model$0.UsageStats.createFrom;
-const $$createType36 = $Create.Nullable($$createType35);
-const $$createType37 = model$0.UsageTrends.createFrom;
+const $$createType35 = model$0.TargetShadowScore.createFrom;
+const $$createType36 = $Create.Array($$createType35);
+const $$createType37 = model$0.UsageStats.createFrom;
 const $$createType38 = $Create.Nullable($$createType37);
-const $$createType39 = $Create.Array($$createType2);
-const $$createType40 = model$0.Endpoint.createFrom;
-const $$createType41 = $Create.Array($$createType40);
-const $$createType42 = model$0.ModelCapability.createFrom;
+const $$createType39 = model$0.UsageTrends.createFrom;
+const $$createType40 = $Create.Nullable($$createType39);
+const $$createType41 = $Create.Array($$createType4);
+const $$createType42 = model$0.Endpoint.createFrom;
 const $$createType43 = $Create.Array($$createType42);
-const $$createType44 = $Create.Array($$createType4);
-const $$createType45 = model$0.ProviderCapability.createFrom;
-const $$createType46 = $Create.Array($$createType45);
-const $$createType47 = $Create.Array($$createType6);
-const $$createType48 = service$0.ToolBackupInfo.createFrom;
-const $$createType49 = $Create.Array($$createType48);
-const $$createType50 = $Create.Array($$createType8);
-const $$createType51 = service$0.ToolProviderView.createFrom;
-const $$createType52 = $Create.Array($$createType51);
-const $$createType53 = toolconfig$0.ToolStatus.createFrom;
+const $$createType44 = model$0.ModelCapability.createFrom;
+const $$createType45 = $Create.Array($$createType44);
+const $$createType46 = $Create.Array($$createType6);
+const $$createType47 = model$0.ProviderCapability.createFrom;
+const $$createType48 = $Create.Array($$createType47);
+const $$createType49 = $Create.Array($$createType8);
+const $$createType50 = service$0.ToolBackupInfo.createFrom;
+const $$createType51 = $Create.Array($$createType50);
+const $$createType52 = $Create.Array($$createType10);
+const $$createType53 = service$0.ToolProviderView.createFrom;
 const $$createType54 = $Create.Array($$createType53);
-const $$createType55 = model$0.UpstreamMonitorModel.createFrom;
+const $$createType55 = toolconfig$0.ToolStatus.createFrom;
 const $$createType56 = $Create.Array($$createType55);
-const $$createType57 = service$0.OmoSlimPreview.createFrom;
-const $$createType58 = service$0.ToolFilePreview.createFrom;
-const $$createType59 = $Create.Array($$createType58);
-const $$createType60 = model$0.UpstreamMonitorResult.createFrom;
-const $$createType61 = model$0.UpstreamMonitorBatch.createFrom;
-const $$createType62 = $Create.Nullable($$createType61);
-const $$createType63 = model$0.LogQueryResult.createFrom;
+const $$createType57 = model$0.UpstreamMonitorModel.createFrom;
+const $$createType58 = $Create.Array($$createType57);
+const $$createType59 = service$0.OmoSlimPreview.createFrom;
+const $$createType60 = service$0.ToolFilePreview.createFrom;
+const $$createType61 = $Create.Array($$createType60);
+const $$createType62 = model$0.UpstreamMonitorResult.createFrom;
+const $$createType63 = model$0.UpstreamMonitorBatch.createFrom;
 const $$createType64 = $Create.Nullable($$createType63);
-const $$createType65 = model$0.ReorderModelRuleTargetsResult.createFrom;
-const $$createType66 = model$0.ReorderModelRulesResult.createFrom;
-const $$createType67 = model$0.ReplayResult.createFrom;
-const $$createType68 = $Create.Nullable($$createType67);
-const $$createType69 = model$0.ProviderTestResult.createFrom;
-const $$createType70 = $Create.Array($$createType69);
-const $$createType71 = model$0.ModelChatTestResult.createFrom;
-const $$createType72 = $Create.Nullable($$createType71);
-const $$createType73 = model$0.ModelTestResult.createFrom;
+const $$createType65 = model$0.LogQueryResult.createFrom;
+const $$createType66 = $Create.Nullable($$createType65);
+const $$createType67 = model$0.ReorderModelRuleTargetsResult.createFrom;
+const $$createType68 = model$0.ReorderModelRulesResult.createFrom;
+const $$createType69 = model$0.ReplayResult.createFrom;
+const $$createType70 = $Create.Nullable($$createType69);
+const $$createType71 = model$0.ProviderTestResult.createFrom;
+const $$createType72 = $Create.Array($$createType71);
+const $$createType73 = model$0.ModelChatTestResult.createFrom;
 const $$createType74 = $Create.Nullable($$createType73);
-const $$createType75 = $Create.Nullable($$createType69);
+const $$createType75 = model$0.ModelTestResult.createFrom;
+const $$createType76 = $Create.Nullable($$createType75);
+const $$createType77 = $Create.Nullable($$createType71);

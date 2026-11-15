@@ -95,3 +95,36 @@ export class RuntimePaths {
         return new RuntimePaths($$parsedSource as Partial<RuntimePaths>);
     }
 }
+
+/**
+ * UpdateInfo is the About section's view of one update check.
+ */
+export class UpdateInfo {
+    "currentVersion": string;
+    "available": boolean;
+    "version"?: string;
+    "notes"?: string;
+    "publishedAt"?: string;
+    "sizeBytes"?: number;
+    "artifact"?: string;
+
+    /** Creates a new UpdateInfo instance. */
+    constructor($$source: Partial<UpdateInfo> = {}) {
+        if (!("currentVersion" in $$source)) {
+            this["currentVersion"] = "";
+        }
+        if (!("available" in $$source)) {
+            this["available"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UpdateInfo instance from a string or object.
+     */
+    static createFrom($$source: any = {}): UpdateInfo {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UpdateInfo($$parsedSource as Partial<UpdateInfo>);
+    }
+}

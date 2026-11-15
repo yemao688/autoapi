@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { api as apiModels, model } from '@/api/models'
 import { api } from '@/api/bridge'
@@ -8,6 +8,7 @@ import { useExportDownload } from '@/composables/useExportDownload'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useTheme } from '@/composables/useTheme'
+import { useUpdateFlow } from '@/composables/useUpdateFlow'
 import { LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, type AppLocale } from '@/locales'
 import i18n from '@/locales'
 import { Browser } from '@wailsio/runtime'
@@ -26,6 +27,18 @@ const {
 const toast = useToast()
 const confirm = useConfirm()
 const { activeTheme, saveTheme } = useTheme()
+const {
+  state: updateState,
+  errorText: updateErrorText,
+  unsupportedBuild: updateUnsupported,
+  downloadPercent: updateDownloadPercent,
+  check: checkForUpdate,
+  download: startUpdateDownload,
+  retry: retryUpdate,
+  restart: restartToUpdate,
+  dismiss: dismissUpdate,
+  openDialog: openUpdateDialog,
+} = useUpdateFlow()
 
 const isDirty = ref(false)
 const activeSection = ref('general')
@@ -407,6 +420,102 @@ function openRepository() {
   Browser.OpenURL(REPOSITORY_URL)
 }
 
+// ---- About: update flow presentation -------------------------------------
+
+const updateInfoVersion = computed(() => updateState.info?.version || '')
+const updateCurrentVersion = computed(
+  () => updateState.info?.currentVersion || appInfo.value?.version || '—'
+)
+const updateNotes = computed(() => (updateState.info?.notes || '').trim())
+const updateSizeLabel = computed(() => {
+  const size = updateState.info?.sizeBytes ?? 0
+  return size > 0 ? formatBytes(size) : ''
+})
+const updatePublishedLabel = computed(() => formatPublishedAt(updateState.info?.publishedAt))
+const updatePercentLabel = computed(() => {
+  const percent = updateDownloadPercent.value
+  return percent === null ? '' : `${Math.round(percent)}%`
+})
+const updateProgressMeta = computed(() => {
+  const progress = updateState.progress
+  if (!progress) return ''
+  const written = formatBytes(progress.written)
+  if (progress.total > 0) {
+    const total = formatBytes(progress.total)
+    if (progress.rate > 0) {
+      return t('settings.about.update.progressMeta', {
+        written,
+        total,
+        rate: formatSpeed(progress.rate),
+      })
+    }
+    return t('settings.about.update.progressMetaSimple', { written, total })
+  }
+  return t('settings.about.update.progressDownloaded', { written })
+})
+const updateDialogTitle = computed(() => {
+  switch (updateState.phase) {
+    case 'checking':
+      return t('settings.about.update.checkingTitle')
+    case 'ready':
+      return t('settings.about.update.readyTitle')
+    case 'error':
+      return t('settings.about.update.errorTitle')
+    default:
+      return t('settings.about.update.dialogTitle', { version: updateInfoVersion.value || '—' })
+  }
+})
+
+/** Download sizes and rates: MB with one decimal, KB below that. */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return ''
+  const megabytes = bytes / (1024 * 1024)
+  if (megabytes >= 1) return `${megabytes.toFixed(1)} MB`
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
+
+function formatSpeed(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return ''
+  const megabytes = bytesPerSecond / (1024 * 1024)
+  if (megabytes >= 1) return `${megabytes.toFixed(1)} MB/s`
+  return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`
+}
+
+/** Release dates arrive as RFC3339 UTC strings; render them in the UI locale. */
+function formatPublishedAt(iso?: string): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString(locale.value, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function handleUpdateDialogKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !updateState.dialogOpen) return
+  event.preventDefault()
+  dismissUpdate()
+}
+
+watch(
+  () => updateState.dialogOpen,
+  (open) => {
+    if (open) {
+      window.addEventListener('keydown', handleUpdateDialogKeydown)
+      scrollToSection('about')
+    } else {
+      window.removeEventListener('keydown', handleUpdateDialogKeydown)
+    }
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleUpdateDialogKeydown)
+})
+
 onMounted(async () => {
   void loadSettings()
   void loadRuntimePaths()
@@ -416,6 +525,12 @@ onMounted(async () => {
     appInfo.value = await api.getAppInfo()
   } catch {
     // Ignore unavailable backend info; the About section displays fallbacks.
+  }
+  // A menu / tray check can finish before this view mounts: land on About so
+  // the inline status (or the open dialog) has context.
+  if (updateState.phase !== 'idle') {
+    await nextTick()
+    scrollToSection('about')
   }
 })
 
@@ -1060,18 +1175,67 @@ watch(activeTheme, (t) => {
 
             <div class="row" style="gap: 16px; align-items: flex-start;">
               <img :src="appicon" alt="Autoapi" style="width: 56px; height: 56px; border-radius: 14px; object-fit: cover; flex-shrink: 0;">
-              <div style="flex: 1;">
+              <div style="flex: 1; min-width: 0;">
                 <div style="font-size: 15px; font-weight: 600;">{{ t('app.tagline') }}</div>
                 <div class="text-muted" style="font-size: 12.5px; margin-top: 2px;">{{ t('settings.about.tagline') }}</div>
-                <div class="row" style="gap: 16px; margin-top: 12px; font-size: 12px; color: var(--muted);">
+                <div class="row update-version-row">
                   <span>{{ t('settings.about.versionLine', { version: appInfo?.version || '0.5.1', build: appInfo?.build || '—' }) }}</span>
                   <span>{{ t('settings.about.platformArch', { platform: appInfo?.platform || '—', arch: appInfo?.arch || '—' }) }}</span>
                   <span>Go {{ appInfo?.goVersion || '—' }}</span>
                 </div>
+
+                <!-- Update status: one compact line, only while a flow has something to say. -->
+                <div v-if="updateState.phase === 'current'" class="update-status">
+                  <span class="update-status-dot" aria-hidden="true"></span>
+                  <span>{{ t('settings.about.update.upToDate', { version: updateCurrentVersion }) }}</span>
+                </div>
+
+                <div v-else-if="updateState.phase === 'available'" class="update-status">
+                  <span class="update-status-dot is-accent" aria-hidden="true"></span>
+                  <span>{{ t('settings.about.update.availableInline', { version: updateInfoVersion || '—' }) }}</span>
+                  <button type="button" class="update-link" @click="openUpdateDialog">{{ t('settings.about.update.viewDetails') }}</button>
+                </div>
+
+                <div v-else-if="updateState.phase === 'downloading'" class="update-status">
+                  <span>{{ updatePercentLabel ? t('settings.about.update.downloadingInline', { percent: updatePercentLabel }) : t('settings.about.update.downloading') }}</span>
+                  <div
+                    class="update-progress-track is-inline"
+                    :class="{ 'is-indeterminate': updateDownloadPercent === null }"
+                  >
+                    <div
+                      class="update-progress-fill"
+                      :style="updateDownloadPercent === null ? undefined : { width: `${updateDownloadPercent}%` }"
+                    ></div>
+                  </div>
+                </div>
+
+                <div v-else-if="updateState.phase === 'ready'" class="update-status">
+                  <span class="update-status-dot" aria-hidden="true"></span>
+                  <span>{{ t('settings.about.update.readyInline', { version: updateInfoVersion || '—' }) }}</span>
+                  <button type="button" class="btn btn-secondary update-restart-btn" :disabled="updateState.restarting" @click="restartToUpdate">
+                    {{ updateState.restarting ? t('settings.about.update.restarting') : t('settings.about.update.restartNow') }}
+                  </button>
+                </div>
+
+                <div v-else-if="updateState.phase === 'error'" class="update-status">
+                  <span class="is-negative">{{ updateErrorText }}</span>
+                  <button v-if="!updateUnsupported" type="button" class="update-link" @click="retryUpdate">{{ t('settings.about.update.retry') }}</button>
+                </div>
               </div>
               <div class="row" style="gap: 8px; flex-shrink: 0;">
                 <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 12px;" @click="openRepository">{{ t('settings.about.repository') }}</button>
-                <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 12px;" @click="openReleases">{{ t('settings.about.checkUpdate') }}</button>
+                <button
+                  class="btn btn-secondary update-check"
+                  style="font-size: 12px; padding: 5px 12px;"
+                  :disabled="updateState.phase === 'checking' || updateState.phase === 'downloading' || updateState.phase === 'ready'"
+                  :aria-busy="updateState.phase === 'checking'"
+                  @click="checkForUpdate"
+                >
+                  <span class="update-check-label" :class="{ 'is-hidden': updateState.phase === 'checking' }">{{ t('settings.about.checkUpdate') }}</span>
+                  <span class="update-check-label" :class="{ 'is-hidden': updateState.phase !== 'checking' }">
+                    <span class="update-spinner"></span>{{ t('settings.about.update.checking') }}
+                  </span>
+                </button>
               </div>
             </div>
           </section>
@@ -1080,6 +1244,98 @@ watch(activeTheme, (t) => {
       </div>
     </div>
   </div>
+
+  <!-- Update dialog: teleported so it is not clipped by the scrolling column. -->
+  <Teleport to="body">
+    <Transition name="update-fade">
+      <div
+        v-if="updateState.dialogOpen"
+        class="modal-overlay update-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="update-dialog-title"
+        @click.self="dismissUpdate"
+      >
+        <div class="modal-card update-card">
+          <div class="update-head">
+            <div id="update-dialog-title" class="modal-title update-title">{{ updateDialogTitle }}</div>
+
+            <div v-if="updateState.phase === 'available' || updateState.phase === 'downloading'" class="update-sub">
+              <span>{{ t('settings.about.update.currentVersion', { version: updateCurrentVersion }) }}</span>
+              <span v-if="updatePublishedLabel">{{ t('settings.about.update.publishedAt', { date: updatePublishedLabel }) }}</span>
+              <span v-if="updateSizeLabel">{{ t('settings.about.update.size', { size: updateSizeLabel }) }}</span>
+            </div>
+            <div v-else-if="updateState.phase === 'ready'" class="update-sub">
+              <span>v{{ updateInfoVersion || '—' }}</span>
+            </div>
+          </div>
+
+          <div v-if="updateState.phase === 'checking'" class="update-checking">
+            <span class="update-spinner" aria-hidden="true"></span>
+            <span>{{ t('settings.about.update.checking') }}</span>
+          </div>
+
+          <template v-else-if="updateState.phase === 'available' || updateState.phase === 'downloading'">
+            <div class="update-notes-label">{{ t('settings.about.update.notesLabel') }}</div>
+            <div class="update-notes">{{ updateNotes || t('settings.about.update.noNotes') }}</div>
+
+            <div v-if="updateState.phase === 'downloading'" class="update-progress">
+              <div class="update-progress-head">
+                <span>{{ t('settings.about.update.downloading') }}</span>
+                <span class="mono">{{ updatePercentLabel }}</span>
+              </div>
+              <div class="update-progress-track" :class="{ 'is-indeterminate': updateDownloadPercent === null }">
+                <div
+                  class="update-progress-fill"
+                  :style="updateDownloadPercent === null ? undefined : { width: `${updateDownloadPercent}%` }"
+                ></div>
+              </div>
+              <div class="update-progress-meta text-muted">{{ updateProgressMeta }}</div>
+            </div>
+          </template>
+
+          <div v-else-if="updateState.phase === 'ready'" class="update-ready">
+            <span class="update-status-dot" aria-hidden="true"></span>
+            <div>
+              <div class="update-ready-title">{{ t('settings.about.update.readyBody') }}</div>
+              <div class="text-muted update-ready-hint">{{ t('settings.about.update.readyHint') }}</div>
+            </div>
+          </div>
+
+          <div v-else-if="updateState.phase === 'error'" class="update-error" role="alert">{{ updateErrorText }}</div>
+
+          <div v-if="updateState.phase !== 'checking'" class="update-footer">
+            <button
+              v-if="updateState.phase !== 'error'"
+              type="button"
+              class="update-link"
+              @click="openReleases"
+            >{{ t('settings.about.update.releases') }}</button>
+
+            <div class="update-footer-actions">
+              <template v-if="updateState.phase === 'available'">
+                <button type="button" class="btn btn-secondary" @click="dismissUpdate">{{ t('common.cancel') }}</button>
+                <button type="button" class="btn btn-primary" @click="startUpdateDownload">{{ t('settings.about.update.download') }}</button>
+              </template>
+              <template v-else-if="updateState.phase === 'downloading'">
+                <button type="button" class="btn btn-secondary" @click="dismissUpdate">{{ t('settings.about.update.continueInBackground') }}</button>
+              </template>
+              <template v-else-if="updateState.phase === 'ready'">
+                <button type="button" class="btn btn-secondary" :disabled="updateState.restarting" @click="dismissUpdate">{{ t('settings.about.update.later') }}</button>
+                <button type="button" class="btn btn-primary" :disabled="updateState.restarting" @click="restartToUpdate">
+                  {{ updateState.restarting ? t('settings.about.update.restarting') : t('settings.about.update.restart') }}
+                </button>
+              </template>
+              <template v-else-if="updateState.phase === 'error'">
+                <button type="button" class="btn btn-secondary" @click="dismissUpdate">{{ t('common.close') }}</button>
+                <button type="button" class="btn btn-primary" @click="retryUpdate">{{ t('settings.about.update.retry') }}</button>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 
 </template>
 
@@ -1114,4 +1370,268 @@ watch(activeTheme, (t) => {
 .server-address-preview { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg)); color: var(--muted); font-size: 11.5px; }
 .server-address-preview .text-mono { overflow: hidden; color: var(--accent); text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 560px) { .server-lan-address-label, .server-address-preview { align-items: flex-start; flex-direction: column; gap: 4px; } .server-lan-address-controls { max-width: none; } }
+
+/* ============== ABOUT — UPDATE FLOW ============== */
+.update-version-row {
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+/* Both button labels are stacked in one grid cell, so the button is as wide as
+   its widest state and swapping 检查更新 for the spinner moves nothing. */
+.update-check {
+  display: inline-grid;
+  place-items: center;
+}
+
+/* Dim only the states where nothing is happening; the checking state carries a
+   spinner instead, so it stays at full strength. */
+.update-check:disabled:not([aria-busy="true"]) {
+  opacity: 0.62;
+  cursor: default;
+}
+
+.update-check-label {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.update-check-label.is-hidden { visibility: hidden; }
+
+.update-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: update-spin 0.7s linear infinite;
+  flex: 0 0 10px;
+}
+
+@keyframes update-spin {
+  to { transform: rotate(360deg); }
+}
+
+.update-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.update-status.is-negative,
+.update-status .is-negative {
+  color: var(--negative);
+  word-break: break-word;
+}
+
+.update-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--positive);
+}
+
+.update-status-dot.is-accent { background: var(--accent); }
+
+.update-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.update-link:hover { text-decoration: underline; }
+
+.update-restart-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.update-restart-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.update-progress-track {
+  position: relative;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.update-progress-track.is-inline {
+  width: 120px;
+  height: 4px;
+}
+
+.update-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s ease-out;
+}
+
+/* No Content-Length from the provider: slide a segment instead of faking a %. */
+.update-progress-track.is-indeterminate .update-progress-fill {
+  width: 34%;
+  transition: none;
+  animation: update-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes update-indeterminate {
+  0% { transform: translateX(-105%); }
+  100% { transform: translateX(300%); }
+}
+
+/* Dialog */
+/* Above in-page modals (100/200), below toasts (10000) and the confirm
+   dialog (11000), so a background notification stays readable. */
+.update-overlay { z-index: 9500; }
+
+.update-card {
+  width: 520px;
+  max-width: 92vw;
+}
+
+.update-head { margin-bottom: 16px; }
+
+.update-title { margin-bottom: 4px; }
+
+.update-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.update-notes-label {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.update-notes {
+  max-height: 190px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.update-progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.update-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.update-progress-meta { font-size: 11.5px; }
+
+.update-ready {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.update-ready .update-status-dot { margin-top: 5px; }
+
+.update-ready-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.update-ready-hint {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.update-error {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--negative);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.update-checking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.update-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.update-footer-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.update-fade-enter-active,
+.update-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.update-fade-enter-from,
+.update-fade-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-spinner { animation: none; }
+  .update-progress-fill { transition: none; }
+  .update-progress-track.is-indeterminate .update-progress-fill {
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
+}
 </style>

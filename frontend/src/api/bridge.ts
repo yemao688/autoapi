@@ -380,6 +380,20 @@ export const api = {
     return wails.GetRuntimePaths() as Promise<apiModels.RuntimePaths>
   },
 
+  // Updates (About section)
+  checkForUpdate: (): Promise<apiModels.UpdateInfo | null> => {
+    ensureWails()
+    return wails.CheckForUpdate() as Promise<apiModels.UpdateInfo | null>
+  },
+  downloadUpdate: (): Promise<void> => {
+    ensureWails()
+    return wails.DownloadUpdate() as Promise<void>
+  },
+  restartToUpdate: (): Promise<void> => {
+    ensureWails()
+    return wails.RestartToUpdate() as Promise<void>
+  },
+
   // System
   systemHealth: (): Promise<model.ServiceHealth> => {
     ensureWails()

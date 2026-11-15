@@ -28,17 +28,21 @@
 
 - **macOS**：`autoapi-<version>-universal.dmg`（Universal，Intel / Apple Silicon 通用）
 
-打开 DMG，把 `autoapi.app` 拖进 Applications 即可。本项目**未做 Apple 公证（notarization）**，首次启动会被 Gatekeeper 拦截，任选一种方式放行：
+打开 DMG，把 `Autoapi.app` 拖进 Applications 即可。本项目**未做 Apple 公证（notarization）**，首次启动会被 Gatekeeper 拦截，任选一种方式放行：
 
 ```bash
 # 方式一：移除下载隔离属性（推荐）
-xattr -dr com.apple.quarantine /Applications/autoapi.app
+xattr -dr com.apple.quarantine /Applications/Autoapi.app
 
 # 方式二：在 Applications 里右键 app → 打开 → 再点“打开”
 #          （macOS 15+ 也可在「系统设置 → 隐私与安全性」里点“仍要打开”）
 ```
 
 Windows / Linux 产物暂未随 Release 提供，请从源码构建（见下）。
+
+### 应用内更新
+
+打开 **设置 → 关于 → 检查更新**：检测到新版本会弹窗显示版本号和更新说明，点“下载更新”后显示下载进度，下载完成点“立即重启”即可替换并自动重启；也可以从菜单 **Autoapi → 检查更新** 触发同一条流程（会跳到关于页）。开发构建不支持自动更新。
 
 ### 从源码构建
 

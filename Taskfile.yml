@@ -14,6 +14,7 @@ version: '3'
 
 vars:
   APP_NAME: autoapi
+  APP_DISPLAY_NAME: Autoapi
   BIN_DIR: build/bin
   PACKAGE_MANAGER: npm
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
@@ -184,13 +185,16 @@ tasks:
     internal: true
     platforms: [darwin]
     cmds:
-      - rm -rf "{{.BIN_DIR}}/{{.APP_NAME}}.app"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/"
-      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/"
-      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/"
-      - xattr -cr "{{.BIN_DIR}}/{{.APP_NAME}}.app"
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      # The bundle is named after the product (Autoapi.app) while the
+      # executable inside keeps the lowercase binary name; CFBundleExecutable
+      # must keep matching it.
+      - rm -rf "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app/Contents/MacOS" "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app/Contents/Resources/"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app/Contents/MacOS/"
+      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app/Contents/"
+      - xattr -cr "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app"
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app"
 
   package:dmg:
     summary: Builds the macOS .app and wraps it in a DMG (build/bin/<app>.dmg)
@@ -199,8 +203,8 @@ tasks:
       - task: package
     cmds:
       # `wails3 tool package` expects build/bin/<app>.app and writes <app>.dmg.
-      - wails3 tool package -format dmg -name {{.APP_NAME}} -out {{.BIN_DIR}} -volume-icon build/darwin/icons.icns
-      - mv -f "{{.BIN_DIR}}/{{.APP_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}.dmg"
+      - wails3 tool package -format dmg -name {{.APP_DISPLAY_NAME}} -out {{.BIN_DIR}} -volume-icon build/darwin/icons.icns
+      - mv -f "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}.dmg"
 
   package:universal:
     summary: Builds a universal (arm64 + amd64) macOS .app and DMG
@@ -215,8 +219,8 @@ tasks:
       - wails3 tool lipo -output "{{.BIN_DIR}}/{{.APP_NAME}}" -input "{{.BIN_DIR}}/{{.APP_NAME}}-arm64" -input "{{.BIN_DIR}}/{{.APP_NAME}}-amd64"
       - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}-arm64" "{{.BIN_DIR}}/{{.APP_NAME}}-amd64"
       - task: package:darwin
-      - wails3 tool package -format dmg -name {{.APP_NAME}} -out {{.BIN_DIR}} -volume-icon build/darwin/icons.icns
-      - mv -f "{{.BIN_DIR}}/{{.APP_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}-universal.dmg"
+      - wails3 tool package -format dmg -name {{.APP_DISPLAY_NAME}} -out {{.BIN_DIR}} -volume-icon build/darwin/icons.icns
+      - mv -f "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}-universal.dmg"
 
   package:release:
     summary: Builds the macOS release artifacts (universal DMG + auto-update zip + SHA256SUMS)
@@ -229,7 +233,7 @@ tasks:
       # provider reads (ChecksumAsset) to verify the download.
       # The updater rejects archives with more than one top-level entry, so no
       # --sequesterRsrc: that flag adds a __MACOSX/ sidecar tree.
-      - ditto -c -k --keepParent "{{.BIN_DIR}}/{{.APP_NAME}}.app" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}-darwin-universal.zip"
+      - ditto -c -k --keepParent "{{.BIN_DIR}}/{{.APP_DISPLAY_NAME}}.app" "{{.BIN_DIR}}/{{.APP_NAME}}-{{.VERSION}}-darwin-universal.zip"
       - cd "{{.BIN_DIR}}" && shasum -a 256 "{{.APP_NAME}}-{{.VERSION}}-darwin-universal.zip" "{{.APP_NAME}}-{{.VERSION}}-universal.dmg" > SHA256SUMS
 
   clean:

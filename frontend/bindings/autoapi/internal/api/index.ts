@@ -9,5 +9,6 @@ export {
 export {
     ExportResult,
     ProxyStatus,
-    RuntimePaths
+    RuntimePaths,
+    UpdateInfo
 } from "./models.js";

@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"errors"
 	"log/slog"
 	"runtime"
 	"strings"
-	"time"
 
 	"autoapi/internal/api"
 	"autoapi/internal/config"
@@ -96,7 +94,10 @@ func main() {
 	autoapiMenu.Add("重载界面").
 		OnClick(func(_ *application.Context) { app.ReloadWebView() })
 	autoapiMenu.Add("检查更新").
-		OnClick(func(_ *application.Context) { checkForUpdates(wailsApp) })
+		OnClick(func(_ *application.Context) {
+			_ = app.ShowApp()
+			wailsApp.Event.Emit(updateCheckRequestedEvent)
+		})
 	autoapiMenu.AddSeparator()
 	autoapiMenu.Add("退出").
 		SetAccelerator("CmdOrCtrl+Q").
@@ -162,7 +163,10 @@ func main() {
 		trayMenu.AddSeparator()
 		trayMenu.Add("重启服务").OnClick(func(_ *application.Context) { _ = app.RestartProxy() })
 		trayMenu.Add("重载界面").OnClick(func(_ *application.Context) { app.ReloadWebView() })
-		trayMenu.Add("检查更新").OnClick(func(_ *application.Context) { checkForUpdates(wailsApp) })
+		trayMenu.Add("检查更新").OnClick(func(_ *application.Context) {
+			_ = app.ShowApp()
+			wailsApp.Event.Emit(updateCheckRequestedEvent)
+		})
 		trayMenu.AddSeparator()
 		trayMenu.Add("退出").OnClick(func(_ *application.Context) { app.Quit() })
 
@@ -181,9 +185,9 @@ func main() {
 	}
 }
 
-// updaterReady reports whether initUpdater configured the built-in updater.
-// Dev builds leave it false, and the menu/tray entry stays a no-op there.
-var updaterReady bool
+// updateCheckRequestedEvent asks the frontend to open the About section and
+// run its update flow; the menu and tray entries share that single flow.
+const updateCheckRequestedEvent = "autoapi:update:check"
 
 // initUpdater wires the built-in updater to GitHub Releases. Releases ship
 // two macOS artifacts: autoapi-<version>-universal.dmg for a manual install
@@ -211,8 +215,6 @@ func initUpdater(app *application.App) error {
 	}); err != nil {
 		return err
 	}
-	updaterReady = true
-	go watchForUpdates(app)
 	return nil
 }
 
@@ -233,34 +235,4 @@ func updateAssetMatcher(req updater.CheckRequest, assets []github.ReleaseAsset) 
 		}
 	}
 	return -1
-}
-
-// checkForUpdates opens the updater window for a user-initiated check.
-func checkForUpdates(app *application.App) {
-	if !updaterReady {
-		return
-	}
-	go func() {
-		if err := app.Updater.CheckAndInstall(context.Background()); err != nil {
-			slog.Warn("updater: check failed", "error", err)
-		}
-	}()
-}
-
-// watchForUpdates polls silently in the background. A found release opens the
-// updater window; an up-to-date result stays invisible. The first check waits
-// for launch to settle.
-func watchForUpdates(app *application.App) {
-	const interval = 24 * time.Hour
-	timer := time.NewTimer(30 * time.Second)
-	defer timer.Stop()
-	for range timer.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		release, err := app.Updater.Check(ctx)
-		cancel()
-		if err == nil && release != nil {
-			checkForUpdates(app)
-		}
-		timer.Reset(interval)
-	}
 }

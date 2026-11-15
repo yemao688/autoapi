@@ -1,6 +1,9 @@
 package api
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/updater"
+)
 
 // Runtime adapts App to the Wails v3 desktop runtime. The composition root
 // creates it before application.New, injects it through Deps, and fills it in
@@ -38,6 +41,15 @@ func (r *Runtime) emit(name string, data ...any) {
 		return
 	}
 	r.app.Event.Emit(name, data...)
+}
+
+// updater returns the Wails updater handle, or nil before Attach (unit tests,
+// headless builds).
+func (r *Runtime) updater() *updater.Updater {
+	if r == nil || r.app == nil {
+		return nil
+	}
+	return r.app.Updater
 }
 
 func (r *Runtime) hideWindow() {
